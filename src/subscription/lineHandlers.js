@@ -34,20 +34,22 @@ export function createSubscriptionLineHandlers({
   qrService,
   auditLog,
   ai,
-  visionModel
+  visionModel,
+  buildQrImageUrl
 }) {
   async function handleSubscribeCommand(userId) {
     const status = await subscriptionService.getStatusView(userId);
     await auditLog({ userId, eventType: AUDIT_EVENTS.PREMIUM_REQUESTED });
-    if (status.active) return MSG.alreadyPremium(status);
+    if (status.active) return { text: MSG.alreadyPremium(status) };
 
     const { session } = await paymentSessionService.createOrReuse(userId);
     const qr = qrService.generateForSession(session);
-    if (!qr.available) return MSG.qrUnavailable(qr.note);
+    if (!qr.available) return { text: MSG.qrUnavailable(qr.note) };
     await auditLog({ userId, eventType: AUDIT_EVENTS.QR_CREATED, paymentSessionId: session.id, metadata: { referenceId: session.referenceId } });
-    // หมายเหตุ: ในการเชื่อม LINE จริง ควรส่ง Image Message ที่ render จาก qr.payload เป็นภาพ QR
-    // (เช่นผ่านบริการ render QR ฝั่งเซิร์ฟเวอร์) ร่วมกับข้อความนี้
-    return MSG.qrCreated(session);
+    // ส่ง Image Message ที่ render จาก qr.payload เป็นภาพ QR จริง (ผ่าน /qr/:sessionId.png ใน index.js)
+    // ร่วมกับข้อความนี้ — ถ้าไม่ได้ตั้ง PUBLIC_BASE_URL จะไม่มี qrImageUrl ให้ และข้อความอย่างเดียวจะถูกส่งไปแทน
+    const qrImageUrl = buildQrImageUrl ? buildQrImageUrl(session.id) : null;
+    return { text: MSG.qrCreated(session), qrImageUrl };
   }
 
   async function handleSendSlipCommand(userId) {
