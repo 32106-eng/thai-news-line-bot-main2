@@ -32,12 +32,23 @@ const app = express();
 // data now lives in Firestore instead of a local file, so it survives every redeploy
 const firebaseApp = initializeApp({ credential: cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)) });
 const usersCol = getFirestore(firebaseApp).collection("panuan_users");
-const aiKey = process.env.OPENAI_API_KEY ?? process.env.OPENROUTER_API_KEY;
-const ai = aiKey ? new OpenAI({ apiKey: aiKey, ...(process.env.OPENROUTER_API_KEY && !process.env.OPENAI_API_KEY ? { baseURL: "https://openrouter.ai/api/v1" } : {}) }) : null;
+const aiKey = process.env.OPENAI_API_KEY ?? process.env.NVIDIA_API_KEY ?? process.env.OPENROUTER_API_KEY;
+const aiBaseURL = process.env.OPENAI_API_KEY
+  ? undefined
+  : process.env.NVIDIA_API_KEY
+    ? "https://integrate.api.nvidia.com/v1"
+    : process.env.OPENROUTER_API_KEY
+      ? "https://openrouter.ai/api/v1"
+      : undefined;
+// ลำดับความสำคัญ: OPENAI_API_KEY > NVIDIA_API_KEY > OPENROUTER_API_KEY — ตั้งค่าคีย์ตัวไหนไว้
+// ระบบจะใช้ตัวนั้นเป็นหลักโดยอัตโนมัติ (ไม่ต้องลบคีย์ตัวเก่าออกก็ได้ แค่ตัวที่ priority สูงกว่าจะชนะ)
+const ai = aiKey ? new OpenAI({ apiKey: aiKey, ...(aiBaseURL ? { baseURL: aiBaseURL } : {}) }) : null;
 // Vision-capable model for reading receipt/slip photos. Not every free/cheap model can read images —
 // a text-only model will just fail (e.g. "openai/gpt-oss-120b" on OpenRouter is TEXT-ONLY, no image
-// input — do not point OPENAI_VISION_MODEL at it). As of Aug 2026, "google/gemma-4-31b-it:free" on
-// OpenRouter is a working free vision model, or use "gpt-4o-mini"/"gpt-4.1-mini" on OpenAI directly.
+// input — do not point OPENAI_VISION_MODEL at it). Working vision options (Aug 2026):
+//   OpenRouter (free, tighter rate limits): "google/gemma-4-31b-it:free"
+//   NVIDIA NIM (free, higher rate limits ~40 RPM, no ":free" suffix on model IDs): "google/gemma-4-31b-it"
+//   OpenAI direct (paid): "gpt-4o-mini" / "gpt-4.1-mini"
 // Falls back to OPENAI_MODEL if no separate vision model is set.
 const visionModel = process.env.OPENAI_VISION_MODEL ?? process.env.OPENAI_MODEL;
 
