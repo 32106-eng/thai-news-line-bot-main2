@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ป้านวล Premium — Admin</title>
+<style>
+  :root{
+    --pink:#d23283; --pink-dark:#a4256a; --white:#fff; --dark:#222222;
+    --light-pink:#fceaf4; --grey:#6b6b76; --line:#ece5ea;
+    --ok:#1f9d55; --warn:#d99a2b; --danger:#d23232;
+    --font: 'Segoe UI', -apple-system, "Noto Sans Thai", sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:var(--font);background:var(--light-pink);color:var(--dark);}
+  header{background:var(--white);border-bottom:1px solid var(--line);padding:16px 24px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:5}
+  header h1{font-size:17px;margin:0;color:var(--pink-dark);letter-spacing:.2px}
+  header .badge{font-size:11px;background:var(--light-pink);color:var(--pink-dark);padding:3px 10px;border-radius:99px;margin-left:8px;font-weight:600}
+  #logout{border:none;background:transparent;color:var(--grey);font-size:13px;cursor:pointer}
+  main{max-width:1080px;margin:0 auto;padding:24px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:28px}
+  .card{background:var(--white);border-radius:14px;padding:16px 18px;border:1px solid var(--line)}
+  .card .num{font-size:26px;font-weight:700;color:var(--dark)}
+  .card .label{font-size:12.5px;color:var(--grey);margin-top:2px}
+  .card.pink .num{color:var(--pink)}
+  section{margin-bottom:32px}
+  section h2{font-size:14px;text-transform:uppercase;letter-spacing:.06em;color:var(--grey);margin:0 0 12px}
+  .review{background:var(--white);border:1px solid var(--line);border-radius:14px;padding:16px 18px;margin-bottom:10px;display:flex;justify-content:space-between;gap:16px;align-items:flex-start;flex-wrap:wrap}
+  .review .meta{font-size:13px;color:var(--grey);line-height:1.7}
+  .review .ref{font-weight:700;color:var(--pink-dark);font-size:14px}
+  .review .amount{font-weight:700;font-size:15px}
+  .actions{display:flex;gap:8px}
+  button.approve, button.reject{border:none;padding:8px 16px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer}
+  button.approve{background:var(--pink);color:#fff}
+  button.approve:hover{background:var(--pink-dark)}
+  button.reject{background:#fff;color:var(--danger);border:1px solid var(--danger)}
+  button.reject:hover{background:#fdecec}
+  .empty{color:var(--grey);font-size:13.5px;padding:20px;text-align:center;background:#fff;border-radius:14px;border:1px dashed var(--line)}
+  .log{font-size:12.5px;padding:8px 0;border-bottom:1px solid var(--line);color:var(--grey);display:flex;justify-content:space-between;gap:12px}
+  .log b{color:var(--dark)}
+  #loginWrap{max-width:340px;margin:80px auto;background:#fff;border-radius:16px;padding:28px;border:1px solid var(--line)}
+  #loginWrap h1{font-size:18px;color:var(--pink-dark);margin-top:0}
+  #loginWrap input{width:100%;padding:10px 12px;border-radius:8px;border:1px solid var(--line);margin-bottom:10px;font-size:14px}
+  #loginWrap button{width:100%;padding:10px;border-radius:8px;border:none;background:var(--pink);color:#fff;font-weight:600;cursor:pointer}
+  #loginErr{color:var(--danger);font-size:12.5px;min-height:16px}
+  [hidden]{display:none !important}
+</style>
+</head>
+<body>
+
+<div id="loginWrap">
+  <h1>เข้าสู่ระบบผู้ดูแล</h1>
+  <input id="loginUser" placeholder="ชื่อผู้ใช้" autocomplete="username" />
+  <input id="loginPass" type="password" placeholder="รหัสผ่าน" autocomplete="current-password" />
+  <div id="loginErr"></div>
+  <button id="loginBtn">เข้าสู่ระบบ</button>
+</div>
+
+<div id="app" hidden>
+<header>
+  <h1>ป้านวล Premium <span class="badge">Admin</span></h1>
+  <button id="logout">ออกจากระบบ</button>
+</header>
+<main>
+  <section>
+    <h2>ภาพรวม</h2>
+    <div class="grid" id="overviewGrid"></div>
+  </section>
+
+  <section>
+    <h2>รอตรวจสอบ (Pending Review)</h2>
+    <div id="reviews"></div>
+  </section>
+
+  <section>
+    <h2>Audit Log ล่าสุด</h2>
+    <div id="logs"></div>
+  </section>
+</main>
+</div>
+
+<script>
+const $ = (sel) => document.querySelector(sel);
+async function api(path, opt) {
+  const r = await fetch('/admin' + path, { ...opt, headers: { 'content-type': 'application/json', ...opt?.headers } });
+  if (r.status === 401) { showLogin(); throw new Error('unauthorized'); }
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'เกิดข้อผิดพลาด');
+  return r.json();
+}
+
+function showLogin() { $('#loginWrap').hidden = false; $('#app').hidden = true; }
+function showApp() { $('#loginWrap').hidden = true; $('#app').hidden = false; loadAll(); }
+
+$('#loginBtn').onclick = async () => {
+  $('#loginErr').textContent = '';
+  try {
+    await api('/login', { method: 'POST', body: JSON.stringify({ username: $('#loginUser').value, password: $('#loginPass').value }) });
+    showApp();
+  } catch (e) { $('#loginErr').textContent = 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง'; }
+};
+$('#logout').onclick = async () => { await api('/logout', { method: 'POST' }); showLogin(); };
+
+function card(num, label, pink) { return `<div class="card ${pink ? 'pink' : ''}"><div class="num">${num}</div><div class="label">${label}</div></div>`; }
+
+async function loadOverview() {
+  const d = await api('/api/overview');
+  $('#overviewGrid').innerHTML = [
+    card(d.users.premiumActive, 'Premium Active', true),
+    card(d.users.premiumNearExpiry, 'ใกล้หมดอายุ (≤3 วัน)'),
+    card(d.users.premiumExpired, 'Premium หมดอายุ'),
+    card(d.payments.waiting, 'รอชำระเงิน'),
+    card(d.payments.pendingReview, 'รอตรวจสอบ (สลิป)', true),
+    card(d.payments.verified, 'ยืนยันแล้ว'),
+    card(d.payments.rejected, 'ถูกปฏิเสธ'),
+    card(d.security.duplicateTransactions, 'พบธุรกรรมซ้ำ')
+  ].join('');
+}
+
+async function loadReviews() {
+  const d = await api('/api/reviews');
+  const el = $('#reviews');
+  if (!d.reviews.length) { el.innerHTML = '<div class="empty">ไม่มีรายการรอตรวจสอบ 🎉</div>'; return; }
+  el.innerHTML = d.reviews.map(r => `
+    <div class="review" data-ref="${r.transactionReference}">
+      <div>
+        <div class="ref">Ref: ${r.transactionReference}</div>
+        <div class="meta">
+          ผู้ใช้: ${r.userId}<br/>
+          จำนวนที่อ่านได้: <span class="amount">${r.amount ?? '-'} บาท</span><br/>
+          เหตุผลที่ต้องตรวจสอบ: ${r.reviewReason ?? '-'}<br/>
+          ส่งเมื่อ: ${r.createdAt ?? '-'}
+        </div>
+      </div>
+      <div class="actions">
+        <button class="approve">อนุมัติ</button>
+        <button class="reject">ปฏิเสธ</button>
+      </div>
+    </div>
+  `).join('');
+  el.querySelectorAll('.review').forEach(row => {
+    const ref = row.dataset.ref;
+    row.querySelector('.approve').onclick = () => act(ref, 'approve');
+    row.querySelector('.reject').onclick = () => act(ref, 'reject');
+  });
+}
+
+async function act(ref, action) {
+  if (action === 'reject' && !confirm('ยืนยันปฏิเสธรายการนี้?')) return;
+  try {
+    await api(`/api/reviews/${encodeURIComponent(ref)}/${action}`, { method: 'POST', body: action === 'reject' ? JSON.stringify({ reason: 'admin_manual' }) : undefined });
+    await loadAll();
+  } catch (e) { alert(e.message); }
+}
+
+async function loadLogs() {
+  const d = await api('/api/audit-logs?limit=50');
+  $('#logs').innerHTML = d.logs.map(l => `<div class="log"><span><b>${l.eventType}</b> ${l.userId ? '· ' + l.userId : ''} ${l.transactionReference ? '· ' + l.transactionReference : ''}</span><span>${l.createdAt ?? ''}</span></div>`).join('') || '<div class="empty">ยังไม่มีบันทึก</div>';
+}
+
+async function loadAll() {
+  try { await Promise.all([loadOverview(), loadReviews(), loadLogs()]); }
+  catch (e) { if (e.message !== 'unauthorized') console.error(e); }
+}
+
+// เช็คว่ามี session อยู่แล้วหรือไม่ (ลองเรียก overview ตรง ๆ)
+api('/api/overview').then(showApp).catch(showLogin);
+</script>
+</body>
+</html>

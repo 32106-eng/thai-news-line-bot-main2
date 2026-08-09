@@ -1,0 +1,21 @@
+{
+  "name": "pa-nuan-line-ledger",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "check": "node --check src/index.js",
+    "create-admin": "node scripts/create-admin.js",
+    "test": "node --test test/**/*.test.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "fast-xml-parser": "^4.5.1",
+    "firebase-admin": "^14.2.0",
+    "node-cron": "^3.0.3",
+    "openai": "^4.80.1"
+  }
+}

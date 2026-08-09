@@ -1,0 +1,409 @@
+import "dotenv/config";
+import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import express from "express";
+import OpenAI from "openai";
+import cron from "node-cron";
+import { initializeApp, cert } from "firebase-admin/app";
+import { getFirestore } from "firebase-admin/firestore";
+
+import { buildSubscriptionCollections } from "./subscription/db.js";
+import { createAuditLogger } from "./subscription/auditLog.js";
+import { createSubscriptionService } from "./subscription/subscriptions.js";
+import { createPaymentSessionService } from "./subscription/paymentSessions.js";
+import { createUploadSessionService } from "./subscription/uploadSessions.js";
+import { createPaymentTransactionService } from "./subscription/paymentTransactions.js";
+import { getPaymentProvider } from "./subscription/paymentProvider.js";
+import { createQrService } from "./subscription/qr.js";
+import { createRichMenuService } from "./subscription/richMenu.js";
+import { createSubscriptionLineHandlers } from "./subscription/lineHandlers.js";
+import { createAdminAuth } from "./admin/auth.js";
+import { createAdminRouter } from "./admin/routes.js";
+
+for (const name of ["LINE_CHANNEL_SECRET", "LINE_CHANNEL_ACCESS_TOKEN", "FIREBASE_SERVICE_ACCOUNT", "ADMIN_SESSION_SECRET"]) {
+  if (!process.env[name]) throw new Error(`Missing ${name}. Add it to .env.`);
+}
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const app = express();
+// data now lives in Firestore instead of a local file, so it survives every redeploy
+const firebaseApp = initializeApp({ credential: cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)) });
+const usersCol = getFirestore(firebaseApp).collection("panuan_users");
+const aiKey = process.env.OPENAI_API_KEY ?? process.env.OPENROUTER_API_KEY;
+const ai = aiKey ? new OpenAI({ apiKey: aiKey, ...(process.env.OPENROUTER_API_KEY && !process.env.OPENAI_API_KEY ? { baseURL: "https://openrouter.ai/api/v1" } : {}) }) : null;
+// Vision-capable model for reading receipt photos. Not every free/cheap model can read images —
+// e.g. on OpenRouter something like "google/gemini-2.0-flash-exp:free" or "gpt-4o-mini" on OpenAI works,
+// but a text-only model will just fail. Falls back to OPENAI_MODEL if no separate vision model is set.
+const visionModel = process.env.OPENAI_VISION_MODEL ?? process.env.OPENAI_MODEL;
+
+// ---------------------------------------------------------------------------
+// Premium subscription + payment system (see docs/ARCHITECTURE.md)
+// ---------------------------------------------------------------------------
+const subCollections = buildSubscriptionCollections(firebaseApp);
+const auditLog = createAuditLogger(subCollections);
+const subscriptionService = createSubscriptionService(subCollections, auditLog);
+const paymentSessionService = createPaymentSessionService(subCollections, auditLog);
+const uploadSessionService = createUploadSessionService(subCollections);
+const paymentTransactionService = createPaymentTransactionService(subCollections, {
+  auditLog,
+  paymentProvider: getPaymentProvider(),
+  subscriptionService
+});
+const qrService = createQrService();
+const richMenuService = createRichMenuService();
+const subLineHandlers = createSubscriptionLineHandlers({
+  subscriptionService,
+  paymentSessionService,
+  uploadSessionService,
+  paymentTransactionService,
+  richMenuService,
+  qrService,
+  auditLog,
+  ai,
+  visionModel
+});
+const adminAuth = createAdminAuth(subCollections);
+app.use("/admin", createAdminRouter({ collections: subCollections, adminAuth, subscriptionService, paymentTransactionService }));
+
+// housekeeping: mark expired subscriptions daily (NOT the source of truth for access control —
+// isPremium() always re-checks expires_at live against server time, see spec §13)
+cron.schedule("15 0 * * *", async () => {
+  try { const count = await subscriptionService.sweepExpired(); if (count) console.log(`Expired ${count} subscription(s)`); }
+  catch (error) { console.error("Subscription expiry sweep failed:", error.message); }
+}, { timezone: "Asia/Bangkok" });
+
+const CATEGORIES = {
+  "อาหาร": ["กาแฟ", "ข้าว", "อาหาร", "กิน", "ร้าน", "น้ำ", "ชา"],
+  "เดินทาง": ["รถ", "น้ำมัน", "แท็กซี่", "bts", "mrt", "grab", "ที่จอด"],
+  "บิล": ["ค่าไฟ", "ค่าน้ำ", "เน็ต", "โทรศัพท์", "บิล", "ประกัน"],
+  "สุขภาพ": ["ยา", "หมอ", "โรงพยาบาล", "ฟิตเนส"],
+  "บันเทิง": ["เกม", "หนัง", "เที่ยว", "คอนเสิร์ต", "spotify", "netflix"],
+  "ช้อปปิ้ง": ["ช้อป", "ซื้อ", "ของใช้", "เสื้อ", "รองเท้า"],
+  "อื่น ๆ": []
+};
+const INCOME_WORDS = ["เงินเดือน", "รายรับ", "รายได้", "โบนัส", "ขาย", "ได้เงิน", "คืนเงิน", "ดอกเบี้ย", "กำไร", "ค่าจ้าง"];
+
+function emptyUser() { return { transactions: [], recurring: [], budgets: {} }; }
+async function getUser(uid) {
+  const snap = await usersCol.doc(String(uid)).get();
+  return snap.exists ? { ...emptyUser(), ...snap.data() } : emptyUser();
+}
+async function saveUser(uid, user) { await usersCol.doc(String(uid)).set(user); }
+function perUserToken(uid) { return crypto.createHmac("sha256", process.env.DASHBOARD_TOKEN ?? "").update(String(uid)).digest("hex").slice(0, 32); }
+function money(value) { return new Intl.NumberFormat("th-TH", { maximumFractionDigits: 2 }).format(value); }
+function parts(date = new Date()) {
+  const value = date instanceof Date ? date : new Date(date);
+  if (Number.isNaN(value.getTime())) return null;
+  return Object.fromEntries(new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Bangkok", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(value).map(({ type, value }) => [type, value]));
+}
+function sameDay(date) { const a = parts(date), b = parts(); return Boolean(a && b && a.year === b.year && a.month === b.month && a.day === b.day); }
+function sameMonth(date, year = parts().year, month = parts().month) { const p = parts(date); return Boolean(p && p.year === year && p.month === month); }
+function totals(list) { return list.reduce((x, tx) => ({ income: x.income + (tx.type === "income" ? tx.amount : 0), expense: x.expense + (tx.type === "expense" ? tx.amount : 0) }), { income: 0, expense: 0 }); }
+function categoryFor(text) { const lower = text.toLowerCase(); return Object.entries(CATEGORIES).find(([, words]) => words.some((word) => lower.includes(word)))?.[0] ?? "อื่น ๆ"; }
+const QUESTION_HINTS = /[?？]|ไหม|หรือเปล่า|หรือไม่|หรือยัง|ทำไม|ยังไง|อย่างไร|เท่าไหร่|เท่าไร|มั้ย|รึเปล่า|หรือป่าว|ช่วย.*หน่อย|ช่วย.*ได้ไหม/;
+function looksLikeQuestion(text) { return QUESTION_HINTS.test(text); }
+function parse(text) {
+  const trimmed = text.trim();
+  if (looksLikeQuestion(trimmed)) return null;
+  // require an explicit currency marker (฿ / บาท) next to the number ...
+  let hit = trimmed.match(/(?:฿|บาท)\s*([0-9][0-9,]*(?:\.\d{1,2})?)/) ?? trimmed.match(/([0-9][0-9,]*(?:\.\d{1,2})?)\s*(?:฿|บาท)/);
+  // ...or fall back to a short "item amount" style entry only (e.g. "กาแฟ 60"), never a long sentence
+  if (!hit && trimmed.split(/\s+/).length <= 4) hit = trimmed.match(/([0-9][0-9,]*(?:\.\d{1,2})?)/);
+  if (!hit) return null;
+  const amount = Number(hit[1].replaceAll(",", ""));
+  if (!Number.isFinite(amount) || amount <= 0 || amount > 10_000_000) return null;
+  const income = INCOME_WORDS.some((word) => trimmed.toLowerCase().includes(word));
+  const description = trimmed.replace(hit[0], "").replace(/^(รายรับ|รายจ่าย)\s*/i, "").trim() || (income ? "รายรับ" : "รายจ่าย");
+  return { id: crypto.randomUUID(), type: income ? "income" : "expense", category: income ? "รายรับ" : categoryFor(trimmed), description, amount, createdAt: new Date().toISOString() };
+}
+async function enrichWithAi(tx, source) {
+  if (!ai || tx.type !== "expense" || tx.category !== "อื่น ๆ" || !process.env.OPENAI_MODEL) return tx;
+  try {
+    const completion = await ai.chat.completions.create({
+      model: process.env.OPENAI_MODEL,
+      temperature: 0,
+      response_format: { type: "json_object" },
+      messages: [{ role: "system", content: "Classify this Thai expense into exactly one category: อาหาร, เดินทาง, บิล, สุขภาพ, บันเทิง, ช้อปปิ้ง, อื่น ๆ. Reply only JSON: {\\\"category\\\":\\\"...\\\"}." }, { role: "user", content: source }]
+    });
+    const category = JSON.parse(completion.choices[0]?.message?.content ?? "{}").category;
+    return Object.hasOwn(CATEGORIES, category) ? { ...tx, category } : tx;
+  } catch (error) { console.warn("AI categorization skipped:", error.message); return tx; }
+}
+function advice(monthTransactions) {
+  const expenses = monthTransactions.filter((tx) => tx.type === "expense");
+  if (expenses.length < 3) return "คำแนะนำ: บันทึกรายการต่อเนื่องอีกนิด ป้านวลจะช่วยดูพฤติกรรมการใช้เงินให้";
+  const groups = expenses.reduce((out, tx) => ({ ...out, [tx.category]: (out[tx.category] ?? 0) + tx.amount }), {});
+  const [category, value] = Object.entries(groups).sort((a, b) => b[1] - a[1])[0];
+  return `คำแนะนำ: เดือนนี้ใช้หมวด${category}มากสุด ${money(value)} บาท ลองตั้งวงเงินหมวดนี้ไว้ดูนะ`;
+}
+function summary(list, title) { const t = totals(list); return `📊 สรุป${title}\nรายรับ: ${money(t.income)} บาท\nรายจ่าย: ${money(t.expense)} บาท\nคงเหลือ: ${money(t.income - t.expense)} บาท\nจำนวนรายการ: ${list.length}`; }
+function signatureValid(raw, signature) { const expected = crypto.createHmac("sha256", process.env.LINE_CHANNEL_SECRET).update(raw).digest("base64"); return Boolean(signature) && crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected)); }
+async function line(endpoint, body) { const r = await fetch(`https://api.line.me/v2/bot/message/${endpoint}`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}` }, body: JSON.stringify(body) }); if (!r.ok) throw new Error(`LINE ${endpoint}: ${r.status}`); }
+async function reply(token, text) { return line("reply", { replyToken: token, messages: [{ type: "text", text: text.slice(0, 4900) }] }); }
+async function push(to, text) { return line("push", { to, messages: [{ type: "text", text: text.slice(0, 4900) }] }); }
+function allowed(req) {
+  const uid = req.query.u;
+  if (!process.env.DASHBOARD_TOKEN || !uid) return false;
+  const given = String(req.query.token ?? ""), expected = perUserToken(uid);
+  if (given.length !== expected.length) return false;
+  try { return crypto.timingSafeEqual(Buffer.from(given), Buffer.from(expected)); } catch { return false; }
+}
+async function askFinanceAi(user, question) {
+  if (!ai || !process.env.OPENAI_MODEL) return null;
+  try {
+    const month = user.transactions.filter((tx) => sameMonth(tx.createdAt));
+    const t = totals(month);
+    const top = Object.entries(month.filter((tx) => tx.type === "expense").reduce((o, tx) => ({ ...o, [tx.category]: (o[tx.category] ?? 0) + tx.amount }), {})).sort((a, b) => b[1] - a[1]).slice(0, 5);
+    const budgetLines = Object.entries(user.budgets ?? {}).map(([category, amount]) => `${category}: งบ ${money(amount)} บาท`).join("\n") || "ยังไม่ได้ตั้งงบ";
+    const context = `ข้อมูลบัญชีเดือนนี้ของผู้ใช้คนนี้เท่านั้น (ห้ามอ้างอิงคนอื่น):\nรายรับ: ${money(t.income)} บาท\nรายจ่าย: ${money(t.expense)} บาท\nคงเหลือ: ${money(t.income - t.expense)} บาท\nหมวดที่ใช้จ่ายมากสุด: ${top.map(([category, value]) => `${category} ${money(value)} บาท`).join(", ") || "ยังไม่มีข้อมูล"}\nงบประมาณที่ตั้งไว้:\n${budgetLines}`;
+    const completion = await ai.chat.completions.create({
+      model: process.env.OPENAI_MODEL,
+      temperature: 0.4,
+      messages: [
+        { role: "system", content: "คุณคือ \"ป้านวล\" ผู้ช่วยส่วนตัวทาง LINE เน้นให้คำปรึกษาและตอบคำถามด้านการเงินส่วนบุคคล (การออม การใช้จ่าย การตั้งงบประมาณ หนี้สิน หลักการลงทุนเบื้องต้น) โดยใช้ข้อมูลบัญชีของผู้ใช้ที่ให้มาประกอบการตอบเมื่อเกี่ยวข้อง คุณตอบคำถามทั่วไปอื่น ๆ นอกเรื่องการเงินได้เช่นกันแบบสั้นและเป็นมิตร แต่เมื่อมีโอกาสให้โยงกลับมาช่วยเรื่องการเงินอย่างเป็นธรรมชาติ ตอบเป็นภาษาไทย กระชับ ไม่เกิน 4 ประโยค เหมาะสำหรับส่งทางแชท ห้ามให้คำแนะนำการลงทุนเฉพาะเจาะจงที่มีความเสี่ยงสูงหรือรับประกันผลตอบแทน และห้ามให้คำแนะนำทางกฎหมายหรือภาษีแบบฟันธง ให้แนะนำปรึกษาผู้เชี่ยวชาญแทนในกรณีนั้น" },
+        { role: "user", content: `${context}\n\nคำถามจากผู้ใช้: ${question}` }
+      ]
+    });
+    return completion.choices[0]?.message?.content?.trim() || null;
+  } catch (error) { console.warn("AI answer failed:", error.message); return null; }
+}
+async function downloadLineImage(messageId) {
+  const r = await fetch(`https://api-data.line.me/v2/bot/message/${messageId}/content`, { headers: { authorization: `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}` } });
+  if (!r.ok) throw new Error(`LINE content: ${r.status}`);
+  const mime = r.headers.get("content-type") || "image/jpeg";
+  const buffer = Buffer.from(await r.arrayBuffer());
+  return { mime, base64: buffer.toString("base64") };
+}
+async function readReceipt(mime, base64) {
+  if (!ai || !visionModel) return null;
+  try {
+    const completion = await ai.chat.completions.create({
+      model: visionModel,
+      temperature: 0,
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: "You read Thai/English receipt photos. Reply only JSON: {\"merchant\":\"...\",\"amount\":number}. \"amount\" is the final total paid (บาท), as a plain number with no currency symbol or commas. If you cannot read a merchant name, use \"อื่น ๆ\". If you cannot find a clear total amount, set amount to 0." },
+        { role: "user", content: [
+          { type: "text", text: "อ่านยอดรวมและชื่อร้านค้าจากใบเสร็จนี้" },
+          { type: "image_url", image_url: { url: `data:${mime};base64,${base64}` } }
+        ] }
+      ]
+    });
+    const parsed = JSON.parse(completion.choices[0]?.message?.content ?? "{}");
+    const amount = Number(parsed.amount);
+    if (!Number.isFinite(amount) || amount <= 0 || amount > 10_000_000) return null;
+    const merchant = String(parsed.merchant ?? "อื่น ๆ").trim().slice(0, 120) || "อื่น ๆ";
+    return { merchant, amount };
+  } catch (error) { console.warn("Receipt AI read failed:", error.message); return null; }
+}
+function inLastDays(date, days) { const value = date instanceof Date ? date : new Date(date); return !Number.isNaN(value.getTime()) && Date.now() - value.getTime() <= days * 86_400_000; }
+async function pushWeeklySummaries() {
+  const snap = await usersCol.get();
+  for (const doc of snap.docs) {
+    const uid = doc.id, user = { ...emptyUser(), ...doc.data() };
+    if (applyRecurring(user)) await saveUser(uid, user);
+    const week = (user.transactions ?? []).filter((tx) => inLastDays(tx.createdAt, 7));
+    if (!week.length) continue; // don't nag users with nothing to report
+    try { await push(uid, `${summary(week, "สัปดาห์นี้")}\n\n${advice(week)}\n\nพิมพ์ “สรุปเดือนนี้” หรือ “เว็บ” เพื่อดูรายละเอียดเพิ่มเติมได้เลยนะ`); }
+    catch (error) { console.warn(`Weekly push failed for ${uid}:`, error.message); }
+  }
+}
+// Every Sunday at 20:00 (Asia/Bangkok). Change the cron expression or set WEEKLY_SUMMARY_CRON in .env to adjust.
+cron.schedule(process.env.WEEKLY_SUMMARY_CRON ?? "0 20 * * 0", () => { pushWeeklySummaries().catch((error) => console.error("Weekly summary job failed:", error.message)); }, { timezone: "Asia/Bangkok" });
+
+const legacyDashboard = String.raw`<!doctype html>
+<html lang="th"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>รายการ | ป้านวล</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#faf9f7;color:#25242a;font-family:system-ui,-apple-system,"Noto Sans Thai",sans-serif}.app{max-width:440px;min-height:100vh;margin:auto;background:#fff;padding-bottom:100px}.top{padding:16px 20px 12px;border-bottom:1px solid #eee}.top b{font-size:19px}.site{font-size:12px;color:#b0adb0;margin-top:3px}.close{float:right;font-size:32px;font-weight:300;line-height:20px;color:#222}main{padding:18px}.date,.filters,.toolbar,.item{border:1px solid #ebe8e8;border-radius:13px;background:white;box-shadow:0 1px 3px #0000000d}.date{padding:16px;text-align:center;font-weight:700;font-size:16px}.filters{padding:10px 13px;margin-top:17px}.filters h2{font-size:18px;margin:0 0 10px}.chips{display:flex;gap:8px}.chip{border:0;border-radius:6px;background:#e9e9ee;color:#3e3d42;padding:5px 20px;font-size:14px}.chip.active{background:#d23283;color:#fff}.tools{display:grid;grid-template-columns:1fr 1fr 70px;gap:8px;margin-top:17px}.toolbar{border-radius:9px;padding:8px 11px;color:#777;text-align:center;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.export{border:1px solid #ebe8e8;border-radius:13px;background:#fff;font-size:13px;font-weight:600}.day{display:flex;justify-content:space-between;align-items:center;padding:15px 15px 5px;border-bottom:2px solid #a7adb9;color:#6c6b72;font-size:14px}.total{color:#bd3e78;font-weight:700}.item{display:grid;grid-template-columns:1fr auto;align-items:center;padding:15px 18px;margin-top:14px;cursor:pointer}.desc{font-weight:700;font-size:16px}.meta{font-size:14px;color:#777;margin-top:8px}.badge{background:#f1f1f3;border-radius:4px;padding:3px 9px;margin-left:10px}.money{font-size:16px;font-weight:700}.expense{color:#c14379}.income{color:#07835b}.arrow{color:#a0a0a4;font-size:25px;margin-left:10px}.add{position:fixed;right:max(20px,calc((100vw - 440px)/2 + 18px));bottom:80px;border:0;background:#d23283;color:#fff;width:64px;height:64px;border-radius:50%;font-size:42px;box-shadow:0 4px 10px #a8105c66}.nav{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:min(440px,100%);height:72px;background:#fff;border-top:1px solid #e8e7e7;display:flex;justify-content:space-around;padding-top:10px}.nav span{font-size:12px;color:#9b9ba0;text-align:center}.nav i{display:block;font-style:normal;font-size:24px;line-height:27px}.nav .selected{color:#c43d7a}.modal{position:fixed;inset:0;background:#0008;display:none;align-items:end;justify-content:center}.modal.open{display:flex}.sheet{width:min(440px,100%);background:#fff;border-radius:22px 22px 0 0;padding:20px}.sheet h2{margin:0 0 16px}.sheet label{display:block;font-size:13px;margin:11px 0 4px;color:#65636a}.sheet input,.sheet select{width:100%;border:1px solid #ddd;border-radius:9px;padding:11px;font:inherit}.actions{display:flex;gap:8px;margin-top:18px}.save,.cancel,.delete{border:0;border-radius:9px;padding:12px;flex:1;font:inherit;font-weight:700}.save{background:#d23283;color:#fff}.cancel{background:#eee}.delete{background:#fff0f3;color:#c22;border:1px solid #f1cbd3}.empty{text-align:center;color:#9b9b9f;padding:36px 0}
+</style><body><div class="app"><header class="top"><button class="close" aria-label="ปิด">×</button><b>รายการ</b><div class="site">app.panuan.com</div></header><main><div class="date" id="period">เดือนนี้&nbsp; 📅</div><section class="filters"><h2>คัดกรองประเภทรายการ</h2><div class="chips"><button class="chip active" data-type="all">ทั้งหมด</button><button class="chip" data-type="expense">รายจ่าย</button><button class="chip" data-type="income">รายรับ</button></div></section><div class="tools"><button class="toolbar" id="select">เลือกหลายรายการ ☷</button><button class="toolbar" id="refresh">ตั้งรายการรอดประจำ ↻</button><button class="export" id="export">⇩<br>ส่งออก</button></div><div id="list"></div></main></div><button class="add" id="add" aria-label="เพิ่มรายการ">+</button><nav class="nav"><span><i>⌂</i>สรุป</span><span><i>▥</i>วิเคราะห์</span><span><i>◴</i>หมวด / งบ</span><span class="selected"><i>☷</i>รายการ</span><span><i>⚙</i>ตั้งค่า</span></nav><div class="modal" id="modal"><form class="sheet" id="form"><h2 id="formTitle">เพิ่มรายการ</h2><label>ประเภทรายการ</label><select id="type"><option value="expense">รายจ่าย</option><option value="income">รายรับ</option></select><label>ชื่อรายการ</label><input id="description" required placeholder="เช่น ค่าอาหาร"><label>จำนวนเงิน (บาท)</label><input id="amount" required type="number" min="0.01" step="0.01" placeholder="0"><label>หมวดหมู่</label><input id="category" required placeholder="เช่น อื่น ๆ"><label>วันที่และเวลา</label><input id="createdAt" required type="datetime-local"><input id="id" type="hidden"><div class="actions"><button class="delete" type="button" id="remove" hidden>ลบ</button><button class="cancel" type="button" id="cancel">ยกเลิก</button><button class="save">บันทึก</button></div></form></div><script>
+const token=new URLSearchParams(location.search).get('token'),q='?token='+encodeURIComponent(token),fmt=n=>new Intl.NumberFormat('th-TH',{style:'currency',currency:'THB',maximumFractionDigits:2}).format(n),esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));let data=[],filter='all';
+async function api(url,opt){const r=await fetch(url+q,opt);if(!r.ok)throw new Error('บันทึกไม่สำเร็จ');return r.json()}
+function render(){const rows=data.filter(x=>filter==='all'||x.type===filter),groups={};rows.forEach(x=>{const d=x.date||new Date(x.createdAt).toLocaleDateString('th-TH',{day:'numeric',month:'short'});(groups[d]??=[]).push(x)});list.innerHTML=Object.entries(groups).map(([d,a])=>{const total=a.reduce((s,x)=>s+(x.type==='income'?x.amount:-x.amount),0);return '<div class="day"><span>'+d+'</span><span class="total">รวม: '+(total>=0?'+':'-')+fmt(Math.abs(total))+'</span></div>'+a.map(x=>'<article class="item" data-id="'+x.id+'"><div><div class="desc">'+esc(x.description)+'</div><div class="meta">'+new Date(x.createdAt).toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit'})+' น. <span class="badge">'+esc(x.category)+'</span></div></div><div><span class="money '+x.type+'">'+(x.type==='income'?'+':'-')+fmt(x.amount)+'</span><span class="arrow">›</span></div></article>').join('')}).join('')||'<div class="empty">ยังไม่มีรายการ<br>กด + เพื่อเพิ่มรายการ</div>';document.querySelectorAll('.item').forEach(e=>e.onclick=()=>open(data.find(x=>x.id===e.dataset.id)))}
+async function load(){const d=await api('/api/transactions');data=d.transactions;period.textContent=d.label+'  📅';render()}
+function local(dt){const d=new Date(dt),z=n=>String(n).padStart(2,'0');return d.getFullYear()+'-'+z(d.getMonth()+1)+'-'+z(d.getDate())+'T'+z(d.getHours())+':'+z(d.getMinutes())}
+function open(x){form.reset();id.value=x?.id||'';formTitle.textContent=x?'แก้ไขรายการ':'เพิ่มรายการ';type.value=x?.type||'expense';description.value=x?.description||'';amount.value=x?.amount||'';category.value=x?.category||'อื่น ๆ';createdAt.value=x?local(x.createdAt):local(new Date());remove.hidden=!x;modal.classList.add('open')}
+document.querySelectorAll('.chip').forEach(b=>b.onclick=()=>{filter=b.dataset.type;document.querySelectorAll('.chip').forEach(x=>x.classList.toggle('active',x===b));render()});add.onclick=()=>open();cancel.onclick=()=>modal.classList.remove('open');refresh.onclick=load;form.onsubmit=async e=>{e.preventDefault();const body=JSON.stringify({type:type.value,description:description.value.trim(),amount:Number(amount.value),category:category.value.trim(),createdAt:new Date(createdAt.value).toISOString()});try{await api(id.value?'/api/transactions/'+id.value:'/api/transactions',{method:id.value?'PUT':'POST',headers:{'content-type':'application/json'},body});modal.classList.remove('open');load()}catch(e){alert(e.message)}};remove.onclick=async()=>{if(confirm('ลบรายการนี้?')){await api('/api/transactions/'+id.value,{method:'DELETE'});modal.classList.remove('open');load()}};export.onclick=()=>location='/api/transactions/export'+q;load().catch(()=>document.body.innerHTML='<p>เข้าถึงไม่ได้: ตรวจลิงก์แดชบอร์ด</p>');
+</script><script>
+let selecting=false,selectedIds=new Set(),monthFilter='';const baseRender=render;
+function updateSelectButton(){select.textContent=selecting?'ลบที่เลือก ('+selectedIds.size+')':'เลือกหลายรายการ ☷'}
+render=function(){const original=data;if(monthFilter)data=data.filter(x=>x.createdAt.slice(0,7)===monthFilter);baseRender();data=original;period.title='กดเพื่อเลือกเดือน';document.querySelectorAll('.item').forEach(card=>{if(!selecting)return;const box=document.createElement('input');box.type='checkbox';box.checked=selectedIds.has(card.dataset.id);box.style.cssText='width:20px;height:20px;margin-right:12px;accent-color:#d23283';box.onclick=e=>{e.stopPropagation();box.checked?selectedIds.add(card.dataset.id):selectedIds.delete(card.dataset.id);updateSelectButton()};card.prepend(box);card.onclick=e=>{if(e.target!==box){box.checked=!box.checked;box.checked?selectedIds.add(card.dataset.id):selectedIds.delete(card.dataset.id);updateSelectButton()}}});updateSelectButton()};
+select.onclick=async()=>{if(!selecting){selecting=true;selectedIds.clear();render();return}if(!selectedIds.size){selecting=false;render();return}if(!confirm('ลบ '+selectedIds.size+' รายการที่เลือก?'))return;try{await Promise.all([...selectedIds].map(id=>api('/api/transactions/'+id,{method:'DELETE'})));selecting=false;selectedIds.clear();await load()}catch(e){alert(e.message)}};
+period.onclick=()=>{const value=prompt('เลือกเดือน (รูปแบบ YYYY-MM)\nเว้นว่างเพื่อแสดงทั้งหมด',monthFilter);if(value===null)return;if(value!==''&&!/^\d{4}-\d{2}$/.test(value)){alert('รูปแบบเดือนไม่ถูกต้อง');return}monthFilter=value;period.textContent=monthFilter||'ทุกเดือน';render()};
+refresh.onclick=async()=>{const description=prompt('ชื่อรายการประจำ เช่น ค่าเช่า');if(!description)return;const amount=Number(prompt('จำนวนเงิน (บาท)'));const category=prompt('หมวดหมู่','อื่น ๆ');const day=Number(prompt('ให้บันทึกทุกวันที่ (1-31)',String(new Date().getDate())));if(!Number.isFinite(amount)||amount<=0||!category||!Number.isInteger(day)||day<1||day>31){alert('ข้อมูลไม่ถูกต้อง');return}try{await api('/api/recurring',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({type:confirm('กด OK สำหรับรายรับ\nกด Cancel สำหรับรายจ่าย')?'income':'expense',description,amount,category,day})});alert('ตั้งรายการประจำแล้ว ระบบจะสร้างรายการให้อัตโนมัติทุกเดือน')}catch(e){alert(e.message)}};
+document.querySelector('.close').onclick=()=>history.length>1?history.back():location.href='about:blank';document.querySelectorAll('.nav span').forEach(item=>item.onclick=()=>{if(item.classList.contains('selected'))return;alert('หน้านี้กำลังอยู่ระหว่างจัดทำ ตอนนี้คุณจัดการรายการได้ครบจากหน้านี้')});load();
+</script></body></html>`;
+const dashboard = await fs.readFile(path.join(__dirname, "dashboard.html"), "utf8");
+
+app.get("/health", (_req, res) => res.json({ ok: true, app: "pa-nuan" }));
+app.get("/dashboard", (req, res) => allowed(req) ? res.type("html").send(dashboard) : res.sendStatus(401));
+function transactionInput(body) {
+  const type = body?.type === "income" ? "income" : body?.type === "expense" ? "expense" : null;
+  const description = String(body?.description ?? "").trim().slice(0, 120);
+  const category = String(body?.category ?? "").trim().slice(0, 60);
+  const amount = Number(body?.amount);
+  const date = new Date(body?.createdAt);
+  if (!type || !description || !category || !Number.isFinite(amount) || amount <= 0 || amount > 10_000_000 || Number.isNaN(date.getTime())) return null;
+  return { type, description, category, amount, createdAt: date.toISOString() };
+}
+function recurringInput(body) {
+  const type = body?.type === "income" ? "income" : body?.type === "expense" ? "expense" : null;
+  const description = String(body?.description ?? "").trim().slice(0, 120), category = String(body?.category ?? "").trim().slice(0, 60), amount = Number(body?.amount), day = Number(body?.day);
+  if (!type || !description || !category || !Number.isFinite(amount) || amount <= 0 || amount > 10_000_000 || !Number.isInteger(day) || day < 1 || day > 31) return null;
+  return { type, description, category, amount, day };
+}
+function applyRecurring(user) {
+  user.recurring ??= [];
+  const now = new Date(), key = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  let changed = false;
+  for (const recurring of user.recurring) {
+    if (recurring.lastApplied === key) continue;
+    const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate(), date = new Date(now.getFullYear(), now.getMonth(), Math.min(recurring.day, lastDay), 12);
+    if (date > now) continue;
+    user.transactions.push({ id: crypto.randomUUID(), type: recurring.type, description: recurring.description, category: recurring.category, amount: recurring.amount, createdAt: date.toISOString(), recurringId: recurring.id });
+    recurring.lastApplied = key; changed = true;
+  }
+  return changed;
+}
+app.get("/api/transactions", async (req, res) => {
+  if (!allowed(req)) return res.sendStatus(401);
+  const uid = req.query.u, user = await getUser(uid), now = new Date();
+  if (applyRecurring(user)) await saveUser(uid, user);
+  res.json({ label: new Intl.DateTimeFormat("th-TH", { month: "long", year: "numeric", timeZone: "Asia/Bangkok" }).format(now), transactions: [...user.transactions].sort((a, b) => b.createdAt.localeCompare(a.createdAt)) });
+});
+app.get("/api/recurring", async (req, res) => {
+  if (!allowed(req)) return res.sendStatus(401);
+  const user = await getUser(req.query.u); res.json({ recurring: user.recurring ?? [] });
+});
+app.get("/api/budgets", async (req, res) => {
+  if (!allowed(req)) return res.sendStatus(401);
+  const user = await getUser(req.query.u); res.json({ budgets: user.budgets ?? {} });
+});
+app.put("/api/budgets/:category", express.json(), async (req, res) => {
+  if (!allowed(req)) return res.sendStatus(401);
+  const category = String(req.params.category ?? "").trim().slice(0, 60), amount = Number(req.body?.amount);
+  if (!category || !Number.isFinite(amount) || amount < 0 || amount > 10_000_000) return res.status(400).json({ error: "ข้อมูลงบประมาณไม่ถูกต้อง" });
+  const uid = req.query.u, user = await getUser(uid); user.budgets ??= {}; user.budgets[category] = amount;
+  await saveUser(uid, user); res.json({ category, amount });
+});
+app.post("/api/recurring", express.json(), async (req, res) => {
+  if (!allowed(req)) return res.sendStatus(401);
+  const input = recurringInput(req.body); if (!input) return res.status(400).json({ error: "ข้อมูลรายการประจำไม่ถูกต้อง" });
+  const uid = req.query.u, user = await getUser(uid), recurring = { id: crypto.randomUUID(), ...input }; user.recurring ??= []; user.recurring.push(recurring); await saveUser(uid, user); res.status(201).json({ recurring });
+});
+app.delete("/api/recurring/:id", async (req, res) => {
+  if (!allowed(req)) return res.sendStatus(401);
+  const uid = req.query.u, user = await getUser(uid); user.recurring ??= []; const index = user.recurring.findIndex((item) => item.id === req.params.id);
+  if (index < 0) return res.sendStatus(404);
+  const [recurring] = user.recurring.splice(index, 1); await saveUser(uid, user); res.json({ recurring });
+});
+app.post("/api/transactions", express.json(), async (req, res) => {
+  if (!allowed(req)) return res.sendStatus(401);
+  const input = transactionInput(req.body);
+  if (!input) return res.status(400).json({ error: "ข้อมูลรายการไม่ถูกต้อง" });
+  const uid = req.query.u, user = await getUser(uid), transaction = { id: crypto.randomUUID(), ...input };
+  user.transactions.push(transaction); await saveUser(uid, user); res.status(201).json({ transaction });
+});
+app.put("/api/transactions/:id", express.json(), async (req, res) => {
+  if (!allowed(req)) return res.sendStatus(401);
+  const input = transactionInput(req.body), uid = req.query.u, user = await getUser(uid), index = user.transactions.findIndex((tx) => tx.id === req.params.id);
+  if (!input) return res.status(400).json({ error: "ข้อมูลรายการไม่ถูกต้อง" });
+  if (index < 0) return res.sendStatus(404);
+  const transaction = { ...user.transactions[index], ...input }; user.transactions[index] = transaction;
+  await saveUser(uid, user); res.json({ transaction });
+});
+app.delete("/api/transactions/:id", async (req, res) => {
+  if (!allowed(req)) return res.sendStatus(401);
+  const uid = req.query.u, user = await getUser(uid), index = user.transactions.findIndex((tx) => tx.id === req.params.id);
+  if (index < 0) return res.sendStatus(404);
+  const [transaction] = user.transactions.splice(index, 1); await saveUser(uid, user); res.json({ transaction });
+});
+app.get("/api/transactions/export", async (req, res) => {
+  if (!allowed(req)) return res.sendStatus(401);
+  const user = await getUser(req.query.u), quote = (value) => `"${String(value).replaceAll('"', '""')}"`;
+  const csv = ["วันที่,ประเภท,รายการ,หมวดหมู่,จำนวนเงิน", ...user.transactions.map((tx) => [new Date(tx.createdAt).toLocaleString("th-TH", { timeZone: "Asia/Bangkok" }), tx.type === "income" ? "รายรับ" : "รายจ่าย", tx.description, tx.category, tx.amount].map(quote).join(","))].join("\n");
+  res.set({ "content-type": "text/csv; charset=utf-8", "content-disposition": "attachment; filename=pa-nuan-transactions.csv" }).send(`\uFEFF${csv}`);
+});
+app.get("/api/dashboard", async (req, res) => {
+  if (!allowed(req)) return res.sendStatus(401);
+  const user = await getUser(req.query.u), current = user.transactions.filter((tx) => sameMonth(tx.createdAt)), t = totals(current);
+  const categories = Object.entries(current.filter((tx) => tx.type === "expense").reduce((o, tx) => ({ ...o, [tx.category]: (o[tx.category] ?? 0) + tx.amount }), {})).map(([category, amount]) => ({ category, amount })).sort((a, b) => b.amount - a.amount);
+  const now = new Date(), history = Array.from({ length: 6 }, (_, index) => { const d = new Date(now.getFullYear(), now.getMonth() - (5 - index), 1), p = parts(d), total = totals(user.transactions.filter((tx) => sameMonth(tx.createdAt, p.year, p.month))); return { label: new Intl.DateTimeFormat("th-TH", { month: "short", timeZone: "Asia/Bangkok" }).format(d), ...total }; });
+  res.json({ label: `ข้อมูลเดือน ${new Intl.DateTimeFormat("th-TH", { month: "long", year: "numeric", timeZone: "Asia/Bangkok" }).format(now)}`, income: t.income, expense: t.expense, balance: t.income - t.expense, categories, history, recent: [...user.transactions].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 30).map((tx) => ({ ...tx, date: new Intl.DateTimeFormat("th-TH", { dateStyle: "short", timeZone: "Asia/Bangkok" }).format(new Date(tx.createdAt)) })) });
+});
+app.post("/webhook", express.raw({ type: "application/json" }), async (req, res) => {
+  if (!signatureValid(req.body, req.get("x-line-signature"))) return res.sendStatus(401);
+  res.sendStatus(200); const payload = JSON.parse(req.body.toString("utf8"));
+  for (const event of payload.events ?? []) {
+    if (event.type !== "message") continue;
+    // each LINE user (or group/room) gets their own isolated ledger, keyed by their LINE id
+    const userId = event.source?.userId ?? event.source?.groupId ?? event.source?.roomId;
+    if (!userId) continue;
+    if (event.message?.type === "image") {
+      // รูปภาพอาจเป็น "สลิปการชำระเงิน Premium" (ถ้ามี upload_session ค้างรออยู่) หรือ "ใบเสร็จ" (ฟีเจอร์ Premium)
+      // การตัดสินใจว่าเป็นแบบไหน และการตรวจสิทธิ์ Premium เกิดที่ backend เสมอ ไม่เชื่อ Rich Menu ที่ผู้ใช้กดมา (spec §16)
+      let message;
+      try {
+        const routing = await subLineHandlers.handleReceiptOrSlipImage(userId, () => downloadLineImage(event.message.id));
+        if (routing.type === "slip") {
+          message = routing.message;
+        } else if (routing.type === "premium_denied") {
+          message = routing.message;
+        } else {
+          // routing.type === "receipt" && routing.isPremium === true -> ฟีเจอร์เดิม: อ่านใบเสร็จบันทึกบัญชี
+          if (!ai || !visionModel) message = "ยังไม่ได้ตั้งค่าโมเดล AI แบบอ่านรูปภาพ (ตั้งค่า OPENAI_VISION_MODEL หรือ OPENAI_MODEL ที่รองรับรูปภาพใน .env) ตอนนี้พิมพ์รายการแทนได้ก่อน เช่น กาแฟ 60";
+          else {
+            try {
+              const { mime, base64 } = await downloadLineImage(event.message.id);
+              const receipt = await readReceipt(mime, base64);
+              if (!receipt) message = "อ่านยอดเงินจากใบเสร็จนี้ไม่ได้ ลองถ่ายให้เห็นยอดรวมชัด ๆ อีกครั้ง หรือพิมพ์รายการเองแทนได้ เช่น กาแฟ 60";
+              else {
+                const user = await getUser(userId);
+                const tx = await enrichWithAi({ id: crypto.randomUUID(), type: "expense", category: categoryFor(receipt.merchant), description: receipt.merchant, amount: receipt.amount, createdAt: new Date().toISOString() }, receipt.merchant);
+                user.transactions.push(tx); await saveUser(userId, user);
+                message = `🧾 บันทึกรายจ่ายจากรูปใบเสร็จแล้ว\nร้าน: ${tx.description}\nหมวด: ${tx.category}\nจำนวน: ${money(tx.amount)} บาท\n\nถ้าอ่านยอดหรือร้านผิด พิมพ์ "ลบล่าสุด" แล้วพิมพ์รายการใหม่ได้เลย`;
+              }
+            } catch (error) { console.error("Receipt read failed", error.message); message = "ระบบประมวลผลภาพใช้เวลานานกว่าปกติ กรุณาลองใหม่อีกครั้ง"; }
+          }
+        }
+      } catch (error) { console.error("Image handling failed", error.message); message = "ระบบประมวลผลภาพใช้เวลานานกว่าปกติ กรุณาลองใหม่อีกครั้ง"; }
+      try { await reply(event.replyToken, message); } catch (error) { console.error("Could not reply", error.message); }
+      continue;
+    }
+    if (event.message?.type !== "text") continue;
+    const text = event.message.text.trim();
+
+    // --- Premium subscription commands: เช็คก่อน finance parser เสมอ เพื่อไม่ให้ "สมัครพรีเมียม" ถูกตีความเป็นรายการบัญชี ---
+    if (text === "สมัครพรีเมียม") {
+      let message;
+      try { message = await subLineHandlers.handleSubscribeCommand(userId); }
+      catch (error) { console.error("Subscribe command failed", error.message); message = "เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง"; }
+      try { await reply(event.replyToken, message); } catch (error) { console.error("Could not reply", error.message); }
+      continue;
+    }
+    if (text === "ส่งสลิป") {
+      let message;
+      try { message = await subLineHandlers.handleSendSlipCommand(userId); }
+      catch (error) { console.error("Send-slip command failed", error.message); message = "เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง"; }
+      try { await reply(event.replyToken, message); } catch (error) { console.error("Could not reply", error.message); }
+      continue;
+    }
+
+    const user = await getUser(userId);
+    if (applyRecurring(user)) await saveUser(userId, user);
+    let message;
+    if (["เริ่ม", "ช่วยเหลือ", "help"].includes(text.toLowerCase())) message = "📒 ป้านวลพร้อมจดบัญชีของคุณ (ข้อมูลของแต่ละคนแยกกันเป็นส่วนตัว)\n\nพิมพ์: กาแฟ 60\nรายรับ: เงินเดือน 15000\nถ่ายรูปใบเสร็จส่งมาได้เลย (ฟีเจอร์ Premium) ป้านวลจะอ่านยอดกับร้านค้าให้อัตโนมัติ\nคำสั่ง: สรุปวันนี้ | สรุปเดือนนี้ | ลบล่าสุด | เว็บ | สมัครพรีเมียม\nทุกวันอาทิตย์ป้านวลจะสรุปสัปดาห์ให้อัตโนมัติด้วย\n\nหรือถามป้านวลได้เลย เช่น \"เดือนนี้ใช้เงินไปกับอะไรมากสุด\" ป้านวลเน้นตอบเรื่องการเงินเป็นหลัก แต่คุยเรื่องอื่นได้ด้วย";
+    else if (text === "สรุปวันนี้") message = summary(user.transactions.filter((tx) => sameDay(tx.createdAt)), "วันนี้");
+    else if (text === "สรุปเดือนนี้") { const month = user.transactions.filter((tx) => sameMonth(tx.createdAt)); message = `${summary(month, "เดือนนี้")}\n\n${advice(month)}`; }
+    else if (text === "ลบล่าสุด") { const tx = user.transactions.pop(); if (tx) { await saveUser(userId, user); message = `ลบแล้ว: ${tx.description} ${money(tx.amount)} บาท`; } else message = "ยังไม่มีรายการให้ลบ"; }
+    else if (text === "เว็บ") { const base = process.env.PUBLIC_BASE_URL?.replace(/\/$/, ""); message = base ? `📊 แดชบอร์ดส่วนตัวของคุณ\n${base}/dashboard?token=${perUserToken(userId)}&u=${encodeURIComponent(userId)}` : "ยังไม่ได้ตั้งค่า PUBLIC_BASE_URL สำหรับแดชบอร์ด"; }
+    else {
+      let tx = parse(text);
+      if (tx) { tx = await enrichWithAi(tx, text); user.transactions.push(tx); await saveUser(userId, user); message = `${tx.type === "income" ? "💰 บันทึกรายรับแล้ว" : "🧾 บันทึกรายจ่ายแล้ว"}\n${tx.description}\nหมวด: ${tx.category}\nจำนวน: ${money(tx.amount)} บาท`; }
+      else { const aiAnswer = await askFinanceAi(user, text); message = aiAnswer ?? "พิมพ์ได้เลย เช่น กาแฟ 60 หรือ เงินเดือน 15000\nพิมพ์ ช่วยเหลือ เพื่อดูคำสั่ง"; }
+    }
+    try { await reply(event.replyToken, message); } catch (error) { console.error("Could not reply", error.message); }
+  }
+});
+app.listen(Number(process.env.PORT ?? 3000), () => console.log(`Pa Nuan listening on ${process.env.PORT ?? 3000}`));
