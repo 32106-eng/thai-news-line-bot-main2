@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
+import QRCode from "qrcode";
 import OpenAI from "openai";
 import cron from "node-cron";
 import { initializeApp, cert } from "firebase-admin/app";
@@ -33,9 +34,11 @@ const firebaseApp = initializeApp({ credential: cert(JSON.parse(process.env.FIRE
 const usersCol = getFirestore(firebaseApp).collection("panuan_users");
 const aiKey = process.env.OPENAI_API_KEY ?? process.env.OPENROUTER_API_KEY;
 const ai = aiKey ? new OpenAI({ apiKey: aiKey, ...(process.env.OPENROUTER_API_KEY && !process.env.OPENAI_API_KEY ? { baseURL: "https://openrouter.ai/api/v1" } : {}) }) : null;
-// Vision-capable model for reading receipt photos. Not every free/cheap model can read images —
-// e.g. on OpenRouter something like "google/gemini-2.0-flash-exp:free" or "gpt-4o-mini" on OpenAI works,
-// but a text-only model will just fail. Falls back to OPENAI_MODEL if no separate vision model is set.
+// Vision-capable model for reading receipt/slip photos. Not every free/cheap model can read images —
+// a text-only model will just fail (e.g. "openai/gpt-oss-120b" on OpenRouter is TEXT-ONLY, no image
+// input — do not point OPENAI_VISION_MODEL at it). As of Aug 2026, "google/gemma-4-31b-it:free" on
+// OpenRouter is a working free vision model, or use "gpt-4o-mini"/"gpt-4.1-mini" on OpenAI directly.
+// Falls back to OPENAI_MODEL if no separate vision model is set.
 const visionModel = process.env.OPENAI_VISION_MODEL ?? process.env.OPENAI_MODEL;
 
 // ---------------------------------------------------------------------------
@@ -53,6 +56,10 @@ const paymentTransactionService = createPaymentTransactionService(subCollections
 });
 const qrService = createQrService();
 const richMenuService = createRichMenuService();
+function buildQrImageUrl(sessionId) {
+  const base = process.env.PUBLIC_BASE_URL?.replace(/\/$/, "");
+  return base ? `${base}/qr/${sessionId}.png` : null;
+}
 const subLineHandlers = createSubscriptionLineHandlers({
   subscriptionService,
   paymentSessionService,
@@ -62,7 +69,8 @@ const subLineHandlers = createSubscriptionLineHandlers({
   qrService,
   auditLog,
   ai,
-  visionModel
+  visionModel,
+  buildQrImageUrl
 });
 const adminAuth = createAdminAuth(subCollections);
 app.use("/admin", createAdminRouter({ collections: subCollections, adminAuth, subscriptionService, paymentTransactionService }));
@@ -141,8 +149,10 @@ function advice(monthTransactions) {
 function summary(list, title) { const t = totals(list); return `📊 สรุป${title}\nรายรับ: ${money(t.income)} บาท\nรายจ่าย: ${money(t.expense)} บาท\nคงเหลือ: ${money(t.income - t.expense)} บาท\nจำนวนรายการ: ${list.length}`; }
 function signatureValid(raw, signature) { const expected = crypto.createHmac("sha256", process.env.LINE_CHANNEL_SECRET).update(raw).digest("base64"); return Boolean(signature) && crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected)); }
 async function line(endpoint, body) { const r = await fetch(`https://api.line.me/v2/bot/message/${endpoint}`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}` }, body: JSON.stringify(body) }); if (!r.ok) throw new Error(`LINE ${endpoint}: ${r.status}`); }
-async function reply(token, text) { return line("reply", { replyToken: token, messages: [{ type: "text", text: text.slice(0, 4900) }] }); }
+async function replyMessages(token, messages) { return line("reply", { replyToken: token, messages }); }
+async function reply(token, text) { return replyMessages(token, [{ type: "text", text: text.slice(0, 4900) }]); }
 async function push(to, text) { return line("push", { to, messages: [{ type: "text", text: text.slice(0, 4900) }] }); }
+function qrImageMessage(url) { return { type: "image", originalContentUrl: url, previewImageUrl: url }; }
 function allowed(req) {
   const uid = req.query.u;
   if (!process.env.DASHBOARD_TOKEN || !uid) return false;
@@ -332,6 +342,21 @@ app.get("/api/dashboard", async (req, res) => {
   const now = new Date(), history = Array.from({ length: 6 }, (_, index) => { const d = new Date(now.getFullYear(), now.getMonth() - (5 - index), 1), p = parts(d), total = totals(user.transactions.filter((tx) => sameMonth(tx.createdAt, p.year, p.month))); return { label: new Intl.DateTimeFormat("th-TH", { month: "short", timeZone: "Asia/Bangkok" }).format(d), ...total }; });
   res.json({ label: `ข้อมูลเดือน ${new Intl.DateTimeFormat("th-TH", { month: "long", year: "numeric", timeZone: "Asia/Bangkok" }).format(now)}`, income: t.income, expense: t.expense, balance: t.income - t.expense, categories, history, recent: [...user.transactions].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 30).map((tx) => ({ ...tx, date: new Intl.DateTimeFormat("th-TH", { dateStyle: "short", timeZone: "Asia/Bangkok" }).format(new Date(tx.createdAt)) })) });
 });
+// เรนเดอร์ QR ของ payment session เป็นภาพ PNG จริง เพื่อให้ LINE Image Message ใช้ originalContentUrl/
+// previewImageUrl ชี้มาที่นี่ได้ (LINE ต้องการ URL รูปภาพที่เข้าถึงได้จริง จะส่ง payload string ตรง ๆ ไม่ได้)
+app.get("/qr/:sessionId.png", async (req, res) => {
+  try {
+    const session = await paymentSessionService.getById(req.params.sessionId);
+    if (!session) return res.sendStatus(404);
+    const qr = qrService.generateForSession(session);
+    if (!qr.available) return res.sendStatus(404);
+    res.set({ "content-type": "image/png", "cache-control": "no-store" });
+    await QRCode.toFileStream(res, qr.payload, { type: "png", width: 500, margin: 2 });
+  } catch (error) {
+    console.error("QR image render failed:", error.message);
+    res.sendStatus(500);
+  }
+});
 app.post("/webhook", express.raw({ type: "application/json" }), async (req, res) => {
   if (!signatureValid(req.body, req.get("x-line-signature"))) return res.sendStatus(401);
   res.sendStatus(200); const payload = JSON.parse(req.body.toString("utf8"));
@@ -376,10 +401,13 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
 
     // --- Premium subscription commands: เช็คก่อน finance parser เสมอ เพื่อไม่ให้ "สมัครพรีเมียม" ถูกตีความเป็นรายการบัญชี ---
     if (text === "สมัครพรีเมียม") {
-      let message;
-      try { message = await subLineHandlers.handleSubscribeCommand(userId); }
-      catch (error) { console.error("Subscribe command failed", error.message); message = "เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง"; }
-      try { await reply(event.replyToken, message); } catch (error) { console.error("Could not reply", error.message); }
+      let result;
+      try { result = await subLineHandlers.handleSubscribeCommand(userId); }
+      catch (error) { console.error("Subscribe command failed", error.message); result = { text: "เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง" }; }
+      const messages = [];
+      if (result.qrImageUrl) messages.push(qrImageMessage(result.qrImageUrl));
+      messages.push({ type: "text", text: result.text.slice(0, 4900) });
+      try { await replyMessages(event.replyToken, messages); } catch (error) { console.error("Could not reply", error.message); }
       continue;
     }
     if (text === "ส่งสลิป") {
