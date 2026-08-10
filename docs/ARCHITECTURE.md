@@ -1,4 +1,4 @@
-# ป้านวล Premium — Architecture & Security Design
+# ตาผิน Premium — Architecture & Security Design
 
 สถานะ: เอกสารออกแบบก่อนเขียนโค้ด (ตามคำสั่ง "ห้ามเขียน Code ทันที")
 
