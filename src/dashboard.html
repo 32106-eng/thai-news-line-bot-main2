@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <title>ตาผิน — สมุดบัญชี</title>
+  <title>ยายจันทร์ — สมุดบัญชี</title>
   <style>
     @font-face{font-family:"Noto Sans Thai";font-display:swap}
     :root{
@@ -140,8 +140,8 @@
   <main class="app">
     <header class="top" id="topbar">
       <div class="brandmark">
-        <div class="seal">ผ</div>
-        <div><div class="brand">ตาผิน</div><div class="sub">สมุดบัญชีที่เชื่อมกับ LINE</div></div>
+        <div class="seal">จ</div>
+        <div><div class="brand">ยายจันทร์</div><div class="sub">สมุดบัญชีที่เชื่อมกับ LINE</div></div>
       </div>
       <span class="status"><i class="dot"></i>เชื่อมข้อมูลแล้ว</span>
     </header>
@@ -203,12 +203,12 @@
         +'<section class="panel"><h2>ใช้จ่ายตามหมวด</h2>'+pieChart(d.categories)+'</section>'
         +'<section class="panel"><h2>รายการล่าสุด</h2>'+recentRows(5)+'</section>';
     }
-    function analysisPage(){const d=dashboard||{history:[],categories:[]};return '<h1 class="view-title">วิเคราะห์</h1><p class="lead">ดูแนวโน้มรายรับและรายจ่าย 6 เดือนล่าสุด</p><section class="panel"><h2>แนวโน้มรายเดือน</h2><div class="chart-legend"><span><i class="dot" style="background:#4b6a58"></i>รายรับ</span><span><i class="dot" style="background:#7a2b3d"></i>รายจ่าย</span></div>'+barChart(d.history)+(d.history||[]).map((x,i)=>'<div class="chart-row stagger" style="animation-delay:'+(i*40)+'ms"><span>'+esc(x.label)+'</span><strong class="income num">+'+fmt(x.income)+'</strong><strong class="expense num">-'+fmt(x.expense)+'</strong></div>').join('')+'</section><section class="panel"><h2>ข้อสังเกต</h2><div class="notice">ข้อมูลจากหน้าเว็บและข้อความที่ส่งให้ LINE ตาผิน จะถูกเก็บในบัญชีเดียวกันทันที</div></section>';}
+    function analysisPage(){const d=dashboard||{history:[],categories:[]};return '<h1 class="view-title">วิเคราะห์</h1><p class="lead">ดูแนวโน้มรายรับและรายจ่าย 6 เดือนล่าสุด</p><section class="panel"><h2>แนวโน้มรายเดือน</h2><div class="chart-legend"><span><i class="dot" style="background:#4b6a58"></i>รายรับ</span><span><i class="dot" style="background:#7a2b3d"></i>รายจ่าย</span></div>'+barChart(d.history)+(d.history||[]).map((x,i)=>'<div class="chart-row stagger" style="animation-delay:'+(i*40)+'ms"><span>'+esc(x.label)+'</span><strong class="income num">+'+fmt(x.income)+'</strong><strong class="expense num">-'+fmt(x.expense)+'</strong></div>').join('')+'</section><section class="panel"><h2>ข้อสังเกต</h2><div class="notice">ข้อมูลจากหน้าเว็บและข้อความที่ส่งให้ LINE ยายจันทร์ จะถูกเก็บในบัญชีเดียวกันทันที</div></section>';}
     function budgetsPage(){const thisMonth=new Date().toISOString().slice(0,7);const cats=[...new Set(transactions.filter(x=>x.type==='expense').map(x=>x.category).concat(Object.keys(budgets)))].sort();return '<h1 class="view-title">หมวดและงบ</h1><p class="lead">กำหนดวงเงินรายเดือนแยกตามหมวด</p><section class="panel"><h2>งบประมาณ</h2>'+(cats.length?cats.map((c,i)=>{const spent=transactions.filter(x=>x.type==='expense'&&x.category===c&&x.createdAt.slice(0,7)===thisMonth).reduce((s,x)=>s+x.amount,0),limit=budgets[c]||0,pct=limit?Math.min(100,spent/limit*100):0,over=limit>0&&spent>limit;return '<div class="stagger" style="animation-delay:'+(i*35)+'ms"><div class="budget"><div><strong>'+esc(c)+'</strong><div class="meta">ใช้แล้ว '+fmt(spent)+(limit?' จาก '+fmt(limit):'')+'</div></div><input aria-label="งบ '+esc(c)+'" data-budget="'+esc(c)+'" type="number" min="0" value="'+limit+'"><button class="primary save-budget" data-category="'+esc(c)+'">บันทึก</button></div>'+(limit?'<div class="budget-bar'+(over?' over':'')+'"><i style="width:'+pct+'%"></i></div>':'')+'</div>'}).join(''):'<div class="empty">เพิ่มรายจ่ายก่อน แล้วหมวดจะปรากฏที่นี่</div>')+'</section>';}
     function transactionPage(){const list=transactions.filter(x=>filter==='all'||x.type===filter);return '<h1 class="view-title">รายการ</h1><p class="lead">เพิ่ม แก้ไข หรือลบรายการได้จากหน้านี้</p><div class="toolbar"><button class="'+(filter==='all'?'active':'')+'" data-filter="all">ทั้งหมด</button><button class="'+(filter==='expense'?'active':'')+'" data-filter="expense">รายจ่าย</button><button class="'+(filter==='income'?'active':'')+'" data-filter="income">รายรับ</button><button id="download">⇩ ส่งออก CSV</button></div><section class="panel">'+(list.length?list.map(row).join(''):'<div class="empty">ยังไม่มีรายการ กด + เพื่อเริ่มบันทึก</div>')+'</section>';}
     function recentRows(n){return transactions.slice(0,n).map(row).join('')||'<div class="empty">ยังไม่มีรายการ</div>'}
     function row(x,i){return '<article class="row stagger" style="animation-delay:'+((i||0)*30)+'ms" data-id="'+x.id+'"><div><strong>'+esc(x.description)+'</strong><div class="meta">'+new Date(x.createdAt).toLocaleString('th-TH',{dateStyle:'short',timeStyle:'short'})+' · '+esc(x.category)+'</div></div><span class="amount num '+x.type+'">'+(x.type==='income'?'+':'-')+fmt(x.amount)+'</span></article>'}
-    function settingsPage(){return '<h1 class="view-title">ตั้งค่า</h1><p class="lead">จัดการรายการประจำ และใช้บอทใน LINE</p><section class="panel"><h2>ใช้ใน LINE</h2><div class="notice">พิมพ์ “ค่าอาหาร 80”, “เงินเดือน 15000”, “สรุปเดือนนี้” หรือ “เว็บ” ในแชตกับตาผินได้ ข้อมูลจะอัปเดตที่หน้านี้</div></section><section class="panel"><div class="chart-row"><h2 style="margin:0">รายการประจำ</h2><button class="primary" id="addRecurring">เพิ่ม</button></div><div id="recurringList"><div class="empty">กำลังโหลด…</div></div></section>';}
+    function settingsPage(){return '<h1 class="view-title">ตั้งค่า</h1><p class="lead">จัดการรายการประจำ และใช้บอทใน LINE</p><section class="panel"><h2>ใช้ใน LINE</h2><div class="notice">พิมพ์ “ค่าอาหาร 80”, “เงินเดือน 15000”, “สรุปเดือนนี้” หรือ “เว็บ” ในแชตกับยายจันทร์ได้ ข้อมูลจะอัปเดตที่หน้านี้</div></section><section class="panel"><div class="chart-row"><h2 style="margin:0">รายการประจำ</h2><button class="primary" id="addRecurring">เพิ่ม</button></div><div id="recurringList"><div class="empty">กำลังโหลด…</div></div></section>';}
 
     function render(){
       if(page==='summary')view.innerHTML=summaryPage();
