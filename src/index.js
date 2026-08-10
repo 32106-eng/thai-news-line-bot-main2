@@ -20,6 +20,7 @@ import { getPaymentProvider } from "./subscription/paymentProvider.js";
 import { createQrService } from "./subscription/qr.js";
 import { createRichMenuService } from "./subscription/richMenu.js";
 import { createSubscriptionLineHandlers } from "./subscription/lineHandlers.js";
+import { createGroupLinkService, CONFIRM_WINDOW_MINUTES } from "./subscription/groupLinks.js";
 import { createAdminAuth } from "./admin/auth.js";
 import { createAdminRouter } from "./admin/routes.js";
 
@@ -86,11 +87,37 @@ const subLineHandlers = createSubscriptionLineHandlers({
 const adminAuth = createAdminAuth(subCollections);
 app.use("/admin", createAdminRouter({ collections: subCollections, adminAuth, subscriptionService, paymentTransactionService }));
 
+// ---------------------------------------------------------------------------
+// กลุ่มจดบัญชี (group ledger): บอทเข้ากลุ่มได้เฉพาะที่มีคนยืนยันว่าเป็นเจ้าของ Premium เท่านั้น
+// ทุกคำสั่ง/ข้อความในกลุ่ม-ห้อง ต้องขึ้นต้นด้วย "/บอท" เสมอ ไม่งั้นบอทจะไม่ตอบ (ดู docs/ARCHITECTURE.md)
+// ---------------------------------------------------------------------------
+const groupLinkService = createGroupLinkService(subCollections, auditLog, subscriptionService);
+const BOT_PREFIX = "/บอท";
+function stripBotPrefix(text) {
+  if (!text.startsWith(BOT_PREFIX)) return null;
+  return text.slice(BOT_PREFIX.length).trim();
+}
+
 // housekeeping: mark expired subscriptions daily (NOT the source of truth for access control —
 // isPremium() always re-checks expires_at live against server time, see spec §13)
 cron.schedule("15 0 * * *", async () => {
   try { const count = await subscriptionService.sweepExpired(); if (count) console.log(`Expired ${count} subscription(s)`); }
   catch (error) { console.error("Subscription expiry sweep failed:", error.message); }
+}, { timezone: "Asia/Bangkok" });
+
+// housekeeping: กลุ่มที่ยังไม่มีใครยืนยันเป็นเจ้าของภายในเวลาที่กำหนด (CONFIRM_WINDOW_MINUTES) ให้บอทออกจากกลุ่มเอง
+// รันถี่กว่า sweep ปกติเพราะ deadline สั้นแค่ไม่กี่นาที (ตรวจทุก 2 นาทีพอ ไม่ต้องเรียลไทม์เป๊ะ)
+cron.schedule("*/2 * * * *", async () => {
+  try {
+    const expiredGroupIds = await groupLinkService.findExpiredPending();
+    for (const groupId of expiredGroupIds) {
+      try {
+        await leaveGroup(groupId);
+        await groupLinkService.markLeft(groupId);
+        console.log(`Left group ${groupId}: no owner confirmation within ${CONFIRM_WINDOW_MINUTES} min`);
+      } catch (error) { console.error(`Leaving group ${groupId} failed:`, error.message); }
+    }
+  } catch (error) { console.error("Group pending sweep failed:", error.message); }
 }, { timezone: "Asia/Bangkok" });
 
 const CATEGORIES = {
@@ -188,6 +215,21 @@ async function replyMessages(token, messages) { return line("reply", { replyToke
 async function reply(token, text) { return replyMessages(token, [{ type: "text", text: text.slice(0, 4900) }]); }
 async function push(to, text) { return line("push", { to, messages: [{ type: "text", text: text.slice(0, 4900) }] }); }
 function qrImageMessage(url) { return { type: "image", originalContentUrl: url, previewImageUrl: url }; }
+// ดึงชื่อสมาชิกกลุ่ม (ใช้แสดง "ใครจดอะไรบ้าง" ในกองกลาง) — ใช้ได้เฉพาะ userId ที่เคยส่งข้อความในกลุ่มนี้มาก่อน
+// (ข้อจำกัดของ LINE: ดึงรายชื่อสมาชิกกลุ่มทั้งหมดล่วงหน้าไม่ได้ ต้องรู้ userId ก่อนถึงจะสอบถามโปรไฟล์ได้)
+async function getGroupMemberName(groupId, userId) {
+  try {
+    const r = await fetch(`https://api.line.me/v2/bot/group/${groupId}/member/${userId}`, { headers: { authorization: `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}` } });
+    if (!r.ok) return null;
+    const profile = await r.json();
+    return profile.displayName ?? null;
+  } catch (error) { console.warn("Group member profile fetch failed:", error.message); return null; }
+}
+// เรียกตอนไม่มีใครยืนยันเป็นเจ้าของกลุ่มทันเวลา หรือคนที่ยืนยันไม่ใช่ Premium
+async function leaveGroup(groupId) {
+  const r = await fetch(`https://api.line.me/v2/bot/group/${groupId}/leave`, { method: "POST", headers: { authorization: `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}` } });
+  if (!r.ok) throw new Error(`LINE leaveGroup: ${r.status}`);
+}
 function allowed(req) {
   const uid = req.query.u;
   if (!process.env.DASHBOARD_TOKEN || !uid) return false;
@@ -396,12 +438,68 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
   if (!signatureValid(req.body, req.get("x-line-signature"))) return res.sendStatus(401);
   res.sendStatus(200); const payload = JSON.parse(req.body.toString("utf8"));
   for (const event of payload.events ?? []) {
+    // --- บอทถูกเชิญเข้ากลุ่ม/ห้อง: เริ่มรอยืนยันเจ้าของ (spec: กลุ่มจดบัญชี) ---
+    if (event.type === "join") {
+      const groupId = event.source?.groupId ?? event.source?.roomId;
+      if (!groupId) continue;
+      try {
+        await groupLinkService.startPending(groupId);
+        await reply(event.replyToken, `สวัสดีค่ะ ยายจันทร์พร้อมจดบัญชีกองกลางให้กลุ่มนี้ 📒\n\nฟีเจอร์นี้ใช้ได้เฉพาะกลุ่มที่มีสมาชิก Premium เชิญเข้ามาเท่านั้น\nถ้าคุณเป็น Premium อยู่แล้ว พิมพ์:\n/บอท ยืนยันเจ้าของ\n\nภายใน ${CONFIRM_WINDOW_MINUTES} นาที ไม่งั้นยายจันทร์ขอตัวออกจากกลุ่มนะคะ\n\nทุกคำสั่งในกลุ่มต้องขึ้นต้นด้วย "/บอท" เสมอ เช่น "/บอท กาแฟ 60"`);
+      } catch (error) { console.error("Group join handling failed:", error.message); }
+      continue;
+    }
+    // --- บอทถูกเตะ/ออกจากกลุ่มเอง: เคลียร์สถานะ link ทิ้ง ---
+    if (event.type === "leave") {
+      const groupId = event.source?.groupId ?? event.source?.roomId;
+      if (!groupId) continue;
+      try { await groupLinkService.removeLink(groupId); } catch (error) { console.error("Group leave cleanup failed:", error.message); }
+      continue;
+    }
     if (event.type !== "message") continue;
-    // each LINE user (or group/room) gets their own isolated ledger, keyed by their LINE id
-    const userId = event.source?.userId ?? event.source?.groupId ?? event.source?.roomId;
+    const sourceType = event.source?.type; // "user" | "group" | "room"
+    const isGroupChat = sourceType === "group" || sourceType === "room";
+    // ในกลุ่ม/ห้อง: รายการทั้งหมดเข้ากองกลางเดียวกันที่คีย์ด้วย groupId/roomId
+    // ผู้จดแต่ละคนแยกด้วย authorId (LINE userId ของคนที่พิมพ์จริง — ไม่ใช่ userId ของกลุ่ม)
+    const userId = isGroupChat ? (event.source?.groupId ?? event.source?.roomId) : event.source?.userId;
+    const authorId = event.source?.userId ?? null; // มีเฉพาะตอนอยู่ในกลุ่ม/ห้อง (1:1 ไม่ต้องใช้ค่านี้)
     if (!userId) continue;
+
+    // --- ในกลุ่ม/ห้อง: ข้อความตัวอักษรต้องขึ้นต้นด้วย "/บอท" เสมอ ไม่งั้นเงียบสนิท ไม่อ่านไม่ตอบ (spec: กลุ่มจดบัญชี) ---
+    // รูปภาพไม่ผ่านเงื่อนไขนี้ (แนบ prefix กับรูปพร้อมกันไม่ได้) — คุมด้วย groupLinkService.consumeReceiptWait แทน (ดูด้านล่าง)
+    if (isGroupChat && event.message?.type === "text") {
+      const stripped = stripBotPrefix(event.message.text.trim());
+      if (stripped === null) continue; // ไม่มี "/บอท" นำหน้า -> ไม่ทำอะไรเลย
+      event.message.text = stripped; // ตัด prefix ออก แล้วปล่อยให้ logic เดิมด้านล่างทำงานเหมือน 1:1
+    }
+
+    if (event.message?.type === "image" && isGroupChat) {
+      // ในกลุ่ม รูปภาพจะถูกอ่านก็ต่อเมื่อ "เพิ่งพิมพ์ /บอท สลิป มาก่อน" เท่านั้น (consumeReceiptWait เช็คทั้งคนส่งและเวลา)
+      // ไม่มีการสมัคร/จ่าย Premium ในกลุ่มเลย จึงไม่ต้องพึ่ง uploadSessionService/paymentSession แบบ 1:1
+      let message;
+      try {
+        const waiting = await groupLinkService.consumeReceiptWait(userId, authorId);
+        if (!waiting) { continue; } // ไม่มีใครสั่ง "/บอท สลิป" ไว้ก่อน (หรือหมดเวลาแล้ว) -> เพิกเฉยรูปนี้ทั้งหมด
+        if (!ai || !visionModel) message = "ยังไม่ได้ตั้งค่าโมเดล AI แบบอ่านรูปภาพ (ตั้งค่า OPENAI_VISION_MODEL หรือ OPENAI_MODEL ที่รองรับรูปภาพใน .env) ตอนนี้พิมพ์รายการแทนได้ก่อน เช่น /บอท กาแฟ 60";
+        else {
+          try {
+            const { mime, base64 } = await downloadLineImage(event.message.id);
+            const receipt = await readReceipt(mime, base64);
+            if (!receipt) message = "อ่านยอดเงินจากใบเสร็จนี้ไม่ได้ ลองถ่ายให้เห็นยอดรวมชัด ๆ อีกครั้ง หรือพิมพ์รายการเองแทนได้ เช่น /บอท กาแฟ 60";
+            else {
+              const user = await getUser(userId);
+              let tx = await enrichWithAi({ id: crypto.randomUUID(), type: "expense", category: categoryFor(receipt.merchant), description: receipt.merchant, amount: receipt.amount, createdAt: new Date().toISOString() }, receipt.merchant);
+              tx = { ...tx, authorId, authorName: await getGroupMemberName(userId, authorId) };
+              user.transactions.push(tx); await saveUser(userId, user);
+              message = `🧾 บันทึกรายจ่ายจากรูปใบเสร็จแล้ว\nร้าน: ${tx.description}\nหมวด: ${tx.category}\nจำนวน: ${money(tx.amount)} บาท${tx.authorName ? `\nผู้จด: ${tx.authorName}` : ""}\n\nถ้าอ่านยอดหรือร้านผิด พิมพ์ "/บอท ลบล่าสุด" แล้วพิมพ์รายการใหม่ได้เลย`;
+            }
+          } catch (error) { console.error("Receipt read failed", error.message); message = "ระบบประมวลผลภาพใช้เวลานานกว่าปกติ กรุณาลองใหม่อีกครั้ง"; }
+        }
+      } catch (error) { console.error("Group image handling failed", error.message); message = "ระบบประมวลผลภาพใช้เวลานานกว่าปกติ กรุณาลองใหม่อีกครั้ง"; }
+      try { await reply(event.replyToken, message); } catch (error) { console.error("Could not reply", error.message); }
+      continue;
+    }
     if (event.message?.type === "image") {
-      // รูปภาพอาจเป็น "สลิปการชำระเงิน Premium" (ถ้ามี upload_session ค้างรออยู่) หรือ "ใบเสร็จ" (ฟีเจอร์ Premium)
+      // 1:1 เดิม: รูปภาพอาจเป็น "สลิปการชำระเงิน Premium" (ถ้ามี upload_session ค้างรออยู่) หรือ "ใบเสร็จ" (ฟีเจอร์ Premium)
       // การตัดสินใจว่าเป็นแบบไหน และการตรวจสิทธิ์ Premium เกิดที่ backend เสมอ ไม่เชื่อ Rich Menu ที่ผู้ใช้กดมา (spec §16)
       let message;
       try {
@@ -434,8 +532,34 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
     if (event.message?.type !== "text") continue;
     const text = event.message.text.trim();
 
+    // --- คำสั่งเฉพาะกลุ่ม: ยืนยันความเป็นเจ้าของ (spec: กลุ่มจดบัญชี) ---
+    if (isGroupChat && text === "ยืนยันเจ้าของ") {
+      let message;
+      try {
+        const result = await groupLinkService.confirmOwner(userId, authorId);
+        if (result.ok) {
+          message = "✅ ยืนยันสำเร็จ กลุ่มนี้ปลดล็อกฟีเจอร์ Premium แล้ว (ใช้ได้เฉพาะในกลุ่มนี้เท่านั้น)\n\nทุกคำสั่งต้องขึ้นต้นด้วย \"/บอท\" เสมอ เช่น \"/บอท กาแฟ 60\"";
+        } else if (result.reason === "NOT_PREMIUM") {
+          message = "บัญชีของคุณยังไม่ใช่ Premium ยายจันทร์ขอตัวออกจากกลุ่มนี้นะคะ 🙏\nถ้าอยากใช้งานฟีเจอร์นี้ ต้องสมัคร Premium แบบส่วนตัวกับยายจันทร์ก่อน (แชท 1:1 พิมพ์ \"สมัครพรีเมียม\")";
+          try { await reply(event.replyToken, message); } catch (error) { console.error("Could not reply", error.message); }
+          try { await leaveGroup(userId); await groupLinkService.markLeft(userId); } catch (error) { console.error("Leaving group after rejection failed:", error.message); }
+          continue;
+        } else if (result.reason === "EXPIRED") {
+          message = "หมดเวลายืนยันแล้ว ยายจันทร์ขอตัวออกจากกลุ่มนี้นะคะ 🙏 เชิญเข้ามาใหม่ได้เลยถ้าต้องการลองอีกครั้ง";
+          try { await reply(event.replyToken, message); } catch (error) { console.error("Could not reply", error.message); }
+          try { await leaveGroup(userId); await groupLinkService.markLeft(userId); } catch (error) { console.error("Leaving group after expiry failed:", error.message); }
+          continue;
+        } else {
+          message = "กลุ่มนี้ยืนยันเจ้าของไปแล้ว หรือไม่มีคำขอที่รอยืนยันอยู่";
+        }
+      } catch (error) { console.error("Confirm owner failed", error.message); message = "เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง"; }
+      try { await reply(event.replyToken, message); } catch (error) { console.error("Could not reply", error.message); }
+      continue;
+    }
+
     // --- Premium subscription commands: เช็คก่อน finance parser เสมอ เพื่อไม่ให้ "สมัครพรีเมียม" ถูกตีความเป็นรายการบัญชี ---
-    if (text === "สมัครพรีเมียม") {
+    // ห้ามสมัคร/ต่ออายุ Premium จากในกลุ่มเด็ดขาด (spec: ต้องไปสมัครแบบ 1:1 เท่านั้น) — งดคำสั่งนี้ในกลุ่ม
+    if (!isGroupChat && text === "สมัครพรีเมียม") {
       let result;
       try { result = await subLineHandlers.handleSubscribeCommand(userId); }
       catch (error) { console.error("Subscribe command failed", error.message); result = { text: "เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง" }; }
@@ -445,10 +569,27 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
       try { await replyMessages(event.replyToken, messages); } catch (error) { console.error("Could not reply", error.message); }
       continue;
     }
-    if (text === "ส่งสลิป") {
+    if (isGroupChat && text === "สมัครพรีเมียม") {
+      try { await reply(event.replyToken, "สมัคร Premium ทำได้เฉพาะแชทส่วนตัวกับยายจันทร์เท่านั้นนะ ไปคุย 1:1 แล้วพิมพ์ \"สมัครพรีเมียม\" ได้เลย\n\nพอสมัครเสร็จแล้ว เชิญยายจันทร์เข้ากลุ่มนี้ (หรือกลุ่มอื่น) แล้วพิมพ์ \"/บอท ยืนยันเจ้าของ\" เพื่อปลดล็อก Premium ให้ทั้งกลุ่มได้เลย"); } catch (error) { console.error("Could not reply", error.message); }
+      continue;
+    }
+    if (!isGroupChat && text === "ส่งสลิป") {
       let message;
       try { message = await subLineHandlers.handleSendSlipCommand(userId); }
       catch (error) { console.error("Send-slip command failed", error.message); message = "เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง"; }
+      try { await reply(event.replyToken, message); } catch (error) { console.error("Could not reply", error.message); }
+      continue;
+    }
+    // ในกลุ่ม "/บอท สลิป" ใช้แค่เพื่อ "รอรับรูปใบเสร็จ" มาจดรายจ่ายกองกลาง (ต้องเป็นกลุ่ม Premium อยู่แล้วเท่านั้น)
+    // คนละเรื่องกับ "ส่งสลิป" แบบ 1:1 ที่ผูกกับ payment_session ตอนสมัคร Premium — ในกลุ่มไม่มี payment_session ให้ผูก
+    // จึงใช้ groupLinkService.openReceiptWait/consumeReceiptWait แทน uploadSessionService โดยสิ้นเชิง
+    if (isGroupChat && text === "สลิป") {
+      let message;
+      try {
+        const isPremiumGroup = await groupLinkService.isPremiumGroup(userId);
+        if (!isPremiumGroup) message = "กลุ่มนี้ยังไม่ได้ปลดล็อก Premium นะ (ต้องมีสมาชิก Premium เป็นเจ้าของกลุ่ม)\nไปสมัคร Premium แบบ 1:1 กับยายจันทร์ก่อน แล้วเชิญเข้ากลุ่มพร้อมพิมพ์ \"/บอท ยืนยันเจ้าของ\"";
+        else { await groupLinkService.openReceiptWait(userId, authorId); message = "กรุณาส่งรูปใบเสร็จตามมาได้เลย 🧾"; }
+      } catch (error) { console.error("Group slip command failed", error.message); message = "เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง"; }
       try { await reply(event.replyToken, message); } catch (error) { console.error("Could not reply", error.message); }
       continue;
     }
@@ -456,17 +597,27 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
     const user = await getUser(userId);
     if (applyRecurring(user)) await saveUser(userId, user);
     let message;
-    if (["เริ่ม", "ช่วยเหลือ", "help"].includes(text.toLowerCase())) message = "📒 ยายจันทร์พร้อมจดบัญชีของคุณ (ข้อมูลของแต่ละคนแยกกันเป็นส่วนตัว)\n\nพิมพ์: กาแฟ 60\nรายรับ: เงินเดือน 15000\nถ่ายรูปใบเสร็จส่งมาได้เลย (ฟีเจอร์ Premium) ยายจันทร์จะอ่านยอดกับร้านค้าให้อัตโนมัติ\nคำสั่ง: สรุปวันนี้ | สรุปเดือนนี้ | ลบล่าสุด | เว็บ | สมัครพรีเมียม\nทุกวันอาทิตย์ยายจันทร์จะสรุปสัปดาห์ให้อัตโนมัติด้วย\n\nหรือถามยายจันทร์ได้เลย เช่น \"เดือนนี้ใช้เงินไปกับอะไรมากสุด\" ยายจันทร์เน้นตอบเรื่องการเงินเป็นหลัก แต่คุยเรื่องอื่นได้ด้วย";
+    const helpText = isGroupChat
+      ? "📒 ยายจันทร์พร้อมจดบัญชีกองกลางให้กลุ่มนี้\n\nทุกคำสั่งต้องขึ้นต้นด้วย \"/บอท\" เสมอ เช่น:\n/บอท กาแฟ 60\n/บอท เงินเดือน 15000\n/บอท สลิป (แล้วส่งรูปใบเสร็จตาม — ต้องมีสมาชิก Premium เป็นเจ้าของกลุ่มนี้ก่อน)\n/บอท สรุปวันนี้ | /บอท สรุปเดือนนี้ | /บอท ลบล่าสุด | /บอท เว็บ\n\nสมัคร Premium ต้องไปแชท 1:1 กับยายจันทร์เท่านั้น"
+      : "📒 ยายจันทร์พร้อมจดบัญชีของคุณ (ข้อมูลของแต่ละคนแยกกันเป็นส่วนตัว)\n\nพิมพ์: กาแฟ 60\nรายรับ: เงินเดือน 15000\nถ่ายรูปใบเสร็จส่งมาได้เลย (ฟีเจอร์ Premium) ยายจันทร์จะอ่านยอดกับร้านค้าให้อัตโนมัติ\nคำสั่ง: สรุปวันนี้ | สรุปเดือนนี้ | ลบล่าสุด | เว็บ | สมัครพรีเมียม\nทุกวันอาทิตย์ยายจันทร์จะสรุปสัปดาห์ให้อัตโนมัติด้วย\n\nหรือถามยายจันทร์ได้เลย เช่น \"เดือนนี้ใช้เงินไปกับอะไรมากสุด\" ยายจันทร์เน้นตอบเรื่องการเงินเป็นหลัก แต่คุยเรื่องอื่นได้ด้วย";
+    if (["เริ่ม", "ช่วยเหลือ", "help"].includes(text.toLowerCase())) message = helpText;
     else if (text === "สรุปวันนี้") message = summary(user.transactions.filter((tx) => sameDay(tx.createdAt)), "วันนี้");
     else if (text === "สรุปเดือนนี้") { const month = user.transactions.filter((tx) => sameMonth(tx.createdAt)); message = `${summary(month, "เดือนนี้")}\n\n${advice(month)}`; }
     else if (text === "ลบล่าสุด") { const tx = user.transactions.pop(); if (tx) { await saveUser(userId, user); message = `ลบแล้ว: ${tx.description} ${money(tx.amount)} บาท`; } else message = "ยังไม่มีรายการให้ลบ"; }
-    else if (text === "เว็บ") { const base = process.env.PUBLIC_BASE_URL?.replace(/\/$/, ""); message = base ? `📊 แดชบอร์ดส่วนตัวของคุณ\n${base}/dashboard?token=${perUserToken(userId)}&u=${encodeURIComponent(userId)}` : "ยังไม่ได้ตั้งค่า PUBLIC_BASE_URL สำหรับแดชบอร์ด"; }
+    else if (text === "เว็บ") { const base = process.env.PUBLIC_BASE_URL?.replace(/\/$/, ""); message = base ? `📊 แดชบอร์ด${isGroupChat ? "กองกลางของกลุ่มนี้" : "ส่วนตัวของคุณ"}\n${base}/dashboard?token=${perUserToken(userId)}&u=${encodeURIComponent(userId)}` : "ยังไม่ได้ตั้งค่า PUBLIC_BASE_URL สำหรับแดชบอร์ด"; }
     else {
       let tx = parse(text);
-      if (tx) { const ambiguous = tx._typeAmbiguous; delete tx._typeAmbiguous; tx = await enrichWithAi(tx, text, ambiguous); user.transactions.push(tx); await saveUser(userId, user); message = `${tx.type === "income" ? "💰 บันทึกรายรับแล้ว" : "🧾 บันทึกรายจ่ายแล้ว"}\n${tx.description}\nหมวด: ${tx.category}\nจำนวน: ${money(tx.amount)} บาท`; }
-      else { const aiAnswer = await askFinanceAi(user, text); message = aiAnswer ?? "พิมพ์ได้เลย เช่น กาแฟ 60 หรือ เงินเดือน 15000\nพิมพ์ ช่วยเหลือ เพื่อดูคำสั่ง"; }
+      if (tx) {
+        const ambiguous = tx._typeAmbiguous; delete tx._typeAmbiguous;
+        tx = await enrichWithAi(tx, text, ambiguous);
+        if (isGroupChat) tx = { ...tx, authorId, authorName: await getGroupMemberName(userId, authorId) };
+        user.transactions.push(tx); await saveUser(userId, user);
+        message = `${tx.type === "income" ? "💰 บันทึกรายรับแล้ว" : "🧾 บันทึกรายจ่ายแล้ว"}\n${tx.description}\nหมวด: ${tx.category}\nจำนวน: ${money(tx.amount)} บาท${tx.authorName ? `\nผู้จด: ${tx.authorName}` : ""}`;
+      }
+      else { const aiAnswer = await askFinanceAi(user, text); message = aiAnswer ?? (isGroupChat ? "พิมพ์ได้เลย เช่น /บอท กาแฟ 60 หรือ /บอท เงินเดือน 15000\nพิมพ์ /บอท ช่วยเหลือ เพื่อดูคำสั่ง" : "พิมพ์ได้เลย เช่น กาแฟ 60 หรือ เงินเดือน 15000\nพิมพ์ ช่วยเหลือ เพื่อดูคำสั่ง"); }
     }
     try { await reply(event.replyToken, message); } catch (error) { console.error("Could not reply", error.message); }
   }
 });
 app.listen(Number(process.env.PORT ?? 3000), () => console.log(`Ta Phin listening on ${process.env.PORT ?? 3000}`));
+
