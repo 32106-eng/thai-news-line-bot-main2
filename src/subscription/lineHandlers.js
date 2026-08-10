@@ -61,13 +61,20 @@ export function createSubscriptionLineHandlers({
     return MSG.askForSlip;
   }
 
-  async function handleReceiptOrSlipImage(userId, downloadImage) {
+  /**
+   * options.isPremiumOverride: ใช้เมื่อ userId คือ groupId/roomId (กลุ่มจดบัญชี) —
+   * สิทธิ์ Premium ของ "รูปที่ส่งเข้ากลุ่ม" ต้องอิงจาก groupLinkService.isPremiumGroup(groupId)
+   * ที่ index.js เช็คมาให้แล้ว ไม่ใช่ subscriptionService.isPremium(groupId) ตรง ๆ
+   * (groupId ไม่มี subscription เป็นของตัวเอง — Premium ผูกกับ owner ของกลุ่มเท่านั้น)
+   * ถ้าไม่ส่ง option นี้มา (undefined) จะ fallback ไปเช็คแบบเดิม คือ subscriptionService.isPremium(userId)
+   */
+  async function handleReceiptOrSlipImage(userId, downloadImage, options = {}) {
     // 1) ถ้ามี upload_session ที่รอสลิปอยู่ -> ตีความรูปนี้เป็น "สลิปการชำระเงิน" ก่อนเสมอ
     const pendingUpload = await uploadSessionService.findWaitingForUser(userId);
     if (pendingUpload) return handleSlipImage(userId, pendingUpload, downloadImage);
 
     // 2) ไม่งั้นตีความเป็น "รูปใบเสร็จ" ของฟีเจอร์บันทึกบัญชี (ต้อง Premium)
-    const isPremium = await subscriptionService.isPremium(userId);
+    const isPremium = options.isPremiumOverride !== undefined ? options.isPremiumOverride : await subscriptionService.isPremium(userId);
     if (!isPremium) return { type: "premium_denied", message: MSG.premiumOnly };
     return { type: "receipt", isPremium: true };
   }
