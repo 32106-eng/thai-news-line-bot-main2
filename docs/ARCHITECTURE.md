@@ -210,3 +210,154 @@ pa-nuan-line-ledger/
 
 ---
 เอกสารนี้ครอบคลุม §37 ข้อ 1–9 ตามที่ร้องขอ (Architecture, ER, Payment Flow, Threat model รวมและแยก, DB Schema, API Design, Folder Structure, Testing Plan) ต่อไปจะเริ่มพัฒนาโค้ดตามลำดับ Phase 1–12
+
+---
+
+## ภาคผนวก: กลุ่มจดบัญชี (Group Ledger) — เพิ่มเข้ามาภายหลัง
+
+### แนวคิดหลัก
+- บอทเข้า LINE Group ได้เฉพาะกลุ่มที่มีสมาชิก **Premium (จ่าย 50 บาท/เดือนแบบ 1:1 ตามปกติ)** เป็นคนเชิญเข้ามาเท่านั้น
+- **ไม่มีการสมัคร/จ่าย Premium จากภายในกลุ่มเลย** — ต้องไปสมัครแบบ 1:1 กับบอทก่อนเสมอ
+- Premium ของกลุ่ม **ไม่ใช่ entitlement แยก** — เช็คสด ๆ ทุกครั้งจากสถานะ Premium ปัจจุบันของ "เจ้าของกลุ่ม" (`ownerId`) เท่านั้น ถ้า owner หมดอายุ/ยกเลิก Premium กลุ่มจะหลุดสถานะทันทีโดยอัตโนมัติ ไม่ต้องมี cron sweep แยก
+- ธุรกรรมในกลุ่มทั้งหมดเข้า **"กองกลาง"** เดียวกัน (เก็บที่ `panuan_users/{groupId}` เหมือนเดิม) ไม่มีการหารบิล/ทวงหนี้ระหว่างสมาชิก แต่ละรายการเก็บ `authorId`/`authorName` เพิ่มเพื่อดูย้อนหลังได้ว่าใครจดอะไร
+
+### Flow การผูกกลุ่มกับเจ้าของ
+1. บอทถูกเชิญเข้ากลุ่ม → LINE ส่ง event `join` → `groupLinkService.startPending(groupId)` สร้าง record สถานะ `PENDING` พร้อม `pendingUntil` = ตอนนี้ + 10 นาที (`CONFIRM_WINDOW_MINUTES`)
+2. บอททักในกลุ่มทันที ขอให้คนที่เป็น Premium พิมพ์ `/บอท ยืนยันเจ้าของ`
+3. เมื่อมีคนพิมพ์ยืนยัน → `groupLinkService.confirmOwner(groupId, confirmerUserId)`:
+   - เช็ค `subscriptionService.isPremium(confirmerUserId)` สด ๆ (ไม่เชื่อ client)
+   - ถ้าเป็น Premium จริง → สถานะเปลี่ยนเป็น `LINKED`, `ownerId` = confirmer
+   - ถ้าไม่ใช่ Premium → สถานะเปลี่ยนเป็น `REJECTED`, บอทเรียก LINE `leaveGroup` ออกจากกลุ่มทันที
+4. ถ้าไม่มีใครยืนยันภายในเวลา → cron ทุก 2 นาที (`groupLinkService.findExpiredPending`) จะพบและสั่งให้บอทออกจากกลุ่มเอง
+5. 1 คน Premium เป็นเจ้าของได้หลายกลุ่มพร้อมกันไม่จำกัด (ไม่มี limit บน `ownerId`)
+6. ถ้าบอทถูกเตะออกจากกลุ่ม (LINE event `leave`) → ลบ record ทิ้งทั้งหมด (`removeLink`)
+
+### กติกา `/บอท` prefix
+ในกลุ่ม/ห้อง (`event.source.type` เป็น `group`/`room`) **ทุกข้อความตัวอักษรต้องขึ้นต้นด้วย `/บอท`** ไม่งั้นบอทเพิกเฉยโดยสิ้นเชิง (ไม่อ่าน ไม่ตอบ ไม่จด) เพื่อไม่ให้บอทแทรกทุกข้อความในกลุ่ม กติกานี้ไม่มีผลกับแชท 1:1
+
+รูปภาพ (ใบเสร็จ) ไม่สามารถแนบ prefix ไปพร้อมกันได้ (ข้อจำกัดของ LINE) จึงใช้กลไกสองขั้นตอนแทน:
+1. พิมพ์ `/บอท สลิป` ก่อน (ต้องเป็นกลุ่มที่ปลดล็อก Premium แล้วเท่านั้น) → `groupLinkService.openReceiptWait(groupId, requestedByUserId)` เก็บว่า "รอรูปจากใครถึงเมื่อไหร่" (5 นาที) ไว้ใน field ของ `group_links` doc เอง
+2. รูปถัดมาที่ส่งเข้ากลุ่ม → `groupLinkService.consumeReceiptWait(groupId, senderUserId)` เช็คว่าคนส่งตรงกับคนที่สั่งไว้ และยังไม่หมดเวลา ถ้าใช่ถึงจะอ่านใบเสร็จ ไม่งั้นเพิกเฉยรูปนั้นทั้งหมด
+
+หมายเหตุสำคัญ: กลไกนี้ **แยกขาดจาก `uploadSessionService`/`paymentSessionService` เดิมโดยสิ้นเชิง** เพราะของเดิมผูกกับ "สลิปจ่ายเงิน Premium" ที่ต้องมี `paymentSessionId` จริง ซึ่งในบริบทกลุ่มไม่มีการจ่ายเงินเกิดขึ้นเลย (กลุ่มไม่ได้ "ซื้อ" Premium เอง แค่ยืมสิทธิ์จาก owner)
+
+### Firestore เพิ่มเติม
+`panuan_group_links` (doc id = groupId):
+```
+{
+  status: "PENDING" | "LINKED" | "REJECTED",
+  ownerId: string | null,          // LINE userId ของคนที่ยืนยันเป็นเจ้าของสำเร็จ
+  pendingUntil: Timestamp | null,   // deadline สำหรับ "/บอท ยืนยันเจ้าของ"
+  pendingReceiptFrom: string | null,   // userId ที่เพิ่งสั่ง "/บอท สลิป" (รอรูปถัดไป)
+  pendingReceiptUntil: Timestamp | null,
+  joinedAt, linkedAt, updatedAt: Timestamp
+}
+```
+
+### จุดที่แก้ในโค้ดเดิม
+| ไฟล์ | สิ่งที่เปลี่ยน |
+|---|---|
+| `src/subscription/groupLinks.js` | ใหม่ทั้งไฟล์ — service จัดการ group link + receipt wait |
+| `src/subscription/db.js` | เพิ่ม collection `groupLinks` |
+| `src/subscription/auditLog.js` | เพิ่ม event types `GROUP_JOIN_PENDING`, `GROUP_LINKED`, `GROUP_LINK_REJECTED`, `GROUP_LEFT` |
+| `src/subscription/lineHandlers.js` | comment ชี้แจงว่า `handleReceiptOrSlipImage`/`handleSendSlipCommand` ใช้เฉพาะ 1:1 เท่านั้น (ไม่มี logic เปลี่ยน) |
+| `src/index.js` | เพิ่ม handler event `join`/`leave`, บังคับ `/บอท` prefix ในกลุ่ม, คำสั่ง `/บอท ยืนยันเจ้าของ` และ `/บอท สลิป` แบบกลุ่ม, แยก path รูปภาพกลุ่ม vs 1:1, เพิ่ม `authorId`/`authorName` ในธุรกรรมที่จดในกลุ่ม, cron ใหม่กวาด pending ที่หมดเวลา, LINE API helper `getGroupMemberName`/`leaveGroup` |
+| `test/helpers/fakeFirestore.js` | เพิ่มเมธอด `delete()` ให้ doc ref (ใช้โดย `removeLink`) |
+| `test/groupLinks.test.js` | ใหม่ — unit test ครอบคลุม startPending/confirmOwner/isPremiumGroup/findExpiredPending/markLeft/removeLink/openReceiptWait/consumeReceiptWait |
+
+### ข้อจำกัดที่รู้อยู่แล้ว (by design)
+- ดึงรายชื่อสมาชิกกลุ่มทั้งหมดล่วงหน้าไม่ได้ (ข้อจำกัดของ LINE Messaging API) — `getGroupMemberName` ใช้ได้เฉพาะ userId ที่เคยส่ง event เข้ามาในกลุ่มนั้นแล้วเท่านั้น
+- Rich Menu ไม่รองรับการผูกกับกลุ่ม (เป็นข้อจำกัดของ LINE เอง) จึงไม่มีการสลับเมนูในบริบทกลุ่ม ใช้ข้อความแจ้งสถานะแทนทั้งหมด
+- รายการเก่าที่จดในกลุ่มก่อนมีฟีเจอร์นี้ (ถ้ามี เพราะ `groupId` เคยถูกใช้เป็น `userId` เฉย ๆ มาก่อน) จะไม่มี `authorId`/`authorName` — แสดงผลเป็น "ไม่ทราบผู้จด" ได้ตามความเหมาะสมของฝั่ง dashboard (ยังไม่ได้แก้ dashboard UI ในรอบนี้)
+| `webhook_events` | **`{provider}_{event_id}`** | provider, event_type, payload_hash, status, created_at, processed_at | doc ID รวม provider+event_id → กัน replay ข้าม provider |
+| `audit_logs` | auto-id | user_id, event_type, payment_session_id, transaction_reference, metadata, created_at | append-only, ไม่ unique constraint (เป็น log) |
+| `admins` | `{adminUsername}` | password_hash, role, created_at | username = doc ID |
+
+**ER Diagram (แนวคิด)**
+```
+users(1) ──< subscriptions(1)     [1 current subscription per user, doc keyed by user id]
+users(1) ──< payment_sessions(N)
+payment_sessions(1) ──< upload_sessions(N, ปกติ 1 active)
+payment_sessions(1) ──< payment_transactions(N ในทางทฤษฎี, แต่ปกติ 1 สำเร็จ)
+payment_transactions(1) ──> subscriptions(1)   [subscription.payment_transaction_id]
+users(1) ──< audit_logs(N)
+admins(1) ──< audit_logs(N) [เมื่อ admin action]
+```
+
+## 6. API Endpoint Design
+
+### LINE Webhook (ของเดิม ขยาย logic)
+- `POST /webhook` — เพิ่ม text command "สมัครพรีเมียม", "ส่งสลิป" และ gate รูปภาพใบเสร็จด้วย `isPremium()`
+
+### Payment Provider Webhook (โครงไว้สำหรับอนาคต ยังไม่มี provider จริง)
+- `POST /webhook/payment` — ตรวจ signature, บันทึก `webhook_events`, กัน replay. ปัจจุบันไม่มี provider ต่อจริง จึงยังไม่ mount route นี้ (เอกสารไว้สำหรับตอนเสียบ provider)
+
+### Admin (ใหม่, ต้อง auth)
+- `POST /admin/login` — form login → signed cookie session
+- `POST /admin/logout`
+- `GET /admin` — dashboard HTML (ต้อง login)
+- `GET /admin/api/overview` — สรุปตัวเลข (users, premium, payments, security) ตาม §23
+- `GET /admin/api/reviews` — รายการ PENDING_REVIEW
+- `POST /admin/api/reviews/:transactionRef/approve`
+- `POST /admin/api/reviews/:transactionRef/reject`
+- `GET /admin/api/audit-logs`
+
+ทุก endpoint ใน `/admin/*` (ยกเว้น `/admin/login`) เช็ค session cookie → โหลด admin จาก DB → เช็ค role ก่อนทำงาน
+
+## 7. Folder Structure
+
+```
+pa-nuan-line-ledger/
+├── package.json
+├── .env / .env.example
+├── .gitignore
+└── src/
+    ├── index.js              # entry: mount webhook + dashboard + admin routes (เดิม + ใหม่)
+    ├── dashboard.html        # เดิม (user dashboard)
+    ├── subscription/
+    │   ├── db.js             # Firestore collection refs + generic helpers
+    │   ├── users.js          # (ของเดิมย้ายมา หรือ cross-ref ป้านวล user)
+    │   ├── subscriptions.js  # isPremium(), activate(), renew(), expire()
+    │   ├── paymentSessions.js
+    │   ├── paymentTransactions.js
+    │   ├── uploadSessions.js
+    │   ├── ocr.js            # อ่านสลิปด้วย vision AI (extract only)
+    │   ├── paymentProvider.js# adapter interface + stub (PENDING_REVIEW เสมอ)
+    │   ├── qr.js             # สร้าง QR (PromptPay-style payload) ตาม reference
+    │   ├── auditLog.js
+    │   ├── richMenu.js       # LINE rich menu switch free/premium
+    │   └── lineHandlers.js   # ข้อความ/รูป ที่เกี่ยวกับ premium flow
+    ├── admin/
+    │   ├── auth.js           # login/session/cookie signing
+    │   ├── routes.js         # /admin/* express router
+    │   └── dashboard.html    # admin UI
+    └── shared/
+        └── time.js           # Asia/Bangkok helpers (ของเดิมมีบางส่วนแล้วใน index.js)
+```
+
+## 8. Testing Plan
+
+ตาราง test case (ตาม spec §39) — จะ implement เป็น Node's built-in `node:test` + Firestore emulator หรือ manual test script เพราะไม่มี network ใน sandbox นี้สำหรับรัน emulator จริง จะเตรียม script ทดสอบ pure-logic (state machine, renewal date calc, idempotency helpers) แบบ unit ที่รันได้โดยไม่ต้องต่อ Firestore จริง แล้วให้ผู้ใช้รัน integration test กับ Firestore จริงเอง
+
+| Case | วิธีทดสอบ |
+|---|---|
+| สมัคร Premium (Free→session ใหม่) | unit: `subscriptions.requestUpgrade()` คืน session ใหม่เมื่อ user เป็น Free |
+| สมัครซ้ำตอนเป็น Premium อยู่แล้ว | unit: คืนสถานะปัจจุบัน ไม่สร้าง session ใหม่ |
+| ส่งสลิปถูกต้อง → PENDING_REVIEW (ไม่มี provider) | unit: mock OCR, assert status = PENDING_REVIEW เสมอ |
+| ส่งสลิปซ้ำ (เดิม transaction_reference) | unit: `create()` ครั้งที่ 2 ต้อง reject ด้วย DUPLICATE |
+| ส่งสลิปของคนอื่น (session ไม่ตรง user) | unit: upload_session.user_id ≠ request user → reject |
+| Payment session หมดอายุ | unit: expires_at < now → reject ก่อนสร้าง upload_session |
+| Premium หมดอายุ | unit: expires_at ผ่านไปแล้ว → isPremium() = false แม้ status ยังเป็น ACTIVE ใน DB |
+| ต่ออายุก่อนหมดอายุ | unit: newExpiry = เดิม + 1 เดือน |
+| ต่ออายุหลังหมดอายุ | unit: newExpiry = now + 1 เดือน |
+| กดสมัครซ้ำพร้อมกัน (double submit) | unit: idempotency key กันสร้าง session ซ้ำในช่วงเวลาใกล้กัน |
+| ส่งสลิปพร้อมกัน 5 ครั้ง | unit: mock Firestore `create()` ให้ throw ตั้งแต่ครั้งที่ 2 |
+| Free เรียก Premium API (รูปภาพ) | unit: `isPremium()=false` → handler ตอบปฏิเสธ ไม่เรียก vision AI |
+| Premium หมดอายุเรียก Premium API | unit: เหมือนข้างบนแต่ expires_at ผ่านแล้ว |
+| Admin approve/reject | unit: เปลี่ยน status + เรียก activate() เฉพาะตอน approve |
+| Admin ไม่มีสิทธิ์ | unit: route ปฏิเสธถ้าไม่มี session cookie ที่ valid |
+| Webhook ปลอม/ซ้ำ (โครงไว้) | unit: signature ผิด → 401, event_id ซ้ำ → skip processing |
+| API ภาพ timeout/error | unit: mock ai client throw → handler ตอบข้อความ fallback ไม่ throw ต่อ |
+
+---
+เอกสารนี้ครอบคลุม §37 ข้อ 1–9 ตามที่ร้องขอ (Architecture, ER, Payment Flow, Threat model รวมและแยก, DB Schema, API Design, Folder Structure, Testing Plan) ต่อไปจะเริ่มพัฒนาโค้ดตามลำดับ Phase 1–12
