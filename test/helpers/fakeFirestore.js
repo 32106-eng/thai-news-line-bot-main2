@@ -1,5 +1,5 @@
 // จำลอง Firestore แบบง่ายพอสำหรับ unit test service layer โดยไม่ต้องต่อ Firestore จริง
-// รองรับ: doc().get/set/create, collection().add, where().orderBy().limit().get, runTransaction (best-effort, ไม่ true-atomic แต่พอสำหรับ logic test)
+// รองรับ: doc().get/set/create/delete, collection().add, where().orderBy().limit().get, runTransaction (best-effort, ไม่ true-atomic แต่พอสำหรับ logic test)
 
 function matchesWhere(data, clauses) {
   return clauses.every(([field, op, value]) => {
@@ -34,6 +34,10 @@ export function createFakeFirestore() {
         const map = collectionMap(collectionName);
         if (map.has(id)) { const e = new Error("ALREADY_EXISTS"); e.code = 6; throw e; }
         map.set(id, { ...data });
+      },
+      async delete() {
+        const map = collectionMap(collectionName);
+        map.delete(id);
       }
     };
   }
