@@ -102,7 +102,9 @@ const CATEGORIES = {
   "ช้อปปิ้ง": ["ช้อป", "ซื้อ", "ของใช้", "เสื้อ", "รองเท้า"],
   "อื่น ๆ": []
 };
-const INCOME_WORDS = ["เงินเดือน", "รายรับ", "รายได้", "โบนัส", "ขาย", "ได้เงิน", "คืนเงิน", "ดอกเบี้ย", "กำไร", "ค่าจ้าง"];
+const INCOME_WORDS = ["เงินเดือน", "รายรับ", "รายได้", "โบนัส", "ขาย", "ได้เงิน", "คืนเงิน", "ดอกเบี้ย", "กำไร", "ค่าจ้าง", "จดรับ", "บันทึกรับ", "รับเงิน", "เงินเข้า", "โอนเข้า"];
+// คำนำหน้าสั้น ๆ ที่หมายถึง "นี่คือรายรับ" เช่น "รับ 30", "+30", "จดรับ30"
+const INCOME_PREFIX = /^(?:\+|รับ)\s*(?=[0-9])|^จดรับ\s*(?=[0-9]|\s)/;
 
 function emptyUser() { return { transactions: [], recurring: [], budgets: {} }; }
 async function getUser(uid) {
@@ -133,11 +135,33 @@ function parse(text) {
   if (!hit) return null;
   const amount = Number(hit[1].replaceAll(",", ""));
   if (!Number.isFinite(amount) || amount <= 0 || amount > 10_000_000) return null;
-  const income = INCOME_WORDS.some((word) => trimmed.toLowerCase().includes(word));
-  const description = trimmed.replace(hit[0], "").replace(/^(รายรับ|รายจ่าย)\s*/i, "").trim() || (income ? "รายรับ" : "รายจ่าย");
-  return { id: crypto.randomUUID(), type: income ? "income" : "expense", category: income ? "รายรับ" : categoryFor(trimmed), description, amount, createdAt: new Date().toISOString() };
+  const matchedIncomeSignal = INCOME_PREFIX.test(trimmed) || INCOME_WORDS.some((word) => trimmed.toLowerCase().includes(word));
+  const income = matchedIncomeSignal;
+  const description = trimmed.replace(hit[0], "").replace(/^(รายรับ|รายจ่าย|จดรับ|จดจ่าย|รับ|\+)\s*/i, "").trim() || (income ? "รายรับ" : "รายจ่าย");
+  // ambiguous = no explicit income/expense keyword or prefix matched, so we fell back to the "expense by default" guess
+  const typeAmbiguous = !matchedIncomeSignal;
+  return { id: crypto.randomUUID(), type: income ? "income" : "expense", category: income ? "รายรับ" : categoryFor(trimmed), description, amount, createdAt: new Date().toISOString(), _typeAmbiguous: typeAmbiguous };
 }
-async function enrichWithAi(tx, source) {
+async function classifyTypeWithAi(source) {
+  if (!ai || !process.env.OPENAI_MODEL) return null;
+  try {
+    const completion = await ai.chat.completions.create({
+      model: process.env.OPENAI_MODEL,
+      temperature: 0,
+      response_format: { type: "json_object" },
+      messages: [{ role: "system", content: "ข้อความนี้เป็นการจดบันทึกทางการเงินสั้น ๆ ภาษาไทย ให้ตัดสินว่าเป็น \"income\" (เงินเข้า/รายรับ) หรือ \"expense\" (เงินออก/รายจ่าย) ตอบ JSON เท่านั้น: {\"type\":\"income\"} หรือ {\"type\":\"expense\"}" }, { role: "user", content: source }]
+    });
+    const type = JSON.parse(completion.choices[0]?.message?.content ?? "{}").type;
+    return type === "income" || type === "expense" ? type : null;
+  } catch (error) { console.warn("AI type classification skipped:", error.message); return null; }
+}
+async function enrichWithAi(tx, source, typeWasAmbiguous) {
+  if (typeWasAmbiguous) {
+    const aiType = await classifyTypeWithAi(source);
+    if (aiType && aiType !== tx.type) {
+      tx = { ...tx, type: aiType, category: aiType === "income" ? "รายรับ" : categoryFor(source) };
+    }
+  }
   if (!ai || tx.type !== "expense" || tx.category !== "อื่น ๆ" || !process.env.OPENAI_MODEL) return tx;
   try {
     const completion = await ai.chat.completions.create({
@@ -439,7 +463,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
     else if (text === "เว็บ") { const base = process.env.PUBLIC_BASE_URL?.replace(/\/$/, ""); message = base ? `📊 แดชบอร์ดส่วนตัวของคุณ\n${base}/dashboard?token=${perUserToken(userId)}&u=${encodeURIComponent(userId)}` : "ยังไม่ได้ตั้งค่า PUBLIC_BASE_URL สำหรับแดชบอร์ด"; }
     else {
       let tx = parse(text);
-      if (tx) { tx = await enrichWithAi(tx, text); user.transactions.push(tx); await saveUser(userId, user); message = `${tx.type === "income" ? "💰 บันทึกรายรับแล้ว" : "🧾 บันทึกรายจ่ายแล้ว"}\n${tx.description}\nหมวด: ${tx.category}\nจำนวน: ${money(tx.amount)} บาท`; }
+      if (tx) { const ambiguous = tx._typeAmbiguous; delete tx._typeAmbiguous; tx = await enrichWithAi(tx, text, ambiguous); user.transactions.push(tx); await saveUser(userId, user); message = `${tx.type === "income" ? "💰 บันทึกรายรับแล้ว" : "🧾 บันทึกรายจ่ายแล้ว"}\n${tx.description}\nหมวด: ${tx.category}\nจำนวน: ${money(tx.amount)} บาท`; }
       else { const aiAnswer = await askFinanceAi(user, text); message = aiAnswer ?? "พิมพ์ได้เลย เช่น กาแฟ 60 หรือ เงินเดือน 15000\nพิมพ์ ช่วยเหลือ เพื่อดูคำสั่ง"; }
     }
     try { await reply(event.replyToken, message); } catch (error) { console.error("Could not reply", error.message); }
