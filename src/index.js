@@ -421,16 +421,20 @@ async function readReceipt(mime, base64) {
       model: visionModel,
       temperature: 0,
       max_tokens: 80, // เอาต์พุตเป็น JSON เล็ก ๆ แค่ {"merchant":"...","amount":number} เท่านั้น
-      response_format: { type: "json_object" },
+      // ไม่ใส่ response_format: json_object เพราะ NVIDIA NIM VLM บางตัว (เช่น nemotron-nano-12b-v2-vl)
+      // ตอบ 500 "EngineCore encountered an issue" เมื่อถูกบังคับ structured output แบบนี้ — คุม JSON ผ่าน prompt แทน
       messages: [
-        { role: "system", content: "You read Thai/English receipt photos. Reply only JSON: {\"merchant\":\"...\",\"amount\":number}. \"amount\" is the final total paid (บาท), as a plain number with no currency symbol or commas. If you cannot read a merchant name, use \"อื่น ๆ\". If you cannot find a clear total amount, set amount to 0." },
+        { role: "system", content: "You read Thai/English receipt or bank-transfer slip photos. Reply with ONLY a raw JSON object, no markdown code fences, no explanation, in this exact shape: {\"merchant\":\"...\",\"amount\":number}. \"amount\" is the final total paid or transferred (บาท), as a plain number with no currency symbol or commas. If you cannot read a merchant/payee name, use \"อื่น ๆ\". If you cannot find a clear total amount, set amount to 0." },
         { role: "user", content: [
           { type: "text", text: "อ่านยอดรวมและชื่อร้านค้าจากใบเสร็จนี้" },
           { type: "image_url", image_url: { url: `data:${mime};base64,${base64}` } }
         ] }
       ]
     });
-    const parsed = JSON.parse(completion.choices[0]?.message?.content ?? "{}");
+    const raw = completion.choices[0]?.message?.content ?? "{}";
+    // บางโมเดล (โดยเฉพาะเมื่อไม่ได้บังคับ response_format) ยังห่อคำตอบด้วย ```json ... ``` ทั้งที่สั่งห้ามแล้ว — ตัดออกกันพังก่อน parse
+    const cleaned = raw.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
+    const parsed = JSON.parse(cleaned || "{}");
     const amount = Number(parsed.amount);
     if (!Number.isFinite(amount) || amount <= 0 || amount > 10_000_000) return null;
     const merchant = String(parsed.merchant ?? "อื่น ๆ").trim().slice(0, 120) || "อื่น ๆ";
@@ -775,4 +779,5 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
   }
 });
 app.listen(Number(process.env.PORT ?? 3000), () => console.log(`Ta Phin listening on ${process.env.PORT ?? 3000}`));
+
 
