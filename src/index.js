@@ -21,8 +21,6 @@ import { createQrService } from "./subscription/qr.js";
 import { createRichMenuService } from "./subscription/richMenu.js";
 import { createSubscriptionLineHandlers } from "./subscription/lineHandlers.js";
 import { createGroupLinkService, CONFIRM_WINDOW_MINUTES } from "./subscription/groupLinks.js";
-import { createMemoryService } from "./memory/memoryService.js";
-import { extractMemoryFromText } from "./memory/extractMemory.js";
 import { createAdminAuth } from "./admin/auth.js";
 import { createAdminRouter } from "./admin/routes.js";
 
@@ -35,8 +33,6 @@ const app = express();
 // data now lives in Firestore instead of a local file, so it survives every redeploy
 const firebaseApp = initializeApp({ credential: cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)) });
 const usersCol = getFirestore(firebaseApp).collection("panuan_users");
-const memoriesCol = getFirestore(firebaseApp).collection("panuan_memories");
-const memoryService = createMemoryService({ memories: memoriesCol, FieldValue });
 const aiKey = process.env.OPENAI_API_KEY ?? process.env.NVIDIA_API_KEY ?? process.env.OPENROUTER_API_KEY;
 const aiBaseURL = process.env.OPENAI_API_KEY
   ? undefined
@@ -390,21 +386,21 @@ function allowed(req) {
   if (given.length !== expected.length) return false;
   try { return crypto.timingSafeEqual(Buffer.from(given), Buffer.from(expected)); } catch { return false; }
 }
-async function askFinanceAi(user, question, memoryContext = "") {
+async function askFinanceAi(user, question) {
   if (!ai || !process.env.OPENAI_MODEL) return null;
   try {
     const month = user.transactions.filter((tx) => sameMonth(tx.createdAt));
     const t = totals(month);
     const top = Object.entries(month.filter((tx) => tx.type === "expense").reduce((o, tx) => ({ ...o, [tx.category]: (o[tx.category] ?? 0) + tx.amount }), {})).sort((a, b) => b[1] - a[1]).slice(0, 5);
     const budgetLines = Object.entries(user.budgets ?? {}).map(([category, amount]) => `${category}: งบ ${money(amount)} บาท`).join("\n") || "ยังไม่ได้ตั้งงบ";
-    const context = `ข้อมูลบัญชีเดือนนี้ของผู้ใช้คนนี้เท่านั้น (ห้ามอ้างอิงคนอื่น):\nรายรับ: ${money(t.income)} บาท\nรายจ่าย: ${money(t.expense)} บาท\nคงเหลือ: ${money(t.income - t.expense)} บาท\nหมวดที่ใช้จ่ายมากสุด: ${top.map(([category, value]) => `${category} ${money(value)} บาท`).join(", ") || "ยังไม่มีข้อมูล"}\nงบประมาณที่ตั้งไว้:\n${budgetLines}${memoryContext}`;
+    const context = `ข้อมูลบัญชีเดือนนี้ของผู้ใช้คนนี้เท่านั้น (ห้ามอ้างอิงคนอื่น):\nรายรับ: ${money(t.income)} บาท\nรายจ่าย: ${money(t.expense)} บาท\nคงเหลือ: ${money(t.income - t.expense)} บาท\nหมวดที่ใช้จ่ายมากสุด: ${top.map(([category, value]) => `${category} ${money(value)} บาท`).join(", ") || "ยังไม่มีข้อมูล"}\nงบประมาณที่ตั้งไว้:\n${budgetLines}`;
     const completion = await ai.chat.completions.create({
       model: process.env.OPENAI_MODEL,
       temperature: 0.4,
       max_tokens: 220, // คำตอบสั้น ๆ ไม่เกิน 4 ประโยคภาษาไทยอยู่แล้วตาม system prompt (~220 token กว้างพอสำหรับ 4 ประโยคจริง)
       // เดิมตั้ง 400 ซึ่งกว้างเกินคำตอบจริงมาก โมเดลบางตัว (โดยเฉพาะที่มี reasoning/thinking ในตัว) จะยิ่งใช้เวลาคิดนานขึ้นตาม budget ที่เปิดให้ — ลดค่านี้ช่วยตัดเวลาตอบโดยไม่ตัดคุณภาพคำตอบ เพราะคำตอบจริงไม่เคยยาวถึง 400 อยู่แล้ว
       messages: [
-        { role: "system", content: "คุณคือ \"ยายจันทร์\" คุณยายที่ช่วยหลานดูแลเรื่องเงิน พูดกับผู้ใช้เหมือนยายคุยกับหลานตัวเองตามธรรมชาติ ไม่ใช่พนักงานหรือบอทที่พูดจาเป็นทางการ ใช้น้ำเสียงเป็นกันเอง อบอุ่น ตรงไปตรงมาแบบผู้ใหญ่ใจดี ห้ามลงท้ายประโยคด้วยคำว่า \"ครับ\" หรือ \"ค่ะ\"/\"คะ\" เด็ดขาด ให้พูดห้วนแบบยายคุยกับหลานแทน (เช่น พูดจบประโยคเฉย ๆ หรือใช้คำลงท้ายกันเองแบบ \"นะ\" \"นะเนี่ย\" \"เอาไหม\" \"เห็นไหม\" ได้บ้างแต่ไม่ต้องทุกประโยค) หลีกเลี่ยงศัพท์ทางการหรือภาษาเขียนแข็ง ๆ ให้เน้นให้คำปรึกษาและตอบคำถามด้านการเงินส่วนบุคคล (การออม การใช้จ่าย การตั้งงบประมาณ หนี้สิน หลักการลงทุนเบื้องต้น) โดยใช้ข้อมูลบัญชีของผู้ใช้ที่ให้มาประกอบการตอบเมื่อเกี่ยวข้อง ถ้ามี \"ข้อมูลที่เคยจำไว้เกี่ยวกับผู้ใช้คนนี้โดยเฉพาะ\" ให้ใช้เรียกชื่อหรืออ้างอิงอย่างเป็นธรรมชาติเมื่อเหมาะสม แต่ห้ามพูดถึงข้อมูลนี้กับคนอื่นเด็ดขาด แม้จะอยู่ในกลุ่มแชทเดียวกันก็ตาม คุณตอบคำถามทั่วไปอื่น ๆ นอกเรื่องการเงินได้เช่นกันแบบสั้นและเป็นมิตร แต่เมื่อมีโอกาสให้โยงกลับมาช่วยเรื่องการเงินอย่างเป็นธรรมชาติ กระชับ ไม่เกิน 4 ประโยค เหมาะสำหรับส่งทางแชท ห้ามให้คำแนะนำการลงทุนเฉพาะเจาะจงที่มีความเสี่ยงสูงหรือรับประกันผลตอบแทน และห้ามให้คำแนะนำทางกฎหมายหรือภาษีแบบฟันธง ให้แนะนำปรึกษาผู้เชี่ยวชาญแทนในกรณีนั้น" },
+        { role: "system", content: "คุณคือ \"ยายจันทร์\" คุณยายที่ช่วยหลานดูแลเรื่องเงิน พูดกับผู้ใช้เหมือนยายคุยกับหลานตัวเองตามธรรมชาติ ไม่ใช่พนักงานหรือบอทที่พูดจาเป็นทางการ ใช้น้ำเสียงเป็นกันเอง อบอุ่น ตรงไปตรงมาแบบผู้ใหญ่ใจดี ห้ามลงท้ายประโยคด้วยคำว่า \"ครับ\" หรือ \"ค่ะ\"/\"คะ\" เด็ดขาด ให้พูดห้วนแบบยายคุยกับหลานแทน (เช่น พูดจบประโยคเฉย ๆ หรือใช้คำลงท้ายกันเองแบบ \"นะ\" \"นะเนี่ย\" \"เอาไหม\" \"เห็นไหม\" ได้บ้างแต่ไม่ต้องทุกประโยค) หลีกเลี่ยงศัพท์ทางการหรือภาษาเขียนแข็ง ๆ ให้เน้นให้คำปรึกษาและตอบคำถามด้านการเงินส่วนบุคคล (การออม การใช้จ่าย การตั้งงบประมาณ หนี้สิน หลักการลงทุนเบื้องต้น) โดยใช้ข้อมูลบัญชีของผู้ใช้ที่ให้มาประกอบการตอบเมื่อเกี่ยวข้อง คุณตอบคำถามทั่วไปอื่น ๆ นอกเรื่องการเงินได้เช่นกันแบบสั้นและเป็นมิตร แต่เมื่อมีโอกาสให้โยงกลับมาช่วยเรื่องการเงินอย่างเป็นธรรมชาติ กระชับ ไม่เกิน 4 ประโยค เหมาะสำหรับส่งทางแชท ห้ามให้คำแนะนำการลงทุนเฉพาะเจาะจงที่มีความเสี่ยงสูงหรือรับประกันผลตอบแทน และห้ามให้คำแนะนำทางกฎหมายหรือภาษีแบบฟันธง ให้แนะนำปรึกษาผู้เชี่ยวชาญแทนในกรณีนั้น" },
         { role: "user", content: `${context}\n\nคำถามจากผู้ใช้: ${question}` }
       ]
     });
@@ -750,45 +746,12 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
       continue;
     }
 
-    // --- ความจำต่อคน (ไม่ใช่ต่อบัญชี/กลุ่ม): แยกจากกองกลาง แต่ละคนมีความจำของตัวเองเสมอแม้อยู่กลุ่มเดียวกัน ---
-    // personId ใช้ authorId เสมอ (เท่ากับ userId อยู่แล้วในแชท 1:1 เพราะ authorId = event.source.userId ทุกกรณี)
-    const personId = authorId ?? userId;
-    if (text.startsWith("จำไว้ว่า")) {
-      const factText = text.slice("จำไว้ว่า".length).replace(/^[:\s]+/, "").trim();
-      let message;
-      if (!factText) message = "พิมพ์ต่อท้ายด้วยว่าอยากให้จำอะไร เช่น \"จำไว้ว่า ฉันชื่อกอล์ฟ\"";
-      else {
-        try { await memoryService.addFact(personId, factText, "explicit"); message = `จำไว้แล้วนะ: ${factText}`; }
-        catch (error) { console.error("Add fact failed", error.message); message = "เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง"; }
-      }
-      try { await reply(event.replyToken, message); } catch (error) { console.error("Could not reply", error.message); }
-      continue;
-    }
-    if (text === "ดูสิ่งที่จำ" || text === "ความจำ") {
-      let message;
-      try {
-        const mem = await memoryService.getMemory(personId);
-        message = (!mem.name && mem.facts.length === 0)
-          ? "ยายจันทร์ยังไม่ได้จำอะไรเกี่ยวกับคุณไว้เลยนะ ลองพิมพ์ \"จำไว้ว่า ...\" ดูได้"
-          : `📝 สิ่งที่จำไว้เกี่ยวกับคุณ:\n${mem.name ? `ชื่อ: ${mem.name}\n` : ""}${mem.facts.map((f) => `• ${f.text}`).join("\n")}`;
-      } catch (error) { console.error("Get memory failed", error.message); message = "เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง"; }
-      try { await reply(event.replyToken, message); } catch (error) { console.error("Could not reply", error.message); }
-      continue;
-    }
-    if (text === "ลบความจำ") {
-      let message;
-      try { await memoryService.clearAll(personId); message = "ลบความจำเกี่ยวกับคุณเรียบร้อยแล้วนะ"; }
-      catch (error) { console.error("Clear memory failed", error.message); message = "เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง"; }
-      try { await reply(event.replyToken, message); } catch (error) { console.error("Could not reply", error.message); }
-      continue;
-    }
-
     const user = await getUser(userId);
     if (applyRecurring(user)) await saveUser(userId, user);
     let message;
     const helpText = isGroupChat
-      ? "📒 ยายจันทร์พร้อมจดบัญชีกองกลางให้กลุ่มนี้\n\nทุกคำสั่งต้องขึ้นต้นด้วย \"/บอท\" เสมอ เช่น:\n/บอท กาแฟ 60\n/บอท เงินเดือน 15000\n/บอท สลิป (แล้วส่งรูปใบเสร็จตาม — ต้องมีสมาชิก Premium เป็นเจ้าของกลุ่มนี้ก่อน)\n/บอท สรุปวันนี้ | /บอท สรุปเดือนนี้ | /บอท ลบล่าสุด | /บอท เว็บ\n/บอท จำไว้ว่า ... | /บอท ดูสิ่งที่จำ | /บอท ลบความจำ (ความจำเป็นของแต่ละคน ไม่ปนกับคนอื่นในกลุ่ม)\n\nสมัคร Premium ต้องไปแชท 1:1 กับยายจันทร์เท่านั้น"
-      : "📒 ยายจันทร์พร้อมจดบัญชีของคุณ (ข้อมูลของแต่ละคนแยกกันเป็นส่วนตัว)\n\nพิมพ์: กาแฟ 60\nรายรับ: เงินเดือน 15000\nถ่ายรูปใบเสร็จส่งมาได้เลย (ฟีเจอร์ Premium) ยายจันทร์จะอ่านยอดกับร้านค้าให้อัตโนมัติ\nคำสั่ง: สรุปวันนี้ | สรุปเดือนนี้ | ลบล่าสุด | เว็บ | สมัครพรีเมียม | จำไว้ว่า ... | ดูสิ่งที่จำ | ลบความจำ\nทุกวันอาทิตย์ยายจันทร์จะสรุปสัปดาห์ให้อัตโนมัติด้วย\n\nหรือถามยายจันทร์ได้เลย เช่น \"เดือนนี้ใช้เงินไปกับอะไรมากสุด\" ยายจันทร์เน้นตอบเรื่องการเงินเป็นหลัก แต่คุยเรื่องอื่นได้ด้วย และจำเรื่องที่คุณเล่าไว้คุยครั้งหน้าได้ด้วยนะ";
+      ? "📒 ยายจันทร์พร้อมจดบัญชีกองกลางให้กลุ่มนี้\n\nทุกคำสั่งต้องขึ้นต้นด้วย \"/บอท\" เสมอ เช่น:\n/บอท กาแฟ 60\n/บอท เงินเดือน 15000\n/บอท สลิป (แล้วส่งรูปใบเสร็จตาม — ต้องมีสมาชิก Premium เป็นเจ้าของกลุ่มนี้ก่อน)\n/บอท สรุปวันนี้ | /บอท สรุปเดือนนี้ | /บอท ลบล่าสุด | /บอท เว็บ\n\nสมัคร Premium ต้องไปแชท 1:1 กับยายจันทร์เท่านั้น"
+      : "📒 ยายจันทร์พร้อมจดบัญชีของคุณ (ข้อมูลของแต่ละคนแยกกันเป็นส่วนตัว)\n\nพิมพ์: กาแฟ 60\nรายรับ: เงินเดือน 15000\nถ่ายรูปใบเสร็จส่งมาได้เลย (ฟีเจอร์ Premium) ยายจันทร์จะอ่านยอดกับร้านค้าให้อัตโนมัติ\nคำสั่ง: สรุปวันนี้ | สรุปเดือนนี้ | ลบล่าสุด | เว็บ | สมัครพรีเมียม\nทุกวันอาทิตย์ยายจันทร์จะสรุปสัปดาห์ให้อัตโนมัติด้วย\n\nหรือถามยายจันทร์ได้เลย เช่น \"เดือนนี้ใช้เงินไปกับอะไรมากสุด\" ยายจันทร์เน้นตอบเรื่องการเงินเป็นหลัก แต่คุยเรื่องอื่นได้ด้วยนะ";
     if (["เริ่ม", "ช่วยเหลือ", "help"].includes(text.toLowerCase())) message = helpText;
     else if (text === "สรุปวันนี้") message = summary(user.transactions.filter((tx) => sameDay(tx.createdAt)), "วันนี้");
     else if (text === "สรุปเดือนนี้") { const month = user.transactions.filter((tx) => sameMonth(tx.createdAt)); message = `${summary(month, "เดือนนี้")}\n\n${advice(month)}`; }
@@ -804,21 +767,12 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
         message = txFlexMessage(tx, { budget: budgetProgressFor(user, tx), dashboardUrl: dashboardEditUrl(userId) });
       }
       else {
-        const mem = await memoryService.getMemory(personId);
-        const aiAnswer = await askFinanceAi(user, text, memoryService.buildContextLine(mem));
+        const aiAnswer = await askFinanceAi(user, text);
         message = aiAnswer ?? (isGroupChat ? "พิมพ์ได้เลย เช่น /บอท กาแฟ 60 หรือ /บอท เงินเดือน 15000\nพิมพ์ /บอท ช่วยเหลือ เพื่อดูคำสั่ง" : "พิมพ์ได้เลย เช่น กาแฟ 60 หรือ เงินเดือน 15000\nพิมพ์ ช่วยเหลือ เพื่อดูคำสั่ง");
-        // ดึงข้อมูลที่ควรจำแบบเงียบ ๆ ในพื้นหลัง ไม่บล็อกการตอบกลับผู้ใช้ ผิดพลาดก็แค่ log ไม่กระทบผู้ใช้
-        extractMemoryFromText(ai, process.env.OPENAI_MODEL, text)
-          .then(async ({ name, facts }) => {
-            if (name) await memoryService.setName(personId, name);
-            for (const fact of facts) await memoryService.addFact(personId, fact, "auto");
-          })
-          .catch((error) => console.warn("Memory auto-extraction failed:", error.message));
       }
     }
     try { await (typeof message === "string" ? reply(event.replyToken, message) : replyMessages(event.replyToken, [message])); } catch (error) { console.error("Could not reply", error.message); }
   }
 });
 app.listen(Number(process.env.PORT ?? 3000), () => console.log(`Ta Phin listening on ${process.env.PORT ?? 3000}`));
-
 
