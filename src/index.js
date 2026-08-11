@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import express from "express";
 import QRCode from "qrcode";
 import OpenAI from "openai";
+import sharp from "sharp";
 import cron from "node-cron";
 import { initializeApp, cert } from "firebase-admin/app";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
@@ -410,9 +411,16 @@ async function askFinanceAi(user, question) {
 async function downloadLineImage(messageId) {
   const r = await fetch(`https://api-data.line.me/v2/bot/message/${messageId}/content`, { headers: { authorization: `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}` } });
   if (!r.ok) throw new Error(`LINE content: ${r.status}`);
-  const mime = r.headers.get("content-type") || "image/jpeg";
   const buffer = Buffer.from(await r.arrayBuffer());
-  return { mime, base64: buffer.toString("base64") };
+  // สกรีนช็อตจากมือถือ (โดยเฉพาะแชทที่มีข้อความยาว ๆ ติดมาด้วย) มักมีความละเอียดสูงมาก (>1080x2400)
+  // ส่ง base64 ตรง ๆ แบบเดิมทำให้ payload ใหญ่เกินกว่าที่บาง VLM engine (เช่น self-hosted NVIDIA NIM) จะรับไหว
+  // ผลคือได้ 500 เปล่า ๆ แทนที่จะ reject อย่างสุภาพ — ย่อขนาดให้พอเหมาะกับงานอ่านตัวเลข/ตัวหนังสือก่อนเสมอ
+  const resized = await sharp(buffer)
+    .rotate() // เคารพ EXIF orientation ของภาพจากมือถือ
+    .resize({ width: 1600, height: 1600, fit: "inside", withoutEnlargement: true })
+    .jpeg({ quality: 82 })
+    .toBuffer();
+  return { mime: "image/jpeg", base64: resized.toString("base64") };
 }
 async function readReceipt(mime, base64) {
   if (!ai || !visionModel) return null;
