@@ -8,6 +8,7 @@ export async function extractMemoryFromText(ai, model, text) {
     const completion = await ai.chat.completions.create({
       model,
       temperature: 0,
+      max_tokens: 200,
       response_format: { type: "json_object" },
       messages: [
         {
