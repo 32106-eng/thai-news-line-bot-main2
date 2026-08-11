@@ -228,6 +228,149 @@ async function replyMessages(token, messages) { return line("reply", { replyToke
 async function reply(token, text) { return replyMessages(token, [{ type: "text", text: text.slice(0, 4900) }]); }
 async function push(to, text) { return line("push", { to, messages: [{ type: "text", text: text.slice(0, 4900) }] }); }
 function qrImageMessage(url) { return { type: "image", originalContentUrl: url, previewImageUrl: url }; }
+
+// การ์ด Flex Message แสดงผลตอนจดรายการสำเร็จ (แทนข้อความ text ธรรมดา)
+// tx: รายการที่เพิ่งบันทึก, opts.budget: { limit, spent } หมวดนี้ในเดือนนี้ (ถ้ามีตั้งงบไว้), opts.dashboardUrl: ลิงก์แก้ไข/ลบผ่านเว็บ
+function txFlexMessage(tx, opts = {}) {
+  const isIncome = tx.type === "income";
+  const typeLabel = isIncome ? "รายรับ" : "รายจ่าย";
+  const pink = "#D23283";
+  const cream = "#FBF3EC";
+  const { budget, dashboardUrl } = opts;
+
+  const bodyContents = [
+    // แถวแท็ก: ประเภท + หมวดหมู่ (พื้นชมพู ตัวอักษรขาว)
+    {
+      type: "box",
+      layout: "baseline",
+      spacing: "sm",
+      contents: [
+        {
+          type: "text",
+          text: typeLabel,
+          size: "xs",
+          weight: "bold",
+          color: "#FFFFFF",
+          align: "center",
+          gravity: "center",
+          backgroundColor: pink,
+          cornerRadius: "12px",
+          paddingAll: "6px",
+          paddingStart: "10px",
+          paddingEnd: "10px",
+          flex: 0
+        },
+        {
+          type: "text",
+          text: tx.category,
+          size: "xs",
+          weight: "bold",
+          color: pink,
+          align: "center",
+          gravity: "center",
+          backgroundColor: "#FCE4EF",
+          cornerRadius: "12px",
+          paddingAll: "6px",
+          paddingStart: "10px",
+          paddingEnd: "10px",
+          flex: 0
+        }
+      ]
+    },
+    // ชื่อรายการ
+    { type: "text", text: tx.description || typeLabel, size: "md", weight: "bold", color: "#3A3540", margin: "md", wrap: true },
+    tx.authorName ? { type: "text", text: `ผู้จด: ${tx.authorName}`, size: "xs", color: "#9B94A0", margin: "xs" } : null,
+    { type: "separator", margin: "lg", color: "#EFE3D8" },
+    // จำนวนเงินตัวใหญ่สีชมพู
+    {
+      type: "box",
+      layout: "vertical",
+      margin: "lg",
+      contents: [
+        { type: "text", text: "จำนวนเงิน", size: "xs", color: "#9B94A0" },
+        { type: "text", text: `${isIncome ? "+" : "-"}${money(tx.amount)} บาท`, size: "xxl", weight: "bold", color: pink, margin: "xs" }
+      ]
+    }
+  ].filter(Boolean);
+
+  // แถบ progress bar เทียบยอดรวม (หมวดนี้/เดือนนี้) กับงบที่ตั้งไว้ — แสดงเฉพาะรายจ่ายที่มีการตั้งงบหมวดนี้
+  if (!isIncome && budget && budget.limit > 0) {
+    const ratio = Math.min(budget.spent / budget.limit, 1);
+    const overBudget = budget.spent > budget.limit;
+    bodyContents.push(
+      { type: "separator", margin: "lg", color: "#EFE3D8" },
+      {
+        type: "box",
+        layout: "vertical",
+        margin: "lg",
+        spacing: "xs",
+        contents: [
+          {
+            type: "box",
+            layout: "horizontal",
+            contents: [
+              { type: "text", text: `งบ${tx.category}เดือนนี้`, size: "xs", color: "#9B94A0", flex: 1 },
+              { type: "text", text: `${money(budget.spent)} / ${money(budget.limit)} บาท`, size: "xs", color: overBudget ? "#D23283" : "#9B94A0", align: "end" }
+            ]
+          },
+          {
+            type: "box",
+            layout: "vertical",
+            height: "8px",
+            backgroundColor: "#F1E7DC",
+            cornerRadius: "4px",
+            contents: [
+              { type: "box", layout: "vertical", height: "8px", width: `${Math.max(ratio * 100, 4)}%`, backgroundColor: overBudget ? "#B0225F" : pink, cornerRadius: "4px", contents: [] }
+            ]
+          },
+          overBudget ? { type: "text", text: "เกินงบที่ตั้งไว้แล้วนะ", size: "xxs", color: "#B0225F", margin: "xs" } : null
+        ].filter(Boolean)
+      }
+    );
+  }
+
+  const footerButtons = [];
+  if (dashboardUrl) {
+    footerButtons.push(
+      { type: "button", style: "secondary", height: "sm", color: "#F1E7DC", action: { type: "uri", label: "แก้ไข", uri: dashboardUrl } },
+      { type: "button", style: "secondary", height: "sm", color: "#FCE4EF", action: { type: "uri", label: "ลบ", uri: dashboardUrl } }
+    );
+  }
+
+  return {
+    type: "flex",
+    altText: `จดสำเร็จ: ${tx.description || typeLabel} ${money(tx.amount)} บาท`,
+    contents: {
+      type: "bubble",
+      size: "kilo",
+      body: {
+        type: "box",
+        layout: "vertical",
+        backgroundColor: cream,
+        paddingAll: "20px",
+        contents: [
+          { type: "text", text: "จดสำเร็จ ✅", size: "lg", weight: "bold", color: "#3A3540" },
+          { type: "box", layout: "vertical", margin: "md", spacing: "sm", contents: bodyContents }
+        ]
+      },
+      footer: footerButtons.length
+        ? { type: "box", layout: "horizontal", spacing: "sm", paddingAll: "12px", backgroundColor: cream, contents: footerButtons }
+        : undefined
+    }
+  };
+}
+// คำนวณยอดรวมหมวดนี้ในเดือนนี้ เทียบกับงบที่ตั้งไว้ (ถ้ามี) สำหรับ progress bar ใน Flex Message
+function budgetProgressFor(user, tx) {
+  if (tx.type !== "expense") return null;
+  const limit = user.budgets?.[tx.category];
+  if (!Number.isFinite(limit) || limit <= 0) return null;
+  const spent = user.transactions.filter((t) => t.type === "expense" && t.category === tx.category && sameMonth(t.createdAt)).reduce((sum, t) => sum + t.amount, 0);
+  return { limit, spent };
+}
+function dashboardEditUrl(userId) {
+  const base = process.env.PUBLIC_BASE_URL?.replace(/\/$/, "");
+  return base ? `${base}/dashboard?token=${perUserToken(userId)}&u=${encodeURIComponent(userId)}` : null;
+}
 // ดึงชื่อสมาชิกกลุ่ม (ใช้แสดง "ใครจดอะไรบ้าง" ในกองกลาง) — ใช้ได้เฉพาะ userId ที่เคยส่งข้อความในกลุ่มนี้มาก่อน
 // (ข้อจำกัดของ LINE: ดึงรายชื่อสมาชิกกลุ่มทั้งหมดล่วงหน้าไม่ได้ ต้องรู้ userId ก่อนถึงจะสอบถามโปรไฟล์ได้)
 async function getGroupMemberName(groupId, userId) {
@@ -505,12 +648,12 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
               let tx = await enrichWithAi({ id: crypto.randomUUID(), type: "expense", category: categoryFor(receipt.merchant), description: receipt.merchant, amount: receipt.amount, createdAt: new Date().toISOString() }, receipt.merchant);
               tx = { ...tx, authorId, authorName: await getGroupMemberName(userId, authorId) };
               user.transactions.push(tx); await saveUser(userId, user);
-              message = `🧾 บันทึกรายจ่ายจากรูปใบเสร็จแล้ว\nร้าน: ${tx.description}\nหมวด: ${tx.category}\nจำนวน: ${money(tx.amount)} บาท${tx.authorName ? `\nผู้จด: ${tx.authorName}` : ""}\n\nถ้าอ่านยอดหรือร้านผิด พิมพ์ "/บอท ลบล่าสุด" แล้วพิมพ์รายการใหม่ได้เลย`;
+              message = txFlexMessage(tx, { budget: budgetProgressFor(user, tx), dashboardUrl: dashboardEditUrl(userId) });
             }
           } catch (error) { console.error("Receipt read failed", error.message); message = "ระบบประมวลผลภาพใช้เวลานานกว่าปกติ กรุณาลองใหม่อีกครั้ง"; }
         }
       } catch (error) { console.error("Group image handling failed", error.message); message = "ระบบประมวลผลภาพใช้เวลานานกว่าปกติ กรุณาลองใหม่อีกครั้ง"; }
-      try { await reply(event.replyToken, message); } catch (error) { console.error("Could not reply", error.message); }
+      try { await (typeof message === "string" ? reply(event.replyToken, message) : replyMessages(event.replyToken, [message])); } catch (error) { console.error("Could not reply", error.message); }
       continue;
     }
     if (event.message?.type === "image") {
@@ -535,13 +678,13 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
                 const user = await getUser(userId);
                 const tx = await enrichWithAi({ id: crypto.randomUUID(), type: "expense", category: categoryFor(receipt.merchant), description: receipt.merchant, amount: receipt.amount, createdAt: new Date().toISOString() }, receipt.merchant);
                 user.transactions.push(tx); await saveUser(userId, user);
-                message = `🧾 บันทึกรายจ่ายจากรูปใบเสร็จแล้ว\nร้าน: ${tx.description}\nหมวด: ${tx.category}\nจำนวน: ${money(tx.amount)} บาท\n\nถ้าอ่านยอดหรือร้านผิด พิมพ์ "ลบล่าสุด" แล้วพิมพ์รายการใหม่ได้เลย`;
+                message = txFlexMessage(tx, { budget: budgetProgressFor(user, tx), dashboardUrl: dashboardEditUrl(userId) });
               }
             } catch (error) { console.error("Receipt read failed", error.message); message = "ระบบประมวลผลภาพใช้เวลานานกว่าปกติ กรุณาลองใหม่อีกครั้ง"; }
           }
         }
       } catch (error) { console.error("Image handling failed", error.message); message = "ระบบประมวลผลภาพใช้เวลานานกว่าปกติ กรุณาลองใหม่อีกครั้ง"; }
-      try { await reply(event.replyToken, message); } catch (error) { console.error("Could not reply", error.message); }
+      try { await (typeof message === "string" ? reply(event.replyToken, message) : replyMessages(event.replyToken, [message])); } catch (error) { console.error("Could not reply", error.message); }
       continue;
     }
     if (event.message?.type !== "text") continue;
@@ -660,7 +803,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
         tx = await enrichWithAi(tx, text, ambiguous);
         if (isGroupChat) tx = { ...tx, authorId, authorName: await getGroupMemberName(userId, authorId) };
         user.transactions.push(tx); await saveUser(userId, user);
-        message = `${tx.type === "income" ? "💰 บันทึกรายรับแล้ว" : "🧾 บันทึกรายจ่ายแล้ว"}\n${tx.description}\nหมวด: ${tx.category}\nจำนวน: ${money(tx.amount)} บาท${tx.authorName ? `\nผู้จด: ${tx.authorName}` : ""}`;
+        message = txFlexMessage(tx, { budget: budgetProgressFor(user, tx), dashboardUrl: dashboardEditUrl(userId) });
       }
       else {
         const mem = await memoryService.getMemory(personId);
@@ -675,7 +818,8 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
           .catch((error) => console.warn("Memory auto-extraction failed:", error.message));
       }
     }
-    try { await reply(event.replyToken, message); } catch (error) { console.error("Could not reply", error.message); }
+    try { await (typeof message === "string" ? reply(event.replyToken, message) : replyMessages(event.replyToken, [message])); } catch (error) { console.error("Could not reply", error.message); }
   }
 });
 app.listen(Number(process.env.PORT ?? 3000), () => console.log(`Ta Phin listening on ${process.env.PORT ?? 3000}`));
+
