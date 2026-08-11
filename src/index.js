@@ -154,8 +154,17 @@ function sameDay(date) { const a = parts(date), b = parts(); return Boolean(a &&
 function sameMonth(date, year = parts().year, month = parts().month) { const p = parts(date); return Boolean(p && p.year === year && p.month === month); }
 function totals(list) { return list.reduce((x, tx) => ({ income: x.income + (tx.type === "income" ? tx.amount : 0), expense: x.expense + (tx.type === "expense" ? tx.amount : 0) }), { income: 0, expense: 0 }); }
 function categoryFor(text) { const lower = text.toLowerCase(); return Object.entries(CATEGORIES).find(([, words]) => words.some((word) => lower.includes(word)))?.[0] ?? "อื่น ๆ"; }
-const QUESTION_HINTS = /[?？]|ไหม|หรือเปล่า|หรือไม่|หรือยัง|ทำไม|ยังไง|อย่างไร|เท่าไหร่|เท่าไร|มั้ย|รึเปล่า|หรือป่าว|ช่วย.*หน่อย|ช่วย.*ได้ไหม/;
-function looksLikeQuestion(text) { return QUESTION_HINTS.test(text); }
+// คำที่ส่งสัญญาณว่าเป็น "คำถาม/ขอคำปรึกษา" ไม่ใช่การจดรายการ แม้จะไม่มีเครื่องหมาย ? หรือคำถามชัด ๆ
+const QUESTION_HINTS = /[?？]|ไหม|หรือเปล่า|หรือไม่|หรือยัง|ทำไม|ยังไง|อย่างไร|เท่าไหร่|เท่าไร|มั้ย|รึเปล่า|หรือป่าว|ช่วย|หน่อย|แนะนำ|วางแผน|ควร(?:จะ)?|คิดว่า|ดีไหม|ดีมั้ย|ยังไงดี|ทำยังไง|อยากรู้|อยากถาม|บ้าง(?:คะ|ครับ)?$|มีอะไรบ้าง/;
+function looksLikeQuestion(text) {
+  if (QUESTION_HINTS.test(text)) return true;
+  // ประโยคยาว (เกิน 4 คำ) ที่ไม่มีสกุลเงินกำกับชัดเจน (฿/บาท ติดกับตัวเลข) มีแนวโน้มเป็นประโยคคุย/คำถามมากกว่ารายการจด
+  // (รายการจดจริง ๆ มักสั้น เช่น "กาแฟ 60" ไม่ใช่ประโยคยาวหลายคำ)
+  const trimmed = text.trim();
+  const hasExplicitCurrency = /(?:฿|บาท)\s*[0-9]|[0-9][0-9,]*(?:\.\d{1,2})?\s*(?:฿|บาท)/.test(trimmed);
+  if (!hasExplicitCurrency && trimmed.split(/\s+/).length > 4) return true;
+  return false;
+}
 function parse(text) {
   const trimmed = text.trim();
   if (looksLikeQuestion(trimmed)) return null;
