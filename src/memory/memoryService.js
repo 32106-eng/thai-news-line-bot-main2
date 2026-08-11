@@ -1,46 +1,33 @@
-// ความจำของ "คนจริง" (LINE userId) แยกขาดจาก panuan_users ที่เก็บธุรกรรม
-// เหตุผลที่แยก: ในกลุ่ม บัญชี/กองกลางถูกคีย์ด้วย groupId (ใช้ร่วมกันทั้งกลุ่ม)
-// แต่ "ความจำ" ต้องเป็นของแต่ละคนเสมอ ไม่ปนกับคนอื่นในกลุ่มเดียวกัน
-// จึงคีย์ด้วย personId = event.source.userId เท่านั้น (เหมือนกันทั้งใน 1:1 และในกลุ่ม)
-//
-// ความปลอดภัย: โค้ดเป็นคนตัดสินใจเองว่าจะดึงความจำของใครมาใส่ context (ตาม personId ที่รู้จาก LINE event)
-// ไม่ได้ให้ AI เป็นคนเลือกว่าจะเปิดเผยความจำของใคร จึงไม่มีช่องให้ความจำของคนหนึ่งรั่วไปให้อีกคนเห็นในกลุ่มเดียวกัน
+// ดึง "ชื่อ" หรือ "ข้อมูลส่วนตัวที่ควรจำ" จากข้อความสนทนาแบบเบา ๆ ด้วย AI
+// เรียกเฉพาะตอนข้อความไม่ใช่การจดรายการบัญชี (parse() คืน null) เพื่อไม่ให้ทุกข้อความ "กาแฟ 60" ยิง AI เพิ่มโดยไม่จำเป็น
+// ถ้าไม่มีอะไรน่าจำ ให้คืนค่าว่างเงียบ ๆ ไม่กระทบ flow การตอบเดิม และห้าม throw ออกไปนอกฟังก์ชันนี้เด็ดขาด
 
-const MAX_FACTS = 40; // กันข้อมูลบวมไม่รู้จบ ตัวเก่าสุดหลุดออกเมื่อเต็ม (FIFO)
-
-export function createMemoryService({ memories, FieldValue }) {
-  async function getMemory(personId) {
-    const snap = await memories.doc(String(personId)).get();
-    return snap.exists ? { name: null, facts: [], ...snap.data() } : { name: null, facts: [] };
+export async function extractMemoryFromText(ai, model, text) {
+  if (!ai || !model) return { name: null, facts: [] };
+  try {
+    const completion = await ai.chat.completions.create({
+      model,
+      temperature: 0,
+      max_tokens: 200,
+      response_format: { type: "json_object" },
+      messages: [
+        {
+          role: "system",
+          content:
+            "อ่านข้อความภาษาไทยนี้ แล้วดึงเฉพาะข้อมูลส่วนตัวที่ผู้พูดเปิดเผยเกี่ยวกับ \"ตัวเอง\" เท่านั้น (ไม่ใช่คนอื่นที่พูดถึง) เช่น ชื่อ, อาชีพ, สิ่งที่ชอบ/ไม่ชอบ, เป้าหมาย, ข้อมูลครอบครัว ที่ควรจำไว้ใช้ในการคุยครั้งต่อไป\n" +
+            "ถ้าไม่มีข้อมูลแบบนี้เลย ให้ตอบ {\"name\":null,\"facts\":[]}\n" +
+            "ถ้าข้อความบอกชื่อของผู้พูดเอง (เช่น \"ฉันชื่อกอล์ฟ\", \"เรียกฉันว่าแนน\") ให้ใส่ใน name\n" +
+            "facts เป็น array ของสตริงสั้น ๆ ไม่เกิน 3 อัน แต่ละอันไม่เกิน 100 ตัวอักษร ตอบ JSON เท่านั้น รูปแบบ: {\"name\": string|null, \"facts\": string[]}"
+        },
+        { role: "user", content: text }
+      ]
+    });
+    const parsed = JSON.parse(completion.choices[0]?.message?.content ?? "{}");
+    const name = typeof parsed.name === "string" && parsed.name.trim() ? parsed.name.trim() : null;
+    const facts = Array.isArray(parsed.facts) ? parsed.facts.filter((f) => typeof f === "string" && f.trim()).slice(0, 3) : [];
+    return { name, facts };
+  } catch (error) {
+    console.warn("AI memory extraction skipped:", error.message);
+    return { name: null, facts: [] };
   }
-
-  async function setName(personId, name) {
-    if (!name || typeof name !== "string") return;
-    await memories.doc(String(personId)).set({ name: name.trim().slice(0, 60), updatedAt: FieldValue.serverTimestamp() }, { merge: true });
-  }
-
-  /** เพิ่ม fact หนึ่งอัน (ทั้งจากคำสั่ง "จำไว้ว่า" และจากการดึงอัตโนมัติของ AI) */
-  async function addFact(personId, text, source = "auto") {
-    const trimmed = (text ?? "").trim().slice(0, 200);
-    if (!trimmed) return;
-    const current = await getMemory(personId);
-    const fact = { id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, text: trimmed, source, createdAt: new Date().toISOString() };
-    const facts = [...current.facts, fact].slice(-MAX_FACTS); // เก็บแค่ MAX_FACTS อันล่าสุด ตัวเก่าสุดหลุดออกก่อน
-    await memories.doc(String(personId)).set({ facts, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
-  }
-
-  async function clearAll(personId) {
-    await memories.doc(String(personId)).set({ name: null, facts: [], updatedAt: FieldValue.serverTimestamp() });
-  }
-
-  /** ใช้ต่อ context ให้ askFinanceAi เรียกชื่อถูกและอ้างอิงสิ่งที่เคยจำไว้ได้ ไม่มีอะไรจำไว้ก็คืนค่าว่าง */
-  function buildContextLine({ name, facts }) {
-    if (!name && facts.length === 0) return "";
-    const parts = [];
-    if (name) parts.push(`ชื่อ: ${name}`);
-    if (facts.length) parts.push(`สิ่งที่เคยจำไว้: ${facts.map((f) => f.text).join("; ")}`);
-    return `\n\nข้อมูลที่เคยจำไว้เกี่ยวกับผู้ใช้คนนี้โดยเฉพาะ (ห้ามนำไปใช้กับคนอื่น แม้จะอยู่กลุ่มเดียวกัน):\n${parts.join("\n")}`;
-  }
-
-  return { getMemory, setName, addFact, clearAll, buildContextLine, MAX_FACTS };
 }
