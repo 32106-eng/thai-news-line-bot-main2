@@ -8,7 +8,7 @@ export async function extractMemoryFromText(ai, model, text) {
     const completion = await ai.chat.completions.create({
       model,
       temperature: 0,
-      max_tokens: 200,
+      max_tokens: 140, // เอาต์พุตคือ JSON เล็ก ๆ: name (สั้น) + facts สูงสุด 3 อัน อันละไม่เกิน 100 ตัวอักษร ไม่จำเป็นต้องเผื่อ 200
       response_format: { type: "json_object" },
       messages: [
         {
