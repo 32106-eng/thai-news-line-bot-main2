@@ -16,7 +16,8 @@ export function buildSubscriptionCollections(firebaseApp) {
     uploadSessions: db.collection("panuan_upload_sessions"),     // doc id = auto
     webhookEvents: db.collection("panuan_webhook_events"),       // doc id = `${provider}_${eventId}`
     auditLogs: db.collection("panuan_audit_logs"),               // doc id = auto, append-only
-    admins: db.collection("panuan_admins")                       // doc id = username
+    admins: db.collection("panuan_admins"),                      // doc id = username
+    groupLinks: db.collection("panuan_group_links")              // doc id = groupId (LINE group ที่บอทถูกเชิญเข้า)
   };
 }
 
