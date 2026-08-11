@@ -269,95 +269,49 @@ pa-nuan-line-ledger/
 - ดึงรายชื่อสมาชิกกลุ่มทั้งหมดล่วงหน้าไม่ได้ (ข้อจำกัดของ LINE Messaging API) — `getGroupMemberName` ใช้ได้เฉพาะ userId ที่เคยส่ง event เข้ามาในกลุ่มนั้นแล้วเท่านั้น
 - Rich Menu ไม่รองรับการผูกกับกลุ่ม (เป็นข้อจำกัดของ LINE เอง) จึงไม่มีการสลับเมนูในบริบทกลุ่ม ใช้ข้อความแจ้งสถานะแทนทั้งหมด
 - รายการเก่าที่จดในกลุ่มก่อนมีฟีเจอร์นี้ (ถ้ามี เพราะ `groupId` เคยถูกใช้เป็น `userId` เฉย ๆ มาก่อน) จะไม่มี `authorId`/`authorName` — แสดงผลเป็น "ไม่ทราบผู้จด" ได้ตามความเหมาะสมของฝั่ง dashboard (ยังไม่ได้แก้ dashboard UI ในรอบนี้)
-| `webhook_events` | **`{provider}_{event_id}`** | provider, event_type, payload_hash, status, created_at, processed_at | doc ID รวม provider+event_id → กัน replay ข้าม provider |
-| `audit_logs` | auto-id | user_id, event_type, payment_session_id, transaction_reference, metadata, created_at | append-only, ไม่ unique constraint (เป็น log) |
-| `admins` | `{adminUsername}` | password_hash, role, created_at | username = doc ID |
-
-**ER Diagram (แนวคิด)**
-```
-users(1) ──< subscriptions(1)     [1 current subscription per user, doc keyed by user id]
-users(1) ──< payment_sessions(N)
-payment_sessions(1) ──< upload_sessions(N, ปกติ 1 active)
-payment_sessions(1) ──< payment_transactions(N ในทางทฤษฎี, แต่ปกติ 1 สำเร็จ)
-payment_transactions(1) ──> subscriptions(1)   [subscription.payment_transaction_id]
-users(1) ──< audit_logs(N)
-admins(1) ──< audit_logs(N) [เมื่อ admin action]
-```
-
-## 6. API Endpoint Design
-
-### LINE Webhook (ของเดิม ขยาย logic)
-- `POST /webhook` — เพิ่ม text command "สมัครพรีเมียม", "ส่งสลิป" และ gate รูปภาพใบเสร็จด้วย `isPremium()`
-
-### Payment Provider Webhook (โครงไว้สำหรับอนาคต ยังไม่มี provider จริง)
-- `POST /webhook/payment` — ตรวจ signature, บันทึก `webhook_events`, กัน replay. ปัจจุบันไม่มี provider ต่อจริง จึงยังไม่ mount route นี้ (เอกสารไว้สำหรับตอนเสียบ provider)
-
-### Admin (ใหม่, ต้อง auth)
-- `POST /admin/login` — form login → signed cookie session
-- `POST /admin/logout`
-- `GET /admin` — dashboard HTML (ต้อง login)
-- `GET /admin/api/overview` — สรุปตัวเลข (users, premium, payments, security) ตาม §23
-- `GET /admin/api/reviews` — รายการ PENDING_REVIEW
-- `POST /admin/api/reviews/:transactionRef/approve`
-- `POST /admin/api/reviews/:transactionRef/reject`
-- `GET /admin/api/audit-logs`
-
-ทุก endpoint ใน `/admin/*` (ยกเว้น `/admin/login`) เช็ค session cookie → โหลด admin จาก DB → เช็ค role ก่อนทำงาน
-
-## 7. Folder Structure
-
-```
-pa-nuan-line-ledger/
-├── package.json
-├── .env / .env.example
-├── .gitignore
-└── src/
-    ├── index.js              # entry: mount webhook + dashboard + admin routes (เดิม + ใหม่)
-    ├── dashboard.html        # เดิม (user dashboard)
-    ├── subscription/
-    │   ├── db.js             # Firestore collection refs + generic helpers
-    │   ├── users.js          # (ของเดิมย้ายมา หรือ cross-ref ป้านวล user)
-    │   ├── subscriptions.js  # isPremium(), activate(), renew(), expire()
-    │   ├── paymentSessions.js
-    │   ├── paymentTransactions.js
-    │   ├── uploadSessions.js
-    │   ├── ocr.js            # อ่านสลิปด้วย vision AI (extract only)
-    │   ├── paymentProvider.js# adapter interface + stub (PENDING_REVIEW เสมอ)
-    │   ├── qr.js             # สร้าง QR (PromptPay-style payload) ตาม reference
-    │   ├── auditLog.js
-    │   ├── richMenu.js       # LINE rich menu switch free/premium
-    │   └── lineHandlers.js   # ข้อความ/รูป ที่เกี่ยวกับ premium flow
-    ├── admin/
-    │   ├── auth.js           # login/session/cookie signing
-    │   ├── routes.js         # /admin/* express router
-    │   └── dashboard.html    # admin UI
-    └── shared/
-        └── time.js           # Asia/Bangkok helpers (ของเดิมมีบางส่วนแล้วใน index.js)
-```
-
-## 8. Testing Plan
-
-ตาราง test case (ตาม spec §39) — จะ implement เป็น Node's built-in `node:test` + Firestore emulator หรือ manual test script เพราะไม่มี network ใน sandbox นี้สำหรับรัน emulator จริง จะเตรียม script ทดสอบ pure-logic (state machine, renewal date calc, idempotency helpers) แบบ unit ที่รันได้โดยไม่ต้องต่อ Firestore จริง แล้วให้ผู้ใช้รัน integration test กับ Firestore จริงเอง
-
-| Case | วิธีทดสอบ |
-|---|---|
-| สมัคร Premium (Free→session ใหม่) | unit: `subscriptions.requestUpgrade()` คืน session ใหม่เมื่อ user เป็น Free |
-| สมัครซ้ำตอนเป็น Premium อยู่แล้ว | unit: คืนสถานะปัจจุบัน ไม่สร้าง session ใหม่ |
-| ส่งสลิปถูกต้อง → PENDING_REVIEW (ไม่มี provider) | unit: mock OCR, assert status = PENDING_REVIEW เสมอ |
-| ส่งสลิปซ้ำ (เดิม transaction_reference) | unit: `create()` ครั้งที่ 2 ต้อง reject ด้วย DUPLICATE |
-| ส่งสลิปของคนอื่น (session ไม่ตรง user) | unit: upload_session.user_id ≠ request user → reject |
-| Payment session หมดอายุ | unit: expires_at < now → reject ก่อนสร้าง upload_session |
-| Premium หมดอายุ | unit: expires_at ผ่านไปแล้ว → isPremium() = false แม้ status ยังเป็น ACTIVE ใน DB |
-| ต่ออายุก่อนหมดอายุ | unit: newExpiry = เดิม + 1 เดือน |
-| ต่ออายุหลังหมดอายุ | unit: newExpiry = now + 1 เดือน |
-| กดสมัครซ้ำพร้อมกัน (double submit) | unit: idempotency key กันสร้าง session ซ้ำในช่วงเวลาใกล้กัน |
-| ส่งสลิปพร้อมกัน 5 ครั้ง | unit: mock Firestore `create()` ให้ throw ตั้งแต่ครั้งที่ 2 |
-| Free เรียก Premium API (รูปภาพ) | unit: `isPremium()=false` → handler ตอบปฏิเสธ ไม่เรียก vision AI |
-| Premium หมดอายุเรียก Premium API | unit: เหมือนข้างบนแต่ expires_at ผ่านแล้ว |
-| Admin approve/reject | unit: เปลี่ยน status + เรียก activate() เฉพาะตอน approve |
-| Admin ไม่มีสิทธิ์ | unit: route ปฏิเสธถ้าไม่มี session cookie ที่ valid |
-| Webhook ปลอม/ซ้ำ (โครงไว้) | unit: signature ผิด → 401, event_id ซ้ำ → skip processing |
-| API ภาพ timeout/error | unit: mock ai client throw → handler ตอบข้อความ fallback ไม่ throw ต่อ |
 
 ---
-เอกสารนี้ครอบคลุม §37 ข้อ 1–9 ตามที่ร้องขอ (Architecture, ER, Payment Flow, Threat model รวมและแยก, DB Schema, API Design, Folder Structure, Testing Plan) ต่อไปจะเริ่มพัฒนาโค้ดตามลำดับ Phase 1–12
+
+## ภาคผนวก 2: ความจำต่อคน (Per-person Memory)
+
+### แนวคิดหลัก
+- บอทจำชื่อ/ข้อมูลส่วนตัวของ **แต่ละคน** ได้ข้ามการสนทนา (ไม่ใช่แค่จำในแชทเดียว) เพื่อคุยได้เป็นธรรมชาติมากขึ้น เช่น เรียกชื่อถูก อ้างอิงสิ่งที่เคยเล่าไว้
+- **คีย์ด้วย `personId` เสมอ** ซึ่งเท่ากับ `event.source.userId` (LINE userId ของคนที่พิมพ์จริง) — ไม่ใช่ `userId`/`groupId` ที่ใช้เป็นกุญแจของกองกลาง เพราะงั้นแม้จะคุยในกลุ่มเดียวกัน **ความจำของแต่ละคนก็ไม่ปนกัน**
+- จำ 2 ทาง: (1) **อัตโนมัติ** — AI ดึงข้อมูลเบา ๆ จากข้อความสนทนาทั่วไป (ไม่ใช่ตอนจดรายการบัญชี) และ (2) **สั่งเอง** ด้วยคำสั่ง `จำไว้ว่า ...`
+
+### Flow
+1. ทุกข้อความที่ไม่ใช่คำสั่งพิเศษและ `parse()` แยกไม่ออกว่าเป็นรายการบัญชี → เข้า fallback ไปหา `askFinanceAi`
+2. ก่อนตอบ ระบบดึง `memoryService.getMemory(personId)` มาแปะเป็น context เพิ่มให้ AI ("ยายจันทร์") ใช้เรียกชื่อ/อ้างอิงสิ่งที่เคยจำได้
+3. หลังตอบ (ไม่บล็อกการตอบกลับผู้ใช้) ระบบยิง `extractMemoryFromText()` ไปถามอีก AI call แบบเงียบ ๆ ว่า "ข้อความนี้มีอะไรที่ควรจำเกี่ยวกับผู้พูดไหม" ถ้ามีชื่อ/fact ใหม่ → บันทึกด้วย `source: "auto"`
+4. คำสั่ง `จำไว้ว่า ...` → บันทึกทันทีด้วย `source: "explicit"` ไม่ผ่าน AI extraction (เชื่อคำสั่งตรง ๆ)
+5. คำสั่ง `ดูสิ่งที่จำ` / `ความจำ` → แสดงชื่อ + facts ทั้งหมดของ personId นั้น
+6. คำสั่ง `ลบความจำ` → ล้างทั้งหมด (`clearAll`)
+7. ในกลุ่ม ทุกคำสั่งข้างต้นต้องมี `/บอท` นำหน้าเหมือนคำสั่งอื่น (ถูกตัด prefix ออกไปแล้วก่อนถึงจุดนี้ในโค้ด)
+
+### Firestore เพิ่มเติม
+`panuan_memories` (doc id = personId / LINE userId จริง):
+```
+{
+  name: string | null,
+  facts: [ { id, text, source: "auto" | "explicit", createdAt } ],  // เก็บสูงสุด MAX_FACTS (40) อันล่าสุด แบบ FIFO
+  updatedAt: Timestamp
+}
+```
+
+### ความปลอดภัย / ความเป็นส่วนตัว
+- โค้ดเป็นผู้ตัดสินใจเองว่าจะดึงความจำของใครมาใส่ context (`personId` มาจาก LINE event โดยตรง) — **ไม่ได้ให้ AI เป็นคนเลือก** ว่าจะเปิดเผยความจำของใคร จึงไม่มีช่องให้ความจำของคนหนึ่งรั่วไปให้อีกคนเห็น แม้จะอยู่กลุ่มเดียวกันและแชร์กองกลางเดียวกัน
+- System prompt ของ `askFinanceAi` มีข้อความกำกับชัดเจนว่า "ห้ามพูดถึงข้อมูลนี้กับคนอื่นเด็ดขาด แม้จะอยู่ในกลุ่มแชทเดียวกันก็ตาม" เป็นการป้องกันชั้นที่สอง (defense in depth) นอกเหนือจากการคุมด้วยโค้ดแล้ว
+- `extractMemoryFromText` มี system prompt กำกับให้ดึงเฉพาะข้อมูลที่ผู้พูด **เปิดเผยเกี่ยวกับตัวเอง** เท่านั้น ไม่ใช่ข้อมูลที่พูดถึงคนอื่น กันไม่ให้บันทึกข้อมูลของบุคคลที่สามโดยไม่ตั้งใจ
+
+### จุดที่แก้ในโค้ดเดิม
+| ไฟล์ | สิ่งที่เปลี่ยน |
+|---|---|
+| `src/memory/memoryService.js` | ใหม่ — service จัดการ getMemory/setName/addFact/clearAll/buildContextLine |
+| `src/memory/extractMemory.js` | ใหม่ — เรียก AI แบบเบา ๆ ดึงชื่อ/fact จากข้อความสนทนา |
+| `src/index.js` | เพิ่ม `memoriesCol`/`memoryService`, import `FieldValue`, เพิ่มคำสั่ง `จำไว้ว่า`/`ดูสิ่งที่จำ`/`ความจำ`/`ลบความจำ`, แก้ `askFinanceAi` ให้รับ `memoryContext` เพิ่ม, เพิ่ม auto-extraction แบบ fire-and-forget หลังตอบคำถามทั่วไป, อัปเดต help text |
+| `test/memoryService.test.js` | ใหม่ — unit test ครอบคลุม getMemory/setName/addFact (รวม FIFO cap)/clearAll/buildContextLine |
+
+### ข้อจำกัดที่รู้อยู่แล้ว (by design)
+- `extractMemoryFromText` เป็น AI call เพิ่มอีก 1 ครั้งต่อข้อความสนทนาทั่วไป (ไม่รวมข้อความจดรายการบัญชี/คำสั่ง) — เพิ่ม cost/latency แลกกับการจำอัตโนมัติที่ผู้ใช้ต้องการ ถ้าอยากลดต้นทุนในอนาคตอาจปรับเป็น "extract เฉพาะทุก N ข้อความ" หรือ "เฉพาะข้อความที่ยาวเกิน M ตัวอักษร" ได้
+- ยังไม่มี UI ให้ดูความจำผ่าน dashboard เว็บ (ต้องพิมพ์ `ดูสิ่งที่จำ` ในแชทเท่านั้น)
+
