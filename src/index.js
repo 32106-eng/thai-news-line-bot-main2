@@ -173,37 +173,37 @@ function parse(text) {
   const typeAmbiguous = !matchedIncomeSignal;
   return { id: crypto.randomUUID(), type: income ? "income" : "expense", category: income ? "รายรับ" : categoryFor(trimmed), description, amount, createdAt: new Date().toISOString(), _typeAmbiguous: typeAmbiguous };
 }
-async function classifyTypeWithAi(source) {
-  if (!ai || !process.env.OPENAI_MODEL) return null;
-  try {
-    const completion = await ai.chat.completions.create({
-      model: process.env.OPENAI_MODEL,
-      temperature: 0,
-      response_format: { type: "json_object" },
-      messages: [{ role: "system", content: "ข้อความนี้เป็นการจดบันทึกทางการเงินสั้น ๆ ภาษาไทย ให้ตัดสินว่าเป็น \"income\" (เงินเข้า/รายรับ) หรือ \"expense\" (เงินออก/รายจ่าย) ตอบ JSON เท่านั้น: {\"type\":\"income\"} หรือ {\"type\":\"expense\"}" }, { role: "user", content: source }]
-    });
-    const type = JSON.parse(completion.choices[0]?.message?.content ?? "{}").type;
-    return type === "income" || type === "expense" ? type : null;
-  } catch (error) { console.warn("AI type classification skipped:", error.message); return null; }
-}
+// รวม "จำแนกรายรับ/รายจ่าย" (เมื่อกำกวม) และ "จำแนกหมวดหมู่" (เมื่อยังเป็น "อื่น ๆ") ให้เป็น AI call เดียว
+// เดิมยิง 2 ครั้งติดกัน (sequential) ทำให้แชท 1:1 ตอบช้าลงเท่าตัวในเคสที่ทั้งกำกวมและหมวดไม่ชัด
 async function enrichWithAi(tx, source, typeWasAmbiguous) {
-  if (typeWasAmbiguous) {
-    const aiType = await classifyTypeWithAi(source);
-    if (aiType && aiType !== tx.type) {
-      tx = { ...tx, type: aiType, category: aiType === "income" ? "รายรับ" : categoryFor(source) };
-    }
-  }
-  if (!ai || tx.type !== "expense" || tx.category !== "อื่น ๆ" || !process.env.OPENAI_MODEL) return tx;
+  const needType = typeWasAmbiguous;
+  const needCategory = tx.type === "expense" && tx.category === "อื่น ๆ";
+  if (!ai || !process.env.OPENAI_MODEL || (!needType && !needCategory)) return tx;
   try {
+    const instructions = [];
+    if (needType) instructions.push('"type": ตัดสินว่าข้อความนี้เป็น "income" (เงินเข้า/รายรับ) หรือ "expense" (เงินออก/รายจ่าย)');
+    if (needCategory) instructions.push('"category": จัดหมวดรายจ่ายนี้เป็นหนึ่งใน อาหาร, เดินทาง, บิล, สุขภาพ, บันเทิง, ช้อปปิ้ง, อื่น ๆ (ใส่เฉพาะกรณีเป็นรายจ่ายเท่านั้น)');
+    const fields = [needType ? '"type":"income"|"expense"' : null, needCategory ? '"category":"..."' : null].filter(Boolean).join(", ");
     const completion = await ai.chat.completions.create({
       model: process.env.OPENAI_MODEL,
       temperature: 0,
+      max_tokens: 60,
       response_format: { type: "json_object" },
-      messages: [{ role: "system", content: "Classify this Thai expense into exactly one category: อาหาร, เดินทาง, บิล, สุขภาพ, บันเทิง, ช้อปปิ้ง, อื่น ๆ. Reply only JSON: {\\\"category\\\":\\\"...\\\"}." }, { role: "user", content: source }]
+      messages: [
+        { role: "system", content: `ข้อความนี้เป็นการจดบันทึกทางการเงินสั้น ๆ ภาษาไทย ให้ตอบ JSON เท่านั้นตามฟิลด์ที่ร้องขอ:\n${instructions.join("\n")}\nรูปแบบ: {${fields}}` },
+        { role: "user", content: source }
+      ]
     });
-    const category = JSON.parse(completion.choices[0]?.message?.content ?? "{}").category;
-    return Object.hasOwn(CATEGORIES, category) ? { ...tx, category } : tx;
-  } catch (error) { console.warn("AI categorization skipped:", error.message); return tx; }
+    const parsed = JSON.parse(completion.choices[0]?.message?.content ?? "{}");
+    let next = tx;
+    if (needType && (parsed.type === "income" || parsed.type === "expense") && parsed.type !== next.type) {
+      next = { ...next, type: parsed.type, category: parsed.type === "income" ? "รายรับ" : categoryFor(source) };
+    }
+    if (needCategory && next.type === "expense" && Object.hasOwn(CATEGORIES, parsed.category)) {
+      next = { ...next, category: parsed.category };
+    }
+    return next;
+  } catch (error) { console.warn("AI enrichment skipped:", error.message); return tx; }
 }
 function advice(monthTransactions) {
   const expenses = monthTransactions.filter((tx) => tx.type === "expense");
@@ -252,6 +252,7 @@ async function askFinanceAi(user, question, memoryContext = "") {
     const completion = await ai.chat.completions.create({
       model: process.env.OPENAI_MODEL,
       temperature: 0.4,
+      max_tokens: 400, // คำตอบสั้น ๆ ไม่เกิน 4 ประโยคอยู่แล้วตาม system prompt — จำกัดไว้กันโมเดลบางตัวลากยาว/คิดนานเกินจำเป็นจนตอบช้า
       messages: [
         { role: "system", content: "คุณคือ \"ยายจันทร์\" คุณยายที่ช่วยหลานดูแลเรื่องเงิน พูดกับผู้ใช้เหมือนยายคุยกับหลานตัวเองตามธรรมชาติ ไม่ใช่พนักงานหรือบอทที่พูดจาเป็นทางการ ใช้น้ำเสียงเป็นกันเอง อบอุ่น ตรงไปตรงมาแบบผู้ใหญ่ใจดี ห้ามลงท้ายประโยคด้วยคำว่า \"ครับ\" หรือ \"ค่ะ\"/\"คะ\" เด็ดขาด ให้พูดห้วนแบบยายคุยกับหลานแทน (เช่น พูดจบประโยคเฉย ๆ หรือใช้คำลงท้ายกันเองแบบ \"นะ\" \"นะเนี่ย\" \"เอาไหม\" \"เห็นไหม\" ได้บ้างแต่ไม่ต้องทุกประโยค) หลีกเลี่ยงศัพท์ทางการหรือภาษาเขียนแข็ง ๆ ให้เน้นให้คำปรึกษาและตอบคำถามด้านการเงินส่วนบุคคล (การออม การใช้จ่าย การตั้งงบประมาณ หนี้สิน หลักการลงทุนเบื้องต้น) โดยใช้ข้อมูลบัญชีของผู้ใช้ที่ให้มาประกอบการตอบเมื่อเกี่ยวข้อง ถ้ามี \"ข้อมูลที่เคยจำไว้เกี่ยวกับผู้ใช้คนนี้โดยเฉพาะ\" ให้ใช้เรียกชื่อหรืออ้างอิงอย่างเป็นธรรมชาติเมื่อเหมาะสม แต่ห้ามพูดถึงข้อมูลนี้กับคนอื่นเด็ดขาด แม้จะอยู่ในกลุ่มแชทเดียวกันก็ตาม คุณตอบคำถามทั่วไปอื่น ๆ นอกเรื่องการเงินได้เช่นกันแบบสั้นและเป็นมิตร แต่เมื่อมีโอกาสให้โยงกลับมาช่วยเรื่องการเงินอย่างเป็นธรรมชาติ กระชับ ไม่เกิน 4 ประโยค เหมาะสำหรับส่งทางแชท ห้ามให้คำแนะนำการลงทุนเฉพาะเจาะจงที่มีความเสี่ยงสูงหรือรับประกันผลตอบแทน และห้ามให้คำแนะนำทางกฎหมายหรือภาษีแบบฟันธง ให้แนะนำปรึกษาผู้เชี่ยวชาญแทนในกรณีนั้น" },
         { role: "user", content: `${context}\n\nคำถามจากผู้ใช้: ${question}` }
@@ -273,6 +274,7 @@ async function readReceipt(mime, base64) {
     const completion = await ai.chat.completions.create({
       model: visionModel,
       temperature: 0,
+      max_tokens: 150,
       response_format: { type: "json_object" },
       messages: [
         { role: "system", content: "You read Thai/English receipt photos. Reply only JSON: {\"merchant\":\"...\",\"amount\":number}. \"amount\" is the final total paid (บาท), as a plain number with no currency symbol or commas. If you cannot read a merchant name, use \"อื่น ๆ\". If you cannot find a clear total amount, set amount to 0." },
@@ -668,3 +670,4 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
   }
 });
 app.listen(Number(process.env.PORT ?? 3000), () => console.log(`Ta Phin listening on ${process.env.PORT ?? 3000}`));
+
