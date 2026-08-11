@@ -223,7 +223,7 @@ function advice(monthTransactions) {
 }
 function summary(list, title) { const t = totals(list); return `📊 สรุป${title}\nรายรับ: ${money(t.income)} บาท\nรายจ่าย: ${money(t.expense)} บาท\nคงเหลือ: ${money(t.income - t.expense)} บาท\nจำนวนรายการ: ${list.length}`; }
 function signatureValid(raw, signature) { const expected = crypto.createHmac("sha256", process.env.LINE_CHANNEL_SECRET).update(raw).digest("base64"); return Boolean(signature) && crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected)); }
-async function line(endpoint, body) { const r = await fetch(`https://api.line.me/v2/bot/message/${endpoint}`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}` }, body: JSON.stringify(body) }); if (!r.ok) throw new Error(`LINE ${endpoint}: ${r.status}`); }
+async function line(endpoint, body) { const r = await fetch(`https://api.line.me/v2/bot/message/${endpoint}`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}` }, body: JSON.stringify(body) }); if (!r.ok) { const detail = await r.text().catch(() => ""); throw new Error(`LINE ${endpoint}: ${r.status} ${detail}`); } }
 async function replyMessages(token, messages) { return line("reply", { replyToken: token, messages }); }
 async function reply(token, text) { return replyMessages(token, [{ type: "text", text: text.slice(0, 4900) }]); }
 async function push(to, text) { return line("push", { to, messages: [{ type: "text", text: text.slice(0, 4900) }] }); }
@@ -315,12 +315,12 @@ function txFlexMessage(tx, opts = {}) {
           },
           {
             type: "box",
-            layout: "vertical",
+            layout: "horizontal",
             height: "8px",
-            backgroundColor: "#F1E7DC",
             cornerRadius: "4px",
             contents: [
-              { type: "box", layout: "vertical", height: "8px", width: `${Math.max(ratio * 100, 4)}%`, backgroundColor: overBudget ? "#B0225F" : pink, cornerRadius: "4px", contents: [] }
+              { type: "box", layout: "vertical", flex: Math.max(Math.round(ratio * 100), 4), backgroundColor: overBudget ? "#B0225F" : pink, contents: [] },
+              { type: "box", layout: "vertical", flex: Math.max(100 - Math.round(ratio * 100), 0), backgroundColor: "#F1E7DC", contents: [] }
             ]
           },
           overBudget ? { type: "text", text: "เกินงบที่ตั้งไว้แล้วนะ", size: "xxs", color: "#B0225F", margin: "xs" } : null
