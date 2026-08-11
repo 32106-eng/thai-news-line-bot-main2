@@ -239,42 +239,39 @@ function txFlexMessage(tx, opts = {}) {
   const { budget, dashboardUrl } = opts;
 
   const bodyContents = [
-    // แถวแท็ก: ประเภท + หมวดหมู่ (พื้นชมพู ตัวอักษรขาว)
+    // แถวแท็ก: ประเภท + หมวดหมู่ (พื้นชมพู ตัวอักษรขาว) — กล่องสีพื้นหลังต้องอยู่บน box ไม่ใช่ text โดยตรง
     {
       type: "box",
-      layout: "baseline",
+      layout: "horizontal",
       spacing: "sm",
       contents: [
         {
-          type: "text",
-          text: typeLabel,
-          size: "xs",
-          weight: "bold",
-          color: "#FFFFFF",
-          align: "center",
-          gravity: "center",
+          type: "box",
+          layout: "vertical",
           backgroundColor: pink,
           cornerRadius: "12px",
           paddingAll: "6px",
           paddingStart: "10px",
           paddingEnd: "10px",
-          flex: 0
+          flex: 0,
+          contents: [
+            { type: "text", text: typeLabel, size: "xs", weight: "bold", color: "#FFFFFF", align: "center", gravity: "center" }
+          ]
         },
         {
-          type: "text",
-          text: tx.category,
-          size: "xs",
-          weight: "bold",
-          color: pink,
-          align: "center",
-          gravity: "center",
+          type: "box",
+          layout: "vertical",
           backgroundColor: "#FCE4EF",
           cornerRadius: "12px",
           paddingAll: "6px",
           paddingStart: "10px",
           paddingEnd: "10px",
-          flex: 0
-        }
+          flex: 0,
+          contents: [
+            { type: "text", text: tx.category, size: "xs", weight: "bold", color: pink, align: "center", gravity: "center" }
+          ]
+        },
+        { type: "filler" }
       ]
     },
     // ชื่อรายการ
