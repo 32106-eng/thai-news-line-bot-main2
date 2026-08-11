@@ -196,7 +196,7 @@ async function enrichWithAi(tx, source, typeWasAmbiguous) {
     const completion = await ai.chat.completions.create({
       model: process.env.OPENAI_MODEL,
       temperature: 0,
-      max_tokens: 60,
+      max_tokens: 40, // เอาต์พุตเป็น JSON เล็ก ๆ แค่ {"type":"...","category":"..."} เท่านั้น ไม่ต้องเผื่อพื้นที่มาก
       response_format: { type: "json_object" },
       messages: [
         { role: "system", content: `ข้อความนี้เป็นการจดบันทึกทางการเงินสั้น ๆ ภาษาไทย ให้ตอบ JSON เท่านั้นตามฟิลด์ที่ร้องขอ:\n${instructions.join("\n")}\nรูปแบบ: {${fields}}` },
@@ -401,7 +401,8 @@ async function askFinanceAi(user, question, memoryContext = "") {
     const completion = await ai.chat.completions.create({
       model: process.env.OPENAI_MODEL,
       temperature: 0.4,
-      max_tokens: 400, // คำตอบสั้น ๆ ไม่เกิน 4 ประโยคอยู่แล้วตาม system prompt — จำกัดไว้กันโมเดลบางตัวลากยาว/คิดนานเกินจำเป็นจนตอบช้า
+      max_tokens: 220, // คำตอบสั้น ๆ ไม่เกิน 4 ประโยคภาษาไทยอยู่แล้วตาม system prompt (~220 token กว้างพอสำหรับ 4 ประโยคจริง)
+      // เดิมตั้ง 400 ซึ่งกว้างเกินคำตอบจริงมาก โมเดลบางตัว (โดยเฉพาะที่มี reasoning/thinking ในตัว) จะยิ่งใช้เวลาคิดนานขึ้นตาม budget ที่เปิดให้ — ลดค่านี้ช่วยตัดเวลาตอบโดยไม่ตัดคุณภาพคำตอบ เพราะคำตอบจริงไม่เคยยาวถึง 400 อยู่แล้ว
       messages: [
         { role: "system", content: "คุณคือ \"ยายจันทร์\" คุณยายที่ช่วยหลานดูแลเรื่องเงิน พูดกับผู้ใช้เหมือนยายคุยกับหลานตัวเองตามธรรมชาติ ไม่ใช่พนักงานหรือบอทที่พูดจาเป็นทางการ ใช้น้ำเสียงเป็นกันเอง อบอุ่น ตรงไปตรงมาแบบผู้ใหญ่ใจดี ห้ามลงท้ายประโยคด้วยคำว่า \"ครับ\" หรือ \"ค่ะ\"/\"คะ\" เด็ดขาด ให้พูดห้วนแบบยายคุยกับหลานแทน (เช่น พูดจบประโยคเฉย ๆ หรือใช้คำลงท้ายกันเองแบบ \"นะ\" \"นะเนี่ย\" \"เอาไหม\" \"เห็นไหม\" ได้บ้างแต่ไม่ต้องทุกประโยค) หลีกเลี่ยงศัพท์ทางการหรือภาษาเขียนแข็ง ๆ ให้เน้นให้คำปรึกษาและตอบคำถามด้านการเงินส่วนบุคคล (การออม การใช้จ่าย การตั้งงบประมาณ หนี้สิน หลักการลงทุนเบื้องต้น) โดยใช้ข้อมูลบัญชีของผู้ใช้ที่ให้มาประกอบการตอบเมื่อเกี่ยวข้อง ถ้ามี \"ข้อมูลที่เคยจำไว้เกี่ยวกับผู้ใช้คนนี้โดยเฉพาะ\" ให้ใช้เรียกชื่อหรืออ้างอิงอย่างเป็นธรรมชาติเมื่อเหมาะสม แต่ห้ามพูดถึงข้อมูลนี้กับคนอื่นเด็ดขาด แม้จะอยู่ในกลุ่มแชทเดียวกันก็ตาม คุณตอบคำถามทั่วไปอื่น ๆ นอกเรื่องการเงินได้เช่นกันแบบสั้นและเป็นมิตร แต่เมื่อมีโอกาสให้โยงกลับมาช่วยเรื่องการเงินอย่างเป็นธรรมชาติ กระชับ ไม่เกิน 4 ประโยค เหมาะสำหรับส่งทางแชท ห้ามให้คำแนะนำการลงทุนเฉพาะเจาะจงที่มีความเสี่ยงสูงหรือรับประกันผลตอบแทน และห้ามให้คำแนะนำทางกฎหมายหรือภาษีแบบฟันธง ให้แนะนำปรึกษาผู้เชี่ยวชาญแทนในกรณีนั้น" },
         { role: "user", content: `${context}\n\nคำถามจากผู้ใช้: ${question}` }
@@ -423,7 +424,7 @@ async function readReceipt(mime, base64) {
     const completion = await ai.chat.completions.create({
       model: visionModel,
       temperature: 0,
-      max_tokens: 150,
+      max_tokens: 80, // เอาต์พุตเป็น JSON เล็ก ๆ แค่ {"merchant":"...","amount":number} เท่านั้น
       response_format: { type: "json_object" },
       messages: [
         { role: "system", content: "You read Thai/English receipt photos. Reply only JSON: {\"merchant\":\"...\",\"amount\":number}. \"amount\" is the final total paid (บาท), as a plain number with no currency symbol or commas. If you cannot read a merchant name, use \"อื่น ๆ\". If you cannot find a clear total amount, set amount to 0." },
@@ -819,4 +820,5 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
   }
 });
 app.listen(Number(process.env.PORT ?? 3000), () => console.log(`Ta Phin listening on ${process.env.PORT ?? 3000}`));
+
 
