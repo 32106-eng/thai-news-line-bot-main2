@@ -111,6 +111,29 @@ export function createAdminRouter({ collections, adminAuth, subscriptionService,
     res.json({ ok: true });
   });
 
+  // ค้นหา user ตาม LINE userId ตรง ๆ เพื่อดูสถานะ Premium ก่อนยกเลิก
+  router.get("/api/users/:userId", requireAdmin, async (req, res) => {
+    const sub = await subscriptionService.getStatusView(req.params.userId);
+    res.json({
+      userId: req.params.userId,
+      plan: sub.plan,
+      active: sub.active,
+      startedAt: sub.startedAt ? formatThaiDateTime(sub.startedAt) : null,
+      expiresAt: sub.expiresAt ? formatThaiDateTime(sub.expiresAt) : null
+    });
+  });
+
+  // แอดมินยกเลิก Premium ของ user คนใดก็ได้ทันที (spec: admin can cancel other users' premium)
+  router.post("/api/users/:userId/cancel-premium", requireAdmin, express.json(), async (req, res) => {
+    const result = await subscriptionService.adminCancel({
+      userId: req.params.userId,
+      adminUsername: req.admin.username,
+      reason: req.body?.reason ?? null
+    });
+    if (!result.ok) return res.status(409).json({ error: result.reason ?? "ไม่สามารถยกเลิกได้" });
+    res.json({ ok: true });
+  });
+
   router.get("/api/audit-logs", requireAdmin, async (req, res) => {
     const limit = Math.min(Number(req.query.limit) || 100, 200);
     const snap = await collections.auditLogs.orderBy("createdAt", "desc").limit(limit).get();
@@ -122,6 +145,5 @@ export function createAdminRouter({ collections, adminAuth, subscriptionService,
     });
   });
 
-  void subscriptionService;
   return router;
 }
