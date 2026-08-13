@@ -72,6 +72,28 @@ export function createSubscriptionService({ subscriptions, FieldValue, db }, aud
     return result;
   }
 
+  /**
+   * แอดมินยกเลิก Premium ของ user คนใดก็ได้ทันที
+   * ตั้ง status เป็น EXPIRED และเคลียร์ expiresAt ให้เป็นอดีต เพื่อไม่ให้ isPremium() ผ่านอีก
+   * เรียกได้เฉพาะผ่าน requireAdmin middleware เท่านั้น (ดู admin/routes.js)
+   */
+  async function adminCancel({ userId, adminUsername, reason = null }) {
+    const ref = subscriptions.doc(String(userId));
+    const snap = await ref.get();
+    if (!snap.exists) return { ok: false, reason: "ไม่พบ subscription ของ user นี้" };
+    const current = snap.data();
+    if (current.status !== SUB_STATUS.ACTIVE) {
+      return { ok: false, reason: "user นี้ไม่ได้เป็น Premium อยู่แล้ว" };
+    }
+    await ref.set({ status: SUB_STATUS.EXPIRED, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+    await auditLog({
+      userId,
+      eventType: AUDIT_EVENTS.PREMIUM_CANCELLED_BY_ADMIN,
+      metadata: { adminUsername, reason: reason ?? "manual_cancel" }
+    });
+    return { ok: true };
+  }
+
   /** ใช้โดย cron หรือ lazily เมื่อพบว่าหมดอายุระหว่างเช็คสิทธิ์ เพื่ออัปเดตสถานะให้ตรง (ไม่ใช่ตัวตัดสินสิทธิ์หลัก) */
   async function markExpiredIfNeeded(userId) {
     const sub = await getRaw(userId);
@@ -98,5 +120,5 @@ export function createSubscriptionService({ subscriptions, FieldValue, db }, aud
     return expiredCount;
   }
 
-  return { getRaw, isPremium, getStatusView, activateOrRenew, markExpiredIfNeeded, sweepExpired };
+  return { getRaw, isPremium, getStatusView, activateOrRenew, adminCancel, markExpiredIfNeeded, sweepExpired };
 }
