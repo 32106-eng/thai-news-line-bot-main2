@@ -68,6 +68,18 @@
   </section>
 
   <section>
+    <h2>ยกเลิก Premium ของ User</h2>
+    <div class="review" style="flex-wrap:nowrap">
+      <input id="cancelUserId" placeholder="LINE userId" style="flex:1;padding:10px 12px;border-radius:8px;border:1px solid var(--line);font-size:14px" />
+      <div class="actions">
+        <button id="checkUserBtn" class="approve" style="background:var(--dark)">ตรวจสอบสถานะ</button>
+        <button id="cancelUserBtn" class="reject">ยกเลิก Premium</button>
+      </div>
+    </div>
+    <div id="cancelUserResult" class="meta" style="padding:0 4px;font-size:13px;color:var(--grey)"></div>
+  </section>
+
+  <section>
     <h2>รอตรวจสอบ (Pending Review)</h2>
     <div id="reviews"></div>
   </section>
@@ -152,6 +164,31 @@ async function act(ref, action) {
   } catch (e) { alert(e.message); }
 }
 
+$('#checkUserBtn').onclick = async () => {
+  const userId = $('#cancelUserId').value.trim();
+  const out = $('#cancelUserResult');
+  if (!userId) { out.textContent = 'กรุณากรอก userId'; return; }
+  out.textContent = 'กำลังตรวจสอบ...';
+  try {
+    const d = await api(`/api/users/${encodeURIComponent(userId)}`);
+    out.innerHTML = d.active
+      ? `<b style="color:var(--pink-dark)">Premium Active</b> · หมดอายุ ${d.expiresAt ?? '-'}`
+      : `ไม่ใช่ Premium (สถานะ: ${d.plan})`;
+  } catch (e) { out.textContent = e.message; }
+};
+
+$('#cancelUserBtn').onclick = async () => {
+  const userId = $('#cancelUserId').value.trim();
+  const out = $('#cancelUserResult');
+  if (!userId) { out.textContent = 'กรุณากรอก userId'; return; }
+  if (!confirm(`ยืนยันยกเลิก Premium ของ ${userId}?`)) return;
+  try {
+    await api(`/api/users/${encodeURIComponent(userId)}/cancel-premium`, { method: 'POST', body: JSON.stringify({ reason: 'admin_manual' }) });
+    out.textContent = 'ยกเลิก Premium สำเร็จ';
+    await loadAll();
+  } catch (e) { out.textContent = e.message; }
+};
+
 async function loadLogs() {
   const d = await api('/api/audit-logs?limit=50');
   $('#logs').innerHTML = d.logs.map(l => `<div class="log"><span><b>${l.eventType}</b> ${l.userId ? '· ' + l.userId : ''} ${l.transactionReference ? '· ' + l.transactionReference : ''}</span><span>${l.createdAt ?? ''}</span></div>`).join('') || '<div class="empty">ยังไม่มีบันทึก</div>';
@@ -167,3 +204,4 @@ api('/api/overview').then(showApp).catch(showLogin);
 </script>
 </body>
 </html>
+
