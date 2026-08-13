@@ -72,3 +72,26 @@ test("markExpiredIfNeeded: flips ACTIVE-but-past-expiry to EXPIRED", async () =>
   const raw = await service.getRaw("user1");
   assert.equal(raw.status, SUB_STATUS.EXPIRED);
 });
+
+test("adminCancel: flips an ACTIVE user to EXPIRED so isPremium() becomes false immediately", async () => {
+  const { service, subscriptions } = setup();
+  await subscriptions.doc("user1").set({ status: SUB_STATUS.ACTIVE, expiresAt: new Date(Date.now() + 999_999_999) });
+  const result = await service.adminCancel({ userId: "user1", adminUsername: "admin1" });
+  assert.equal(result.ok, true);
+  assert.equal(await service.isPremium("user1"), false);
+  const raw = await service.getRaw("user1");
+  assert.equal(raw.status, SUB_STATUS.EXPIRED);
+});
+
+test("adminCancel: no-op error when user has no subscription doc", async () => {
+  const { service } = setup();
+  const result = await service.adminCancel({ userId: "ghost", adminUsername: "admin1" });
+  assert.equal(result.ok, false);
+});
+
+test("adminCancel: no-op error when user is already not ACTIVE", async () => {
+  const { service, subscriptions } = setup();
+  await subscriptions.doc("user1").set({ status: SUB_STATUS.EXPIRED, expiresAt: new Date(Date.now() - 1000) });
+  const result = await service.adminCancel({ userId: "user1", adminUsername: "admin1" });
+  assert.equal(result.ok, false);
+});
