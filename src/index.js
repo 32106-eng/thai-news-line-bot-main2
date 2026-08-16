@@ -353,6 +353,59 @@ function txFlexMessage(tx, opts = {}) {
     }
   };
 }
+// การ์ด Flex Message ถามยืนยันประเภท "รายรับ/รายจ่าย" หลังอ่านสลิปเสร็จ — ยังไม่บันทึกจริงจนกว่าจะกดปุ่ม
+// receipt: { merchant, amount } จาก readReceipt, meta: { authorId } (มีเฉพาะในกลุ่ม)
+// ข้อมูลที่ต้องใช้ต่อถูกเข้ารหัสไว้ใน postback data ตรง ๆ (ไม่ผ่าน session ฝั่งเซิร์ฟเวอร์) เพราะเป็นข้อมูลเล็กและอายุสั้น
+function receiptConfirmFlexMessage(receipt, meta = {}) {
+  const pink = "#D23283";
+  const cream = "#FBF3EC";
+  const merchant = String(receipt.merchant ?? "อื่น ๆ").slice(0, 60);
+  // LINE postback data จำกัดไม่เกิน 300 ตัวอักษร — เก็บเฉพาะฟิลด์ที่จำเป็นแบบย่อ
+  const payload = (type) => `slip_type=${type}&m=${encodeURIComponent(merchant)}&a=${receipt.amount}${meta.authorId ? `&aid=${meta.authorId}` : ""}`;
+  return {
+    type: "flex",
+    altText: `อ่านสลิปได้ ${money(receipt.amount)} บาท — เป็นรายรับหรือรายจ่าย?`,
+    contents: {
+      type: "bubble",
+      size: "kilo",
+      body: {
+        type: "box",
+        layout: "vertical",
+        backgroundColor: cream,
+        paddingAll: "20px",
+        contents: [
+          { type: "text", text: "อ่านสลิปสำเร็จ 🧾", size: "lg", weight: "bold", color: "#3A3540" },
+          { type: "text", text: merchant, size: "md", weight: "bold", color: "#3A3540", margin: "md", wrap: true },
+          { type: "text", text: `${money(receipt.amount)} บาท`, size: "xxl", weight: "bold", color: pink, margin: "xs" },
+          { type: "separator", margin: "lg", color: "#EFE3D8" },
+          { type: "text", text: "รายการนี้เป็นรายรับหรือรายจ่าย?", size: "sm", color: "#9B94A0", margin: "lg" }
+        ]
+      },
+      footer: {
+        type: "box",
+        layout: "horizontal",
+        spacing: "sm",
+        paddingAll: "12px",
+        backgroundColor: cream,
+        contents: [
+          { type: "button", style: "primary", height: "sm", color: pink, action: { type: "postback", label: "รายจ่าย", data: payload("expense"), displayText: "รายจ่าย" } },
+          { type: "button", style: "secondary", height: "sm", color: "#F1E7DC", action: { type: "postback", label: "รายรับ", data: payload("income"), displayText: "รายรับ" } }
+        ]
+      }
+    }
+  };
+}
+// สร้างและบันทึกรายการจากสลิปที่ยืนยันประเภทแล้ว (เรียกจาก postback handler)
+// merchant/amount มาจาก postback data ที่ผู้ใช้กดยืนยัน, type คือ "income" | "expense"
+async function saveConfirmedSlipTx({ userId, type, merchant, amount, authorId, isGroupChat }) {
+  const user = await getUser(userId);
+  let tx = { id: crypto.randomUUID(), type, category: type === "income" ? "รายรับ" : categoryFor(merchant), description: merchant, amount, createdAt: new Date().toISOString() };
+  if (type === "expense") tx = await enrichWithAi(tx, merchant); // ยังจำแนกหมวดหมู่ต่อได้ตามปกติถ้าเป็น "อื่น ๆ"
+  if (isGroupChat) tx = { ...tx, authorId, authorName: await getGroupMemberName(userId, authorId) };
+  user.transactions.push(tx);
+  await saveUser(userId, user);
+  return { user, tx };
+}
 // คำนวณยอดรวมหมวดนี้ในเดือนนี้ เทียบกับงบที่ตั้งไว้ (ถ้ามี) สำหรับ progress bar ใน Flex Message
 function budgetProgressFor(user, tx) {
   if (tx.type !== "expense") return null;
@@ -619,6 +672,31 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
       try { await groupLinkService.removeLink(groupId); } catch (error) { console.error("Group leave cleanup failed:", error.message); }
       continue;
     }
+    // --- ปุ่ม "รายรับ/รายจ่าย" หลังอ่านสลิป (ดู receiptConfirmFlexMessage) — ยังไม่เคยบันทึก tx จริงจนกว่าจะถึงตรงนี้ ---
+    if (event.type === "postback") {
+      const data = event.postback?.data ?? "";
+      const params = new URLSearchParams(data);
+      if (params.get("slip_type") === "income" || params.get("slip_type") === "expense") {
+        const pbSourceType = event.source?.type;
+        const pbIsGroupChat = pbSourceType === "group" || pbSourceType === "room";
+        const pbUserId = pbIsGroupChat ? (event.source?.groupId ?? event.source?.roomId) : event.source?.userId;
+        if (!pbUserId) continue;
+        let message;
+        try {
+          const type = params.get("slip_type");
+          const merchant = decodeURIComponent(params.get("m") ?? "อื่น ๆ").slice(0, 120) || "อื่น ๆ";
+          const amount = Number(params.get("a"));
+          const authorId = params.get("aid") ?? event.source?.userId ?? null;
+          if (!Number.isFinite(amount) || amount <= 0) message = "ข้อมูลสลิปหมดอายุแล้ว ลองส่งรูปใหม่อีกครั้ง";
+          else {
+            const { user, tx } = await saveConfirmedSlipTx({ userId: pbUserId, type, merchant, amount, authorId, isGroupChat: pbIsGroupChat });
+            message = txFlexMessage(tx, { budget: budgetProgressFor(user, tx), dashboardUrl: dashboardEditUrl(pbUserId) });
+          }
+        } catch (error) { console.error("Slip postback confirm failed", error.message); message = "เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง"; }
+        try { await (typeof message === "string" ? reply(event.replyToken, message) : replyMessages(event.replyToken, [message])); } catch (error) { console.error("Could not reply", error.message); }
+      }
+      continue;
+    }
     if (event.type !== "message") continue;
     const sourceType = event.source?.type; // "user" | "group" | "room"
     const isGroupChat = sourceType === "group" || sourceType === "room";
@@ -649,13 +727,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
             const { mime, base64 } = await downloadLineImage(event.message.id);
             const receipt = await readReceipt(mime, base64);
             if (!receipt) message = "อ่านยอดเงินจากใบเสร็จนี้ไม่ได้ ลองถ่ายให้เห็นยอดรวมชัด ๆ อีกครั้ง หรือพิมพ์รายการเองแทนได้ เช่น /บอท กาแฟ 60";
-            else {
-              const user = await getUser(userId);
-              let tx = await enrichWithAi({ id: crypto.randomUUID(), type: "expense", category: categoryFor(receipt.merchant), description: receipt.merchant, amount: receipt.amount, createdAt: new Date().toISOString() }, receipt.merchant);
-              tx = { ...tx, authorId, authorName: await getGroupMemberName(userId, authorId) };
-              user.transactions.push(tx); await saveUser(userId, user);
-              message = txFlexMessage(tx, { budget: budgetProgressFor(user, tx), dashboardUrl: dashboardEditUrl(userId) });
-            }
+            else message = receiptConfirmFlexMessage(receipt, { authorId }); // ยังไม่บันทึก รอผู้ใช้กดยืนยันรายรับ/รายจ่ายก่อน (ดู postback handler)
           } catch (error) { console.error("Receipt read failed", error.message); message = "ระบบประมวลผลภาพใช้เวลานานกว่าปกติ กรุณาลองใหม่อีกครั้ง"; }
         }
       } catch (error) { console.error("Group image handling failed", error.message); message = "ระบบประมวลผลภาพใช้เวลานานกว่าปกติ กรุณาลองใหม่อีกครั้ง"; }
@@ -680,12 +752,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
               const { mime, base64 } = await downloadLineImage(event.message.id);
               const receipt = await readReceipt(mime, base64);
               if (!receipt) message = "อ่านยอดเงินจากใบเสร็จนี้ไม่ได้ ลองถ่ายให้เห็นยอดรวมชัด ๆ อีกครั้ง หรือพิมพ์รายการเองแทนได้ เช่น กาแฟ 60";
-              else {
-                const user = await getUser(userId);
-                const tx = await enrichWithAi({ id: crypto.randomUUID(), type: "expense", category: categoryFor(receipt.merchant), description: receipt.merchant, amount: receipt.amount, createdAt: new Date().toISOString() }, receipt.merchant);
-                user.transactions.push(tx); await saveUser(userId, user);
-                message = txFlexMessage(tx, { budget: budgetProgressFor(user, tx), dashboardUrl: dashboardEditUrl(userId) });
-              }
+              else message = receiptConfirmFlexMessage(receipt); // ยังไม่บันทึก รอผู้ใช้กดยืนยันรายรับ/รายจ่ายก่อน (ดู postback handler)
             } catch (error) { console.error("Receipt read failed", error.message); message = "ระบบประมวลผลภาพใช้เวลานานกว่าปกติ กรุณาลองใหม่อีกครั้ง"; }
           }
         }
@@ -787,5 +854,6 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
   }
 });
 app.listen(Number(process.env.PORT ?? 3000), () => console.log(`Ta Phin listening on ${process.env.PORT ?? 3000}`));
+
 
 
