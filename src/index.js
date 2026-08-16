@@ -16,9 +16,10 @@ import { createAuditLogger } from "./subscription/auditLog.js";
 import { createSubscriptionService, PLAN } from "./subscription/subscriptions.js";
 import { createPaymentSessionService } from "./subscription/paymentSessions.js";
 import { createUploadSessionService } from "./subscription/uploadSessions.js";
-import { createPaymentTransactionService } from "./subscription/paymentTransactions.js";
+import { createPaymentTransactionService, TX_STATUS } from "./subscription/paymentTransactions.js";
 import { getPaymentProvider } from "./subscription/paymentProvider.js";
 import { createQrService } from "./subscription/qr.js";
+import { readSlip } from "./subscription/ocr.js";
 import { createRichMenuService } from "./subscription/richMenu.js";
 import { createSubscriptionLineHandlers } from "./subscription/lineHandlers.js";
 import { createGroupLinkService, CONFIRM_WINDOW_MINUTES } from "./subscription/groupLinks.js";
@@ -786,6 +787,65 @@ app.get("/api/subscription", async (req, res) => {
   const status = await subscriptionService.getStatusView(uid).catch(() => ({ plan: PLAN.FREE, active: false }));
   const lineOaLink = process.env.LINE_OA_BASIC_ID ? `https://line.me/R/ti/p/${encodeURIComponent(process.env.LINE_OA_BASIC_ID)}` : null;
   res.json({ ...status, lineOaLink });
+});
+// สมัคร/ต่ออายุ Premium จากหน้าเว็บ — ใช้ paymentSessionService + qrService ตัวเดียวกับที่ฝั่ง LINE ใช้
+// (ดู lineHandlers.js handleSubscribeCommand) เพื่อให้ session/QR ผูกกับ user เดียวกันไม่ว่าจะสมัครทางไหน
+app.post("/api/premium/checkout", async (req, res) => {
+  if (!allowed(req)) return res.sendStatus(401);
+  const uid = req.query.u;
+  const status = await subscriptionService.getStatusView(uid).catch(() => ({ plan: PLAN.FREE, active: false }));
+  if (status.active) return res.json({ alreadyPremium: true, expiresAt: status.expiresAt });
+  const { session } = await paymentSessionService.createOrReuse(uid);
+  const qr = qrService.generateForSession(session);
+  if (!qr.available) return res.status(503).json({ error: "ยังไม่พร้อมรับชำระเงิน กรุณาติดต่อผู้ดูแลระบบ", note: qr.note });
+  res.json({
+    sessionId: session.id,
+    referenceId: session.referenceId,
+    amount: session.amount,
+    expiresAt: session.expiresAt,
+    qrImageUrl: `/qr/${session.id}.png`
+  });
+});
+// รับสลิป (base64) จากหน้าเว็บ แล้ววิ่งผ่าน OCR + verify path เดียวกับฝั่ง LINE (paymentTransactionService.submitAndVerify)
+// จำกัดขนาด body ไว้ที่ 8mb พอสำหรับรูปสลิปถ่ายจากมือถือ (ไม่ใช้ multer เพราะ client ส่งเป็น JSON base64 ตรงไปตรงมา)
+app.post("/api/premium/slip", express.json({ limit: "8mb" }), async (req, res) => {
+  if (!allowed(req)) return res.sendStatus(401);
+  const uid = req.query.u;
+  const { sessionId, mime, base64 } = req.body ?? {};
+  if (!sessionId || !mime || !base64) return res.status(400).json({ error: "ข้อมูลสลิปไม่ครบ" });
+  if (!/^image\/(png|jpe?g|webp)$/i.test(mime)) return res.status(400).json({ error: "รองรับเฉพาะไฟล์รูปภาพ (jpg/png/webp)" });
+
+  const validation = await paymentSessionService.validateForUpload(sessionId, uid);
+  if (!validation.ok) {
+    const reasonMsg = {
+      EXPIRED: "รายการชำระเงินหมดอายุแล้ว กรุณากดสมัครใหม่อีกครั้ง",
+      USER_MISMATCH: "ไม่พบรายการชำระเงินนี้สำหรับบัญชีของคุณ",
+      ALREADY_CONSUMED: "รายการนี้ถูกใช้ไปแล้ว กรุณากดสมัครใหม่หากต้องการสมัครอีกครั้ง",
+      NOT_FOUND: "ไม่พบรายการชำระเงิน กรุณากดสมัครใหม่อีกครั้ง"
+    }[validation.reason] ?? "ไม่พบรายการชำระเงิน กรุณากดสมัครใหม่อีกครั้ง";
+    return res.status(409).json({ error: reasonMsg, reason: validation.reason });
+  }
+
+  let ocrData = null;
+  try {
+    ocrData = await readSlip(ai, visionModel, mime, base64);
+  } catch (error) {
+    console.error("Web slip OCR failed:", error.message);
+    return res.status(502).json({ error: "ระบบประมวลผลภาพใช้เวลานานกว่าปกติ กรุณาลองใหม่อีกครั้ง" });
+  }
+  if (!ocrData) return res.status(422).json({ error: "อ่านข้อมูลจากสลิปนี้ไม่ได้ ลองถ่ายให้เห็นยอดเงินและเลขอ้างอิงชัด ๆ อีกครั้ง" });
+
+  const result = await paymentTransactionService.submitAndVerify({ userId: uid, paymentSession: validation.session, ocrData });
+  await paymentSessionService.consume(validation.session.id);
+  if (result.outcome === TX_STATUS.VERIFIED) await richMenuService.switchTo(uid, "PREMIUM").catch(() => {});
+
+  const messages = {
+    [TX_STATUS.VERIFIED]: "ชำระเงินสำเร็จ 🎉 ตอนนี้คุณเป็นสมาชิก Premium แล้ว",
+    [TX_STATUS.PENDING_REVIEW]: "ได้รับสลิปแล้ว ระบบกำลังตรวจสอบเพิ่มเติม เจ้าหน้าที่จะยืนยันให้เร็วที่สุด กรุณารอการแจ้งเตือนอีกครั้ง 🙏",
+    [TX_STATUS.REJECTED]: "ไม่สามารถยืนยันการชำระเงินได้ กรุณาตรวจสอบสลิปและลองใหม่อีกครั้ง",
+    [TX_STATUS.DUPLICATE]: "สลิปนี้ถูกใช้งานไปแล้ว"
+  };
+  res.json({ outcome: result.outcome, message: messages[result.outcome] ?? messages[TX_STATUS.REJECTED] });
 });
 app.get("/api/dashboard", async (req, res) => {
   if (!allowed(req)) return res.sendStatus(401);
