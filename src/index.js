@@ -689,7 +689,7 @@ app.get("/dashboard-gate", async (req, res) => {
   const query = `?token=${encodeURIComponent(req.query.token)}&u=${encodeURIComponent(uid)}`;
   const premium = await subscriptionService.isPremium(uid).catch(() => false);
   if (premium) return res.redirect(`/dashboard${query}`);
-  const waitSeconds = Number(process.env.DASHBOARD_AD_WAIT_SECONDS) || 5;
+  const waitSeconds = Number(process.env.DASHBOARD_AD_WAIT_SECONDS) || 25;
   res.type("html").send(adInterstitial({ nextUrl: `/dashboard${query}`, waitSeconds }));
 });
 app.get("/dashboard", (req, res) => allowed(req) ? res.type("html").send(dashboard) : res.sendStatus(401));
@@ -1072,6 +1072,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
   }
 });
 app.listen(Number(process.env.PORT ?? 3000), () => console.log(`Ta Phin listening on ${process.env.PORT ?? 3000}`));
+
 
 
 
