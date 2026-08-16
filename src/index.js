@@ -13,7 +13,7 @@ import { getFirestore, FieldValue } from "firebase-admin/firestore";
 
 import { buildSubscriptionCollections } from "./subscription/db.js";
 import { createAuditLogger } from "./subscription/auditLog.js";
-import { createSubscriptionService } from "./subscription/subscriptions.js";
+import { createSubscriptionService, PLAN } from "./subscription/subscriptions.js";
 import { createPaymentSessionService } from "./subscription/paymentSessions.js";
 import { createUploadSessionService } from "./subscription/uploadSessions.js";
 import { createPaymentTransactionService } from "./subscription/paymentTransactions.js";
@@ -779,6 +779,14 @@ app.get("/api/transactions/export", async (req, res) => {
   const csv = ["วันที่,ประเภท,รายการ,หมวดหมู่,จำนวนเงิน", ...user.transactions.map((tx) => [new Date(tx.createdAt).toLocaleString("th-TH", { timeZone: "Asia/Bangkok" }), tx.type === "income" ? "รายรับ" : "รายจ่าย", tx.description, tx.category, tx.amount].map(quote).join(","))].join("\n");
   res.set({ "content-type": "text/csv; charset=utf-8", "content-disposition": "attachment; filename=pa-nuan-transactions.csv" }).send(`\uFEFF${csv}`);
 });
+// สถานะสมาชิก Premium จริงจาก DB (ไม่เชื่อ client) — ใช้แสดงในหน้าตั้งค่าของ dashboard.html
+app.get("/api/subscription", async (req, res) => {
+  if (!allowed(req)) return res.sendStatus(401);
+  const uid = req.query.u;
+  const status = await subscriptionService.getStatusView(uid).catch(() => ({ plan: PLAN.FREE, active: false }));
+  const lineOaLink = process.env.LINE_OA_BASIC_ID ? `https://line.me/R/ti/p/${encodeURIComponent(process.env.LINE_OA_BASIC_ID)}` : null;
+  res.json({ ...status, lineOaLink });
+});
 app.get("/api/dashboard", async (req, res) => {
   if (!allowed(req)) return res.sendStatus(401);
   const user = await getUser(req.query.u), current = user.transactions.filter((tx) => sameMonth(tx.createdAt)), t = totals(current);
@@ -1004,6 +1012,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
   }
 });
 app.listen(Number(process.env.PORT ?? 3000), () => console.log(`Ta Phin listening on ${process.env.PORT ?? 3000}`));
+
 
 
 
