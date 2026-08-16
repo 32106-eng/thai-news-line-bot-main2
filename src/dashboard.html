@@ -201,6 +201,9 @@
     .radio-dot{width:19px;height:19px;border-radius:50%;border:2px solid var(--line);position:relative;flex:none}
     .radio-dot.checked{border-color:var(--wine)}
     .radio-dot.checked::after{content:"";position:absolute;inset:3px;border-radius:50%;background:var(--wine)}
+    .checkout-qr{display:flex;justify-content:center;padding:6px 0}
+    .checkout-qr img{border-radius:12px;border:1px solid var(--line);background:#fff;padding:8px}
+    #slipInput{margin-top:2px}
   </style>
 </head>
 <body>
@@ -248,7 +251,10 @@
         planHeaderTitle:'แพ็กเกจของฉัน',billingHeaderTitle:'ประวัติการชำระเงิน',billingEmpty:'ยังไม่มีประวัติการชำระเงิน',
         upgradeHowTitle:'วิธีสมัคร Premium',upgradeHowBody:'การสมัครและชำระเงินต้องทำผ่านแชท LINE กับยายจันทร์เท่านั้น (แชทส่วนตัว 1:1) พิมพ์ “สมัครพรีเมียม” แล้วทำตามขั้นตอนได้เลย',
         openLineChat:'เปิดแชท LINE',langSheetTitle:'ภาษา',currencySheetTitle:'สกุลเงิน',tzSheetTitle:'โซนเวลา',
-        toastOn:'เปิดใช้งานแล้ว',toastOff:'ปิดใช้งานแล้ว',toastLangChanged:'เปลี่ยนภาษาแล้ว',toastCurrencyChanged:'เปลี่ยนสกุลเงินแล้ว',toastTzChanged:'เปลี่ยนโซนเวลาแล้ว'
+        toastOn:'เปิดใช้งานแล้ว',toastOff:'ปิดใช้งานแล้ว',toastLangChanged:'เปลี่ยนภาษาแล้ว',toastCurrencyChanged:'เปลี่ยนสกุลเงินแล้ว',toastTzChanged:'เปลี่ยนโซนเวลาแล้ว',
+        checkoutTitle:'สแกนจ่ายเพื่อสมัคร Premium',checkoutLoading:'กำลังสร้างรายการชำระเงิน…',checkoutError:'เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง',
+        checkoutAmount:'จำนวนเงิน:',checkoutRef:'เลขอ้างอิง:',checkoutExpiry:'หมดอายุ:',
+        checkoutUploadLabel:'อัปโหลดรูปสลิปหลังชำระเงินแล้ว',checkoutSubmit:'ส่งสลิปเพื่อตรวจสอบ',checkoutSubmitting:'กำลังส่ง…'
       },
       'English':{
         settingsTitle:'Settings',settingsLead:'Manage recurring entries and customize your experience',
@@ -265,7 +271,10 @@
         planHeaderTitle:'My plan',billingHeaderTitle:'Payment history',billingEmpty:'No payment history yet',
         upgradeHowTitle:'How to subscribe to Premium',upgradeHowBody:'Subscribing and payment can only be done through a 1:1 LINE chat with ยายจันทร์. Type "สมัครพรีเมียม" there and follow the steps.',
         openLineChat:'Open LINE chat',langSheetTitle:'Language',currencySheetTitle:'Currency',tzSheetTitle:'Timezone',
-        toastOn:'Turned on',toastOff:'Turned off',toastLangChanged:'Language changed',toastCurrencyChanged:'Currency changed',toastTzChanged:'Timezone changed'
+        toastOn:'Turned on',toastOff:'Turned off',toastLangChanged:'Language changed',toastCurrencyChanged:'Currency changed',toastTzChanged:'Timezone changed',
+        checkoutTitle:'Scan to pay for Premium',checkoutLoading:'Creating payment request…',checkoutError:'Something went wrong, please try again',
+        checkoutAmount:'Amount:',checkoutRef:'Reference:',checkoutExpiry:'Expires:',
+        checkoutUploadLabel:'Upload the slip after paying',checkoutSubmit:'Submit slip for review',checkoutSubmitting:'Submitting…'
       }
     };
     function t(key){const dict=I18N[prefs.language]||I18N['ไทย'];return dict[key]}
@@ -385,11 +394,67 @@
       openSettingsSheet(html,title);
       document.querySelectorAll('[data-pick]').forEach(el=>el.onclick=()=>{onPick(el.dataset.pick);closeSettingsSheet()});
     }
-    // เปิดแชท LINE 1:1 เพื่อสมัคร/จัดการ Premium — ระบบนี้ไม่มีหน้าชำระเงินบนเว็บ
-    // การสมัครทำได้เฉพาะทางแชท LINE เท่านั้น (พิมพ์ "สมัครพรีเมียม") ดู README/ARCHITECTURE
-    function goToLineUpgrade(){
-      if(subscription.lineOaLink){window.open(subscription.lineOaLink,'_blank');return}
-      openSettingsSheet('<div class="notice">'+esc(t('upgradeHowBody'))+'</div>',t('upgradeHowTitle'));
+    // เปิดหน้าสมัคร Premium ในเว็บ: สร้าง payment session + โชว์ QR PromptPay ให้จ่าย แล้วอัปโหลดสลิปตรวจสอบ
+    // ใช้ backend endpoint เดียวกับที่ฝั่ง LINE ใช้ (/api/premium/checkout, /api/premium/slip)
+    // สลิปทุกใบต้องผ่านการตรวจสอบ/รอแอดมินอนุมัติเสมอ — เว็บไม่ได้ auto-approve เอง (ดู ARCHITECTURE.md)
+    let checkoutSession=null;
+    async function goToLineUpgrade(){
+      openSettingsSheet('<div class="notice">'+esc(t('checkoutLoading'))+'</div>',t('upgradeHowTitle'));
+      try{
+        const res=await api('/api/premium/checkout',{method:'POST'});
+        if(res.alreadyPremium){
+          openSettingsSheet('<div class="notice">'+t('planPremiumBody')(fmtExpiry(res.expiresAt))+'</div>',t('planHeaderTitle'));
+          await loadData();
+          return;
+        }
+        checkoutSession=res;
+        renderCheckoutSheet();
+      }catch(e){
+        const lineFallback=subscription.lineOaLink?'<div class="actions"><button class="secondary" style="flex:1" id="lineFallbackBtn">'+esc(t('openLineChat'))+'</button></div>':'';
+        openSettingsSheet('<div class="notice">'+esc(e.message||t('checkoutError'))+'</div>'+lineFallback,t('upgradeHowTitle'));
+        const fb=document.getElementById('lineFallbackBtn');if(fb)fb.onclick=()=>window.open(subscription.lineOaLink,'_blank');
+      }
+    }
+    function renderCheckoutSheet(){
+      const s=checkoutSession;
+      const html=
+        '<div class="checkout-qr"><img src="'+esc(s.qrImageUrl+query)+'" alt="PromptPay QR" width="220" height="220"></div>'
+        +'<div class="notice" style="margin-top:12px">'+esc(t('checkoutAmount'))+' <strong class="num">'+fmt(s.amount)+'</strong><br>'+esc(t('checkoutRef'))+' '+esc(s.referenceId)+'<br>'+esc(t('checkoutExpiry'))+' '+esc(fmtExpiry(s.expiresAt)||'')+'</div>'
+        +'<div class="field"><label>'+esc(t('checkoutUploadLabel'))+'</label><input type="file" id="slipInput" accept="image/*"></div>'
+        +'<div id="slipStatus"></div>'
+        +'<div class="actions"><button class="primary" style="flex:1" id="slipSubmit" disabled>'+esc(t('checkoutSubmit'))+'</button></div>';
+      openSettingsSheet(html,t('checkoutTitle'));
+      const fileInput=document.getElementById('slipInput'),submitBtn=document.getElementById('slipSubmit'),statusEl=document.getElementById('slipStatus');
+      let picked=null;
+      fileInput.onchange=()=>{picked=fileInput.files[0]||null;submitBtn.disabled=!picked};
+      submitBtn.onclick=async()=>{
+        if(!picked)return;
+        submitBtn.disabled=true;submitBtn.textContent=t('checkoutSubmitting');statusEl.innerHTML='';
+        try{
+          const base64=await fileToBase64(picked);
+          const result=await api('/api/premium/slip',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sessionId:s.sessionId,mime:picked.type,base64})});
+          statusEl.innerHTML='<div class="notice">'+esc(result.message)+'</div>';
+          toast(result.message);
+          await loadData();
+          if(result.outcome==='VERIFIED'||result.outcome==='PENDING_REVIEW'){
+            checkoutSession=null;
+            setTimeout(()=>{closeSettingsSheet();render()},1400);
+          }else{
+            submitBtn.disabled=false;submitBtn.textContent=t('checkoutSubmit');
+          }
+        }catch(e){
+          statusEl.innerHTML='<div class="notice">'+esc(e.message||t('checkoutError'))+'</div>';
+          submitBtn.disabled=false;submitBtn.textContent=t('checkoutSubmit');
+        }
+      };
+    }
+    function fileToBase64(file){
+      return new Promise((resolve,reject)=>{
+        const reader=new FileReader();
+        reader.onload=()=>resolve(String(reader.result).split(',')[1]||'');
+        reader.onerror=()=>reject(new Error(t('checkoutError')));
+        reader.readAsDataURL(file);
+      });
     }
     function bindSettings(){
       document.querySelectorAll('[data-toggle]').forEach(tg=>tg.onclick=()=>{
@@ -487,5 +552,4 @@
   </script>
 </body>
 </html>
-
 
