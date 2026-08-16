@@ -230,7 +230,7 @@
     let page='summary',filter='all',transactions=[],dashboard=null,budgets={},recurring=[],loaded=false;
     const PALETTE=['#7a2b3d','#4b6a58','#a6772e','#5c7a9e','#8a5a3f','#6b5490','#a15a6e','#557a6a'];
     const PREFS_KEY='panuan-prefs';
-    const prefs=Object.assign({categoryMemory:true,dailyReminder:false,language:'ไทย',currency:'บาท (฿)',timezone:'Bangkok (GMT+7)'},JSON.parse(localStorage.getItem(PREFS_KEY)||'{}'));
+    const prefs=Object.assign({categoryMemory:true,dailyReminder:false,reminderTime:'20:00',language:'ไทย',currency:'บาท (฿)',timezone:'Bangkok (GMT+7)'},JSON.parse(localStorage.getItem(PREFS_KEY)||'{}'));
     function savePrefs(){localStorage.setItem(PREFS_KEY,JSON.stringify(prefs))}
     let subscription={plan:'FREE',active:false,expiresAt:null,lineOaLink:null};
 
@@ -241,7 +241,7 @@
         proTag:'✦ Pro',proTitle:'ปลดล็อกทุกลูกเล่น',proDesc:'ไม่มีโฆษณาก่อนเข้าแดชบอร์ด จัดหมวดด้วย AI และแจ้งเตือนไม่จำกัด',proTitleActive:'คุณเป็นสมาชิก Pro อยู่แล้ว',proDescActive:'ขอบคุณที่อุดหนุนยายจันทร์นะคะ ✦',upgradeBtn:'อัปเกรดเป็น Pro',manageBtn:'จัดการสมาชิก',
         sectionCategory:'หมวดและงบ',categoryMemoryTitle:'จัดหมวดด้วยความจำ',categoryMemoryOn:'จำหมวดจากชื่อรายการที่เคยพิมพ์',categoryMemoryOff:'ปิดอยู่ — พิมพ์หมวดเองทุกครั้ง',
         recurringTitle:'จดประจำ',recurringCount:n=>n+' รายการที่ตั้งไว้',recurringEmpty:'ยังไม่มีรายการประจำ',
-        sectionNotify:'การแจ้งเตือน',dailyReminderTitle:'เตือนจดประจำวัน',dailyReminderOn:'แจ้งเตือนทุกวัน 20:00 น.',dailyReminderOff:'ปิดอยู่',
+        sectionNotify:'การแจ้งเตือน',dailyReminderTitle:'เตือนจดประจำวัน',dailyReminderOn:time=>'แจ้งเตือนทุกวัน '+time+' น.',dailyReminderOff:'ปิดอยู่',reminderTimeRow:'เวลาแจ้งเตือน',reminderSheetTitle:'ตั้งเวลาแจ้งเตือน',reminderSheetLead:'ยายจันทร์จะทักในแชท LINE ตามเวลานี้ทุกวัน ถ้าวันนั้นยังไม่ได้จดอะไรเลย',reminderSave:'บันทึกเวลา',toastReminderSaved:'บันทึกเวลาแจ้งเตือนแล้ว',
         sectionMember:'สมาชิก',planTitle:'แพ็กเกจของฉัน',planSub:'ดูสิทธิ์และวันหมดอายุ',billingTitle:'ประวัติการชำระเงิน',billingSub:'ดูใบเสร็จย้อนหลัง',
         sectionGeneral:'ทั่วไป',languageTitle:'ภาษา',currencyTitle:'สกุลเงิน',timezoneTitle:'โซนเวลา',
         sectionLine:'ใช้ใน LINE',lineNotice:'พิมพ์ “ค่าอาหาร 80”, “เงินเดือน 15000”, “สรุปเดือนนี้” หรือ “เว็บ” ในแชตกับยายจันทร์ได้ ข้อมูลจะอัปเดตที่หน้านี้',
@@ -273,7 +273,7 @@
         proTag:'✦ Pro',proTitle:'Unlock everything',proDesc:'No ads before the dashboard, AI category matching, and unlimited reminders',proTitleActive:'You already have Pro',proDescActive:'Thank you for supporting ยายจันทร์ ✦',upgradeBtn:'Upgrade to Pro',manageBtn:'Manage membership',
         sectionCategory:'Categories & Budgets',categoryMemoryTitle:'Smart category memory',categoryMemoryOn:'Remembers categories from past entries',categoryMemoryOff:'Off — you\u2019ll type the category every time',
         recurringTitle:'Recurring entries',recurringCount:n=>n+' entries set',recurringEmpty:'No recurring entries yet',
-        sectionNotify:'Notifications',dailyReminderTitle:'Daily logging reminder',dailyReminderOn:'Reminds you every day at 20:00',dailyReminderOff:'Off',
+        sectionNotify:'Notifications',dailyReminderTitle:'Daily logging reminder',dailyReminderOn:time=>'Reminds you every day at '+time,dailyReminderOff:'Off',reminderTimeRow:'Reminder time',reminderSheetTitle:'Set reminder time',reminderSheetLead:'ยายจันทร์ will message you on LINE at this time each day if you haven\u2019t logged anything yet',reminderSave:'Save time',toastReminderSaved:'Reminder time saved',
         sectionMember:'Membership',planTitle:'My plan',planSub:'View benefits and expiry date',billingTitle:'Payment history',billingSub:'View past receipts',
         sectionGeneral:'General',languageTitle:'Language',currencyTitle:'Currency',timezoneTitle:'Timezone',
         sectionLine:'Using LINE',lineNotice:'You can type "food 80", "salary 15000", "summary this month", or "web" to ยายจันทร์ in chat. This page will update automatically.',
@@ -405,7 +405,8 @@
       +'</section>'
       +'<div class="section-label">'+esc(t('sectionNotify'))+'</div>'
       +'<section class="panel" style="padding:6px 17px">'
-        +settingRow({icon:'🔔',title:t('dailyReminderTitle'),sub:prefs.dailyReminder?t('dailyReminderOn'):t('dailyReminderOff'),right:'toggle',id:'dailyReminder'})
+        +settingRow({icon:'🔔',title:t('dailyReminderTitle'),sub:prefs.dailyReminder?t('dailyReminderOn')(prefs.reminderTime):t('dailyReminderOff'),right:'toggle',id:'dailyReminder'})
+        +(prefs.dailyReminder?settingRow({icon:'⏰',title:t('reminderTimeRow'),sub:'',right:'value',id:'reminderTime',value:prefs.reminderTime}):'')
       +'</section>'
       +'<div class="section-label">'+esc(t('sectionMember'))+'</div>'
       +'<section class="panel" style="padding:6px 17px">'
@@ -507,10 +508,14 @@
       });
     }
     function bindSettings(){
-      document.querySelectorAll('[data-toggle]').forEach(tg=>tg.onclick=()=>{
+      document.querySelectorAll('[data-toggle]').forEach(tg=>tg.onclick=async()=>{
         const id=tg.dataset.toggle;prefs[id]=!prefs[id];savePrefs();
         tg.classList.toggle('on',prefs[id]);tg.setAttribute('aria-checked',String(prefs[id]));
         toast(prefs[id]?t('toastOn'):t('toastOff'));
+        if(id==='dailyReminder'){
+          try{await api('/api/reminder',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({enabled:prefs.dailyReminder,time:prefs.reminderTime})})}
+          catch(e){prefs[id]=!prefs[id];savePrefs();toast(e.message||t('genericError'))}
+        }
         render();
       });
       const upgrade=document.getElementById('upgradeBtn');if(upgrade)upgrade.onclick=goToLineUpgrade;
@@ -522,6 +527,7 @@
           if(id==='language')return radioSheet(t('langSheetTitle'),['ไทย','English'],prefs.language,v=>{prefs.language=v;savePrefs();toast(I18N[v].toastLangChanged);document.documentElement.lang=v==='English'?'en':'th';render()});
           if(id==='currency')return radioSheet(t('currencySheetTitle'),['บาท (฿)','ดอลลาร์สหรัฐ ($)'],prefs.currency,v=>{prefs.currency=v;savePrefs();toast(t('toastCurrencyChanged'));render()});
           if(id==='timezone')return radioSheet(t('tzSheetTitle'),['Bangkok (GMT+7)','London (GMT+0)','Tokyo (GMT+9)'],prefs.timezone,v=>{prefs.timezone=v;savePrefs();toast(t('toastTzChanged'));render()});
+          if(id==='reminderTime')return openReminderTimeSheet();
           if(id==='recurring')return openRecurringSheet();
           if(id==='plan'){
             const isPremium=subscription.active;
@@ -534,6 +540,28 @@
           if(id==='billing')return openSettingsSheet('<div class="empty"><span class="emoji">🧾</span>'+esc(t('billingEmpty'))+'</div>',t('billingHeaderTitle'));
         };
       });
+    }
+    // แผงเลือกเวลาแจ้งเตือน — เลือกชั่วโมง/นาทีแยกกันแบบ scroll list ง่าย ๆ ให้ทัชง่ายบนมือถือ ไม่ใช้ <input type=time> เพราะ UI แต่ละแพลตฟอร์มไม่เหมือนกันและคุมสไตล์ไม่ได้
+    function openReminderTimeSheet(){
+      const [curH,curM]=prefs.reminderTime.split(':');
+      const hours=Array.from({length:24},(_,i)=>String(i).padStart(2,'0'));
+      const minutes=['00','15','30','45'];
+      const html='<p class="lead" style="margin-top:0">'+esc(t('reminderSheetLead'))+'</p>'
+        +'<div style="display:flex;gap:10px;align-items:center;justify-content:center;padding:8px 0">'
+          +'<select id="reminderHour" style="font-size:22px;font-weight:800;padding:8px 10px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--ink)">'+hours.map(h=>'<option value="'+h+'"'+(h===curH?' selected':'')+'>'+h+'</option>').join('')+'</select>'
+          +'<strong style="font-size:22px">:</strong>'
+          +'<select id="reminderMinute" style="font-size:22px;font-weight:800;padding:8px 10px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--ink)">'+minutes.map(m=>'<option value="'+m+'"'+(m===curM?' selected':'')+'>'+m+'</option>').join('')+'</select>'
+        +'</div>'
+        +'<div class="actions"><button class="primary" style="flex:1" id="reminderTimeSave">'+esc(t('reminderSave'))+'</button></div>';
+      openSettingsSheet(html,t('reminderSheetTitle'));
+      document.getElementById('reminderTimeSave').onclick=async()=>{
+        const time=document.getElementById('reminderHour').value+':'+document.getElementById('reminderMinute').value;
+        const btn=document.getElementById('reminderTimeSave');btn.disabled=true;btn.textContent='…';
+        try{
+          await api('/api/reminder',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({enabled:prefs.dailyReminder,time})});
+          prefs.reminderTime=time;savePrefs();toast(t('toastReminderSaved'));closeSettingsSheet();render();
+        }catch(e){btn.disabled=false;btn.textContent=t('reminderSave');toast(e.message||t('genericError'))}
+      };
     }
     function openRecurringSheet(){
       const html=(recurring&&recurring.length?recurring.map(x=>'<div class="row"><div><strong>'+esc(x.description)+'</strong><div class="meta">'+esc(t('recurringEvery'))+' '+x.day+' · '+esc(x.category)+'</div></div><div style="display:flex;align-items:center;gap:8px"><span class="amount num '+x.type+'">'+fmt(x.amount)+'</span><button class="danger" data-recurring="'+x.id+'">'+esc(t('deleteBtn'))+'</button></div></div>').join(''):'<div class="empty"><span class="emoji">⟳</span>'+esc(t('recurringEmptySheet'))+'</div>')
@@ -573,7 +601,14 @@
       const download=document.getElementById('download');if(download)download.onclick=()=>{location.href='/api/transactions/export'+query;toast(t('exportingCsv'))};
       view.querySelectorAll('.save-budget').forEach(b=>b.onclick=async()=>{const category=b.dataset.category,input=view.querySelector('[data-budget="'+CSS.escape(category)+'"]');b.textContent='…';await api('/api/budgets/'+encodeURIComponent(category),{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({amount:Number(input.value)})});toast(t('budgetSaved')(category));await loadData()});
     }
-    async function loadData(){[dashboard,transactions,budgets,recurring,subscription]=await Promise.all([api('/api/dashboard'),api('/api/transactions').then(x=>x.transactions),api('/api/budgets').then(x=>x.budgets),api('/api/recurring').then(x=>x.recurring).catch(()=>[]),api('/api/subscription').catch(()=>subscription)]);loaded=true;render()}
+    async function loadData(){
+      const [reminderPrefs]=await Promise.all([
+        api('/api/reminder').catch(()=>null),
+        Promise.all([api('/api/dashboard'),api('/api/transactions').then(x=>x.transactions),api('/api/budgets').then(x=>x.budgets),api('/api/recurring').then(x=>x.recurring).catch(()=>[]),api('/api/subscription').catch(()=>subscription)]).then(r=>{[dashboard,transactions,budgets,recurring,subscription]=r})
+      ]);
+      if(reminderPrefs){prefs.dailyReminder=Boolean(reminderPrefs.dailyReminder);prefs.reminderTime=reminderPrefs.reminderTime||prefs.reminderTime;savePrefs()}
+      loaded=true;render();
+    }
     function categorySuggestions(){
       const list=document.getElementById('catList');if(!list)return;
       const cats=[...new Set(transactions.map(x=>x.category))];
@@ -603,5 +638,4 @@
   </script>
 </body>
 </html>
-
 
