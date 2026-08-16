@@ -211,18 +211,18 @@
     <header class="top" id="topbar">
       <div class="brandmark">
         <div class="seal" id="seal">จ</div>
-        <div><div class="brand">ยายจันทร์</div><div class="sub">สมุดบัญชีที่เชื่อมกับ LINE</div></div>
+        <div><div class="brand" id="brandName">ยายจันทร์</div><div class="sub" id="brandSub">สมุดบัญชีที่เชื่อมกับ LINE</div></div>
       </div>
-      <span class="status" id="statusPill"><i class="dot"></i>เชื่อมข้อมูลแล้ว</span>
+      <span class="status" id="statusPill"><i class="dot"></i><span id="statusText">เชื่อมข้อมูลแล้ว</span></span>
     </header>
-    <div class="ptr" id="ptr"><span class="spinner"></span>กำลังรีเฟรช…</div>
+    <div class="ptr" id="ptr"><span class="spinner"></span><span id="ptrText">กำลังรีเฟรช…</span></div>
     <section id="view"></section>
   </main>
   <button class="fab" id="addButton" aria-label="เพิ่มรายการ">+</button>
-  <nav class="nav" aria-label="เมนูหลัก">
-    <button data-page="summary"><i>⌂</i>สรุป</button><button data-page="analysis"><i>▥</i>วิเคราะห์</button><button data-page="budgets"><i>◴</i>งบ</button><button data-page="transactions"><i>☷</i>รายการ</button><button data-page="settings"><i>⚙</i>ตั้งค่า</button>
+  <nav class="nav" aria-label="เมนูหลัก" id="mainNav">
+    <button data-page="summary"><i>⌂</i><span data-nav-label>สรุป</span></button><button data-page="analysis"><i>▥</i><span data-nav-label>วิเคราะห์</span></button><button data-page="budgets"><i>◴</i><span data-nav-label>งบ</span></button><button data-page="transactions"><i>☷</i><span data-nav-label>รายการ</span></button><button data-page="settings"><i>⚙</i><span data-nav-label>ตั้งค่า</span></button>
   </nav>
-  <div class="modal" id="modal"><form class="sheet" id="transactionForm"><div class="sheet-grip"></div><h2 id="formTitle">เพิ่มรายการ</h2><div class="field"><label for="type">ประเภท</label><select id="type"><option value="expense">รายจ่าย</option><option value="income">รายรับ</option></select></div><div class="field"><label for="description">ชื่อรายการ</label><input id="description" required placeholder="เช่น ค่าอาหาร"></div><div class="field"><label for="amount">จำนวนเงิน (บาท)</label><input id="amount" required type="number" min="0.01" step="0.01"></div><div class="field"><label for="category">หมวดหมู่</label><input id="category" required placeholder="เช่น อาหาร" list="catList"><datalist id="catList"></datalist></div><div class="field"><label for="createdAt">วันที่และเวลา</label><input id="createdAt" required type="datetime-local"></div><input id="transactionId" type="hidden"><div class="actions"><button class="danger hidden" id="deleteButton" type="button">ลบ</button><button class="secondary" id="cancelButton" type="button">ยกเลิก</button><button class="primary" type="submit">บันทึก</button></div></form></div>
+  <div class="modal" id="modal"><form class="sheet" id="transactionForm"><div class="sheet-grip"></div><h2 id="formTitle">เพิ่มรายการ</h2><div class="field"><label for="type" id="formTypeLabel">ประเภท</label><select id="type"><option value="expense" id="formExpenseOpt">รายจ่าย</option><option value="income" id="formIncomeOpt">รายรับ</option></select></div><div class="field"><label for="description" id="formDescLabel">ชื่อรายการ</label><input id="description" required placeholder="เช่น ค่าอาหาร"></div><div class="field"><label for="amount" id="formAmountLabel">จำนวนเงิน (บาท)</label><input id="amount" required type="number" min="0.01" step="0.01"></div><div class="field"><label for="category" id="formCategoryLabel">หมวดหมู่</label><input id="category" required placeholder="เช่น อาหาร" list="catList"><datalist id="catList"></datalist></div><div class="field"><label for="createdAt" id="formDateLabel">วันที่และเวลา</label><input id="createdAt" required type="datetime-local"></div><input id="transactionId" type="hidden"><div class="actions"><button class="danger hidden" id="deleteButton" type="button">ลบ</button><button class="secondary" id="cancelButton" type="button">ยกเลิก</button><button class="primary" type="submit" id="submitButton">บันทึก</button></div></form></div>
   <div class="modal" id="settingsModal"><div class="sheet" id="settingsSheet"></div></div>
   <div class="toast" id="toast"></div>
   <script>
@@ -254,7 +254,19 @@
         toastOn:'เปิดใช้งานแล้ว',toastOff:'ปิดใช้งานแล้ว',toastLangChanged:'เปลี่ยนภาษาแล้ว',toastCurrencyChanged:'เปลี่ยนสกุลเงินแล้ว',toastTzChanged:'เปลี่ยนโซนเวลาแล้ว',
         checkoutTitle:'สแกนจ่ายเพื่อสมัคร Premium',checkoutLoading:'กำลังสร้างรายการชำระเงิน…',checkoutError:'เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง',
         checkoutAmount:'จำนวนเงิน:',checkoutRef:'เลขอ้างอิง:',checkoutExpiry:'หมดอายุ:',
-        checkoutUploadLabel:'อัปโหลดรูปสลิปหลังชำระเงินแล้ว',checkoutSubmit:'ส่งสลิปเพื่อตรวจสอบ',checkoutSubmitting:'กำลังส่ง…'
+        checkoutUploadLabel:'อัปโหลดรูปสลิปหลังชำระเงินแล้ว',checkoutSubmit:'ส่งสลิปเพื่อตรวจสอบ',checkoutSubmitting:'กำลังส่ง…',
+        appName:'ยายจันทร์',appTitle:'ยายจันทร์ — สมุดบัญชี',appSub:'สมุดบัญชีที่เชื่อมกับ LINE',statusConnected:'เชื่อมข้อมูลแล้ว',refreshing:'กำลังรีเฟรช…',dataRefreshed:'อัปเดตข้อมูลแล้ว',
+        addEntry:'เพิ่มรายการ',editEntry:'แก้ไขรายการ',navSummary:'สรุป',navAnalysis:'วิเคราะห์',navBudgets:'งบ',navTransactions:'รายการ',navSettings:'ตั้งค่า',
+        formType:'ประเภท',formExpense:'รายจ่าย',formIncome:'รายรับ',formDescription:'ชื่อรายการ',formDescPlaceholder:'เช่น ค่าอาหาร',formAmount:'จำนวนเงิน (บาท)',formCategory:'หมวดหมู่',formCategoryPlaceholder:'เช่น อาหาร',formDate:'วันที่และเวลา',
+        deleteBtn:'ลบ',cancelBtn:'ยกเลิก',saveBtn:'บันทึก',
+        loading:'กำลังโหลด…',income:'รายรับ',expense:'รายจ่าย',balance:'คงเหลือสุทธิ',byCategory:'ใช้จ่ายตามหมวด',recentEntries:'รายการล่าสุด',noExpenseThisMonth:'ยังไม่มีรายจ่ายในเดือนนี้',totalLabel:'รวม',categoryPieAria:'สัดส่วนรายจ่ายตามหมวด',
+        analysisTitle:'วิเคราะห์',analysisLead:'ดูแนวโน้มรายรับและรายจ่าย 6 เดือนล่าสุด',monthlyTrend:'แนวโน้มรายเดือน',noHistory:'ยังไม่มีข้อมูลย้อนหลัง',trendAria:'เทียบรายรับรายจ่ายย้อนหลัง',observation:'ข้อสังเกต',observationBody:'ข้อมูลจากหน้าเว็บและข้อความที่ส่งให้ LINE ยายจันทร์ จะถูกเก็บในบัญชีเดียวกันทันที',
+        budgetsTitle:'หมวดและงบ',budgetsLead:'กำหนดวงเงินรายเดือนแยกตามหมวด',budgetPanelTitle:'งบประมาณ',budgetSpent:'ใช้แล้ว',budgetOf:'จาก',budgetSave:'บันทึก',budgetEmpty:'เพิ่มรายจ่ายก่อน แล้วหมวดจะปรากฏที่นี่',budgetSaved:n=>'บันทึกงบ'+n+'แล้ว',
+        transTitle:'รายการ',transLead:'ปัดซ้ายเพื่อลบ หรือแตะเพื่อแก้ไข',filterAll:'ทั้งหมด',filterExpense:'รายจ่าย',filterIncome:'รายรับ',exportCsv:'⇩ ส่งออก CSV',exportingCsv:'กำลังส่งออก CSV',noEntries:'ยังไม่มีรายการ กด + เพื่อเริ่มบันทึก',noEntriesShort:'ยังไม่มีรายการ',
+        deleteEntryConfirm:'ลบรายการนี้?',entryDeleted:'ลบรายการแล้ว',entrySaved:'บันทึกรายการแล้ว',entryUpdated:'แก้ไขรายการแล้ว',
+        recurringSheetTitle:'จดประจำ',recurringEvery:'ทุกวันที่',addRecurringBtn:'+ เพิ่มรายการประจำ',recurringDeleteConfirm:'ลบรายการประจำ?',recurringDeleted:'ลบรายการประจำแล้ว',recurringAdded:'ตั้งรายการประจำแล้ว',recurringEmptySheet:'ยังไม่มีรายการประจำ',
+        promptRecurringDesc:'ชื่อรายการประจำ เช่น ค่าเช่า',promptRecurringAmount:'จำนวนเงิน (บาท)',promptRecurringCategory:'หมวดหมู่',promptRecurringCategoryDefault:'อื่น ๆ',promptRecurringDay:'บันทึกทุกวันที่ (1-31)',promptRecurringType:'กด OK = รายรับ, Cancel = รายจ่าย',invalidData:'ข้อมูลไม่ถูกต้อง',
+        loadError:n=>'เปิดข้อมูลไม่ได้: '+n,genericError:'ทำรายการไม่สำเร็จ',summaryTitle:'สรุปเดือนนี้',navAriaLabel:'เมนูหลัก'
       },
       'English':{
         settingsTitle:'Settings',settingsLead:'Manage recurring entries and customize your experience',
@@ -274,11 +286,49 @@
         toastOn:'Turned on',toastOff:'Turned off',toastLangChanged:'Language changed',toastCurrencyChanged:'Currency changed',toastTzChanged:'Timezone changed',
         checkoutTitle:'Scan to pay for Premium',checkoutLoading:'Creating payment request…',checkoutError:'Something went wrong, please try again',
         checkoutAmount:'Amount:',checkoutRef:'Reference:',checkoutExpiry:'Expires:',
-        checkoutUploadLabel:'Upload the slip after paying',checkoutSubmit:'Submit slip for review',checkoutSubmitting:'Submitting…'
+        checkoutUploadLabel:'Upload the slip after paying',checkoutSubmit:'Submit slip for review',checkoutSubmitting:'Submitting…',
+        appName:'Yai Chan',appTitle:'Yai Chan — Ledger',appSub:'A ledger connected to LINE',statusConnected:'Data connected',refreshing:'Refreshing…',dataRefreshed:'Data updated',
+        addEntry:'Add entry',editEntry:'Edit entry',navSummary:'Summary',navAnalysis:'Analysis',navBudgets:'Budgets',navTransactions:'Entries',navSettings:'Settings',
+        formType:'Type',formExpense:'Expense',formIncome:'Income',formDescription:'Description',formDescPlaceholder:'e.g. Lunch',formAmount:'Amount (THB)',formCategory:'Category',formCategoryPlaceholder:'e.g. Food',formDate:'Date & time',
+        deleteBtn:'Delete',cancelBtn:'Cancel',saveBtn:'Save',
+        loading:'Loading…',income:'Income',expense:'Expense',balance:'Net balance',byCategory:'Spending by category',recentEntries:'Recent entries',noExpenseThisMonth:'No expenses this month yet',totalLabel:'Total',categoryPieAria:'Spending share by category',
+        analysisTitle:'Analysis',analysisLead:'View income and expense trends for the last 6 months',monthlyTrend:'Monthly trend',noHistory:'No historical data yet',trendAria:'Income vs expense over time',observation:'Notes',observationBody:'Data from the website and messages sent to ยายจันทร์ on LINE are saved to the same account instantly',
+        budgetsTitle:'Categories & Budgets',budgetsLead:'Set a monthly limit for each category',budgetPanelTitle:'Budget',budgetSpent:'Spent',budgetOf:'of',budgetSave:'Save',budgetEmpty:'Add an expense first, and categories will appear here',budgetSaved:n=>'Saved budget for '+n,
+        transTitle:'Entries',transLead:'Swipe left to delete, or tap to edit',filterAll:'All',filterExpense:'Expense',filterIncome:'Income',exportCsv:'⇩ Export CSV',exportingCsv:'Exporting CSV',noEntries:'No entries yet — tap + to start logging',noEntriesShort:'No entries yet',
+        deleteEntryConfirm:'Delete this entry?',entryDeleted:'Entry deleted',entrySaved:'Entry saved',entryUpdated:'Entry updated',
+        recurringSheetTitle:'Recurring entries',recurringEvery:'Every day',addRecurringBtn:'+ Add recurring entry',recurringDeleteConfirm:'Delete this recurring entry?',recurringDeleted:'Recurring entry deleted',recurringAdded:'Recurring entry set',recurringEmptySheet:'No recurring entries yet',
+        promptRecurringDesc:'Recurring entry name, e.g. Rent',promptRecurringAmount:'Amount (THB)',promptRecurringCategory:'Category',promptRecurringCategoryDefault:'Other',promptRecurringDay:'Log on which day each month (1-31)',promptRecurringType:'Click OK = Income, Cancel = Expense',invalidData:'Invalid data',
+        loadError:n=>'Could not load data: '+n,genericError:'Action failed',summaryTitle:'This month',navAriaLabel:'Main menu'
       }
     };
     function t(key){const dict=I18N[prefs.language]||I18N['ไทย'];return dict[key]}
-    document.documentElement.lang=prefs.language==='English'?'en':'th';
+    function applyStaticI18n(){
+      document.documentElement.lang=prefs.language==='English'?'en':'th';
+      document.title=t('appTitle');
+      document.getElementById('brandName').textContent=t('appName');
+      document.getElementById('brandSub').textContent=t('appSub');
+      document.getElementById('statusText').textContent=t('statusConnected');
+      document.getElementById('ptrText').textContent=t('refreshing');
+      document.getElementById('addButton').setAttribute('aria-label',t('addEntry'));
+      document.getElementById('mainNav').setAttribute('aria-label',t('navAriaLabel'));
+      const navLabels=[t('navSummary'),t('navAnalysis'),t('navBudgets'),t('navTransactions'),t('navSettings')];
+      document.querySelectorAll('#mainNav [data-nav-label]').forEach((el,i)=>el.textContent=navLabels[i]);
+      document.getElementById('formTypeLabel').textContent=t('formType');
+      document.getElementById('formExpenseOpt').textContent=t('formExpense');
+      document.getElementById('formIncomeOpt').textContent=t('formIncome');
+      document.getElementById('formDescLabel').textContent=t('formDescription');
+      document.getElementById('description').setAttribute('placeholder',t('formDescPlaceholder'));
+      document.getElementById('formAmountLabel').textContent=t('formAmount');
+      document.getElementById('formCategoryLabel').textContent=t('formCategory');
+      document.getElementById('category').setAttribute('placeholder',t('formCategoryPlaceholder'));
+      document.getElementById('formDateLabel').textContent=t('formDate');
+      document.getElementById('deleteButton').textContent=t('deleteBtn');
+      document.getElementById('cancelButton').textContent=t('cancelBtn');
+      document.getElementById('submitButton').textContent=t('saveBtn');
+      const isEdit=!!document.getElementById('transactionId').value;
+      document.getElementById('formTitle').textContent=isEdit?t('editEntry'):t('addEntry');
+    }
+    applyStaticI18n();
 
     function animateNumber(el,to){
       const from=0,dur=650,start=performance.now(),isMoney=el.dataset.money==='1';
@@ -289,16 +339,16 @@
 
     function pieChart(categories){
       const total=categories.reduce((s,x)=>s+x.amount,0);
-      if(!total)return '<div class="empty"><span class="emoji">🌾</span>ยังไม่มีรายจ่ายในเดือนนี้</div>';
+      if(!total)return '<div class="empty"><span class="emoji">🌾</span>'+esc(t('noExpenseThisMonth'))+'</div>';
       const r=64,c=2*Math.PI*r;let offset=0;
       const segs=categories.map((x,i)=>{const frac=x.amount/total,dash=Math.max(frac*c,total?0.001:0),seg='<circle class="seg" cx="90" cy="90" r="'+r+'" fill="none" stroke="'+PALETTE[i%PALETTE.length]+'" stroke-width="28" stroke-dasharray="'+dash+' '+(c-dash)+'" stroke-dashoffset="'+(-offset)+'" transform="rotate(-90 90 90)" style="stroke-dasharray:0 '+c+';transition:stroke-dasharray .8s cubic-bezier(.22,1,.36,1) '+(i*70)+'ms" data-final="'+dash+' '+(c-dash)+'"></circle>';offset+=dash;return seg}).join('');
-      const svg='<svg viewBox="0 0 180 180" width="146" height="146" role="img" aria-label="สัดส่วนรายจ่ายตามหมวด">'+segs+'<circle cx="90" cy="90" r="44" fill="var(--card)"></circle><text x="90" y="86" text-anchor="middle" font-size="10" fill="var(--ink-soft)" font-weight="600">รวม</text><text x="90" y="102" text-anchor="middle" font-size="13" fill="var(--ink)" font-weight="800">'+fmt(total).replace('฿','').trim()+'</text></svg>';
+      const svg='<svg viewBox="0 0 180 180" width="146" height="146" role="img" aria-label="'+esc(t('categoryPieAria'))+'">'+segs+'<circle cx="90" cy="90" r="44" fill="var(--card)"></circle><text x="90" y="86" text-anchor="middle" font-size="10" fill="var(--ink-soft)" font-weight="600">'+esc(t('totalLabel'))+'</text><text x="90" y="102" text-anchor="middle" font-size="13" fill="var(--ink)" font-weight="800">'+fmt(total).replace('฿','').trim()+'</text></svg>';
       const legend='<div class="legend">'+categories.map((x,i)=>'<div class="legend-item"><span class="dot" style="background:'+PALETTE[i%PALETTE.length]+'"></span><span>'+esc(x.category)+'</span><span class="amt">'+Math.round(x.amount/total*100)+'% · '+fmt(x.amount)+'</span></div>').join('')+'</div>';
       setTimeout(()=>document.querySelectorAll('.seg').forEach(s=>{s.style.strokeDasharray=s.dataset.final}),30);
       return '<div class="chart-wrap">'+svg+legend+'</div>';
     }
     function barChart(history){
-      if(!history||!history.length)return '<div class="empty">ยังไม่มีข้อมูลย้อนหลัง</div>';
+      if(!history||!history.length)return '<div class="empty">'+esc(t('noHistory'))+'</div>';
       const w=320,h=150,pad=18,max=Math.max(...history.flatMap(x=>[x.income,x.expense]),1),groupW=w/history.length;
       const bars=history.map((x,i)=>{
         const gx=i*groupW,bw=(groupW-10)/2,ih=x.income/max*(h-pad),eh=x.expense/max*(h-pad),delay=i*55;
@@ -308,37 +358,37 @@
           '<text x="'+(gx+groupW/2).toFixed(1)+'" y="'+(h-2)+'" font-size="10" text-anchor="middle" fill="var(--ink-soft)">'+esc(x.label)+'</text>'+
         '</g>';
       }).join('');
-      return '<svg class="bar-chart" viewBox="0 0 '+w+' '+h+'" role="img" aria-label="เทียบรายรับรายจ่ายย้อนหลัง">'+bars+'</svg>';
+      return '<svg class="bar-chart" viewBox="0 0 '+w+' '+h+'" role="img" aria-label="'+esc(t('trendAria'))+'">'+bars+'</svg>';
     }
-    async function api(url,opt){const r=await fetch(url+(url.includes('?')?'&':'?')+'token='+encodeURIComponent(token||'')+'&u='+encodeURIComponent(uid||''),opt);if(!r.ok){const body=await r.json().catch(()=>({}));throw new Error(body.error||'ทำรายการไม่สำเร็จ')}return r.headers.get('content-type')?.includes('application/json')?r.json():r}
+    async function api(url,opt){const r=await fetch(url+(url.includes('?')?'&':'?')+'token='+encodeURIComponent(token||'')+'&u='+encodeURIComponent(uid||''),opt);if(!r.ok){const body=await r.json().catch(()=>({}));throw new Error(body.error||t('genericError'))}return r.headers.get('content-type')?.includes('application/json')?r.json():r}
     function local(dt){const d=new Date(dt||Date.now()),z=n=>String(n).padStart(2,'0');return d.getFullYear()+'-'+z(d.getMonth()+1)+'-'+z(d.getDate())+'T'+z(d.getHours())+':'+z(d.getMinutes())}
     function setPage(next){page=next;document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.page===page));document.getElementById('addButton').classList.toggle('hidden',page==='settings'||page==='budgets');render()}
 
     function skeletonSummary(){
-      return '<h1 class="view-title">สรุปเดือนนี้</h1><p class="lead">กำลังโหลด…</p>'
-        +'<div class="ledger skel-ledger">'+['รายรับ','รายจ่าย','คงเหลือสุทธิ'].map(()=>'<div class="ledger-row"><span class="skel k"></span><span class="skel v"></span></div>').join('')+'</div>'
+      return '<h1 class="view-title">'+esc(t('summaryTitle'))+'</h1><p class="lead">'+esc(t('loading'))+'</p>'
+        +'<div class="ledger skel-ledger">'+[t('income'),t('expense'),t('balance')].map(()=>'<div class="ledger-row"><span class="skel k"></span><span class="skel v"></span></div>').join('')+'</div>'
         +'<div class="cards">'+Array.from({length:3}).map(()=>'<div class="card skel-card"><span class="skel"></span><span class="skel"></span></div>').join('')+'</div>'
-        +'<section class="panel"><h2>ใช้จ่ายตามหมวด</h2><div style="display:flex;justify-content:center;padding:14px 0"><div class="skel" style="width:146px;height:146px;border-radius:50%"></div></div></section>'
-        +'<section class="panel"><h2>รายการล่าสุด</h2>'+skeletonRows(4)+'</section>';
+        +'<section class="panel"><h2>'+esc(t('byCategory'))+'</h2><div style="display:flex;justify-content:center;padding:14px 0"><div class="skel" style="width:146px;height:146px;border-radius:50%"></div></div></section>'
+        +'<section class="panel"><h2>'+esc(t('recentEntries'))+'</h2>'+skeletonRows(4)+'</section>';
     }
     function skeletonRows(n){return Array.from({length:n}).map(()=>'<div class="skel-row"><div><span class="skel t1"></span><span class="skel t2"></span></div><span class="skel amt"></span></div>').join('')}
 
     function summaryPage(){
       const d=dashboard||{income:0,expense:0,balance:0,categories:[],history:[]};
-      return '<h1 class="view-title">สรุปเดือนนี้</h1><p class="lead">'+esc(d.label||'กำลังโหลด')+'</p>'
+      return '<h1 class="view-title">'+esc(t('summaryTitle'))+'</h1><p class="lead">'+esc(d.label||t('loading'))+'</p>'
         +'<div class="ledger">'
-          +'<div class="ledger-row income"><span class="k"><i style="background:var(--sage)"></i>รายรับ</span><span class="v num" data-money="1" data-target="'+d.income+'">฿0</span></div>'
-          +'<div class="ledger-row expense"><span class="k"><i style="background:var(--wine)"></i>รายจ่าย</span><span class="v num" data-money="1" data-target="'+d.expense+'">฿0</span></div>'
-          +'<div class="ledger-row balance"><span class="k">คงเหลือสุทธิ</span><span class="v num" data-money="1" data-target="'+d.balance+'">฿0</span></div>'
+          +'<div class="ledger-row income"><span class="k"><i style="background:var(--sage)"></i>'+esc(t('income'))+'</span><span class="v num" data-money="1" data-target="'+d.income+'">฿0</span></div>'
+          +'<div class="ledger-row expense"><span class="k"><i style="background:var(--wine)"></i>'+esc(t('expense'))+'</span><span class="v num" data-money="1" data-target="'+d.expense+'">฿0</span></div>'
+          +'<div class="ledger-row balance"><span class="k">'+esc(t('balance'))+'</span><span class="v num" data-money="1" data-target="'+d.balance+'">฿0</span></div>'
         +'</div>'
-        +'<section class="panel"><h2>ใช้จ่ายตามหมวด</h2>'+pieChart(d.categories)+'</section>'
-        +'<section class="panel"><h2>รายการล่าสุด</h2>'+recentRows(5)+'</section>';
+        +'<section class="panel"><h2>'+esc(t('byCategory'))+'</h2>'+pieChart(d.categories)+'</section>'
+        +'<section class="panel"><h2>'+esc(t('recentEntries'))+'</h2>'+recentRows(5)+'</section>';
     }
-    function analysisPage(){const d=dashboard||{history:[],categories:[]};return '<h1 class="view-title">วิเคราะห์</h1><p class="lead">ดูแนวโน้มรายรับและรายจ่าย 6 เดือนล่าสุด</p><section class="panel"><h2>แนวโน้มรายเดือน</h2><div class="chart-legend"><span><i class="dot" style="background:#4b6a58"></i>รายรับ</span><span><i class="dot" style="background:#7a2b3d"></i>รายจ่าย</span></div>'+barChart(d.history)+(d.history||[]).map((x,i)=>'<div class="chart-row stagger" style="animation-delay:'+(i*40)+'ms"><span>'+esc(x.label)+'</span><strong class="income num">+'+fmt(x.income)+'</strong><strong class="expense num">-'+fmt(x.expense)+'</strong></div>').join('')+'</section><section class="panel"><h2>ข้อสังเกต</h2><div class="notice">ข้อมูลจากหน้าเว็บและข้อความที่ส่งให้ LINE ยายจันทร์ จะถูกเก็บในบัญชีเดียวกันทันที</div></section>';}
-    function budgetsPage(){const thisMonth=new Date().toISOString().slice(0,7);const cats=[...new Set(transactions.filter(x=>x.type==='expense').map(x=>x.category).concat(Object.keys(budgets)))].sort();return '<h1 class="view-title">หมวดและงบ</h1><p class="lead">กำหนดวงเงินรายเดือนแยกตามหมวด</p><section class="panel"><h2>งบประมาณ</h2>'+(cats.length?cats.map((c,i)=>{const spent=transactions.filter(x=>x.type==='expense'&&x.category===c&&x.createdAt.slice(0,7)===thisMonth).reduce((s,x)=>s+x.amount,0),limit=budgets[c]||0,pct=limit?Math.min(100,spent/limit*100):0,over=limit>0&&spent>limit;return '<div class="stagger" style="animation-delay:'+(i*35)+'ms"><div class="budget"><div><strong>'+esc(c)+'</strong><div class="meta">ใช้แล้ว '+fmt(spent)+(limit?' จาก '+fmt(limit):'')+'</div></div><input aria-label="งบ '+esc(c)+'" data-budget="'+esc(c)+'" type="number" min="0" value="'+limit+'"><button class="primary save-budget" data-category="'+esc(c)+'">บันทึก</button></div>'+(limit?'<div class="budget-bar'+(over?' over':'')+'"><i style="width:'+pct+'%"></i></div>':'')+'</div>'}).join(''):'<div class="empty"><span class="emoji">🗂️</span>เพิ่มรายจ่ายก่อน แล้วหมวดจะปรากฏที่นี่</div>')+'</section>';}
-    function transactionPage(){const list=transactions.filter(x=>filter==='all'||x.type===filter);return '<h1 class="view-title">รายการ</h1><p class="lead">ปัดซ้ายเพื่อลบ หรือแตะเพื่อแก้ไข</p><div class="toolbar"><button class="'+(filter==='all'?'active':'')+'" data-filter="all">ทั้งหมด</button><button class="'+(filter==='expense'?'active':'')+'" data-filter="expense">รายจ่าย</button><button class="'+(filter==='income'?'active':'')+'" data-filter="income">รายรับ</button><button id="download">⇩ ส่งออก CSV</button></div><section class="panel">'+(list.length?list.map(row).join(''):'<div class="empty"><span class="emoji">📒</span>ยังไม่มีรายการ กด + เพื่อเริ่มบันทึก</div>')+'</section>';}
-    function recentRows(n){return transactions.length?transactions.slice(0,n).map(row).join(''):'<div class="empty"><span class="emoji">📒</span>ยังไม่มีรายการ</div>'}
-    function row(x,i){return '<div class="row-wrap" data-wrap-id="'+x.id+'"><div class="row-del" data-del="'+x.id+'">ลบ</div><article class="row stagger" style="animation-delay:'+((i||0)*30)+'ms" data-id="'+x.id+'"><div><strong>'+esc(x.description)+'</strong><div class="meta">'+new Date(x.createdAt).toLocaleString('th-TH',{dateStyle:'short',timeStyle:'short'})+' · '+esc(x.category)+'</div></div><span class="amount num '+x.type+'">'+(x.type==='income'?'+':'-')+fmt(x.amount)+'</span></article></div>'}
+    function analysisPage(){const d=dashboard||{history:[],categories:[]};return '<h1 class="view-title">'+esc(t('analysisTitle'))+'</h1><p class="lead">'+esc(t('analysisLead'))+'</p><section class="panel"><h2>'+esc(t('monthlyTrend'))+'</h2><div class="chart-legend"><span><i class="dot" style="background:#4b6a58"></i>'+esc(t('income'))+'</span><span><i class="dot" style="background:#7a2b3d"></i>'+esc(t('expense'))+'</span></div>'+barChart(d.history)+(d.history||[]).map((x,i)=>'<div class="chart-row stagger" style="animation-delay:'+(i*40)+'ms"><span>'+esc(x.label)+'</span><strong class="income num">+'+fmt(x.income)+'</strong><strong class="expense num">-'+fmt(x.expense)+'</strong></div>').join('')+'</section><section class="panel"><h2>'+esc(t('observation'))+'</h2><div class="notice">'+esc(t('observationBody'))+'</div></section>';}
+    function budgetsPage(){const thisMonth=new Date().toISOString().slice(0,7);const cats=[...new Set(transactions.filter(x=>x.type==='expense').map(x=>x.category).concat(Object.keys(budgets)))].sort();return '<h1 class="view-title">'+esc(t('budgetsTitle'))+'</h1><p class="lead">'+esc(t('budgetsLead'))+'</p><section class="panel"><h2>'+esc(t('budgetPanelTitle'))+'</h2>'+(cats.length?cats.map((c,i)=>{const spent=transactions.filter(x=>x.type==='expense'&&x.category===c&&x.createdAt.slice(0,7)===thisMonth).reduce((s,x)=>s+x.amount,0),limit=budgets[c]||0,pct=limit?Math.min(100,spent/limit*100):0,over=limit>0&&spent>limit;return '<div class="stagger" style="animation-delay:'+(i*35)+'ms"><div class="budget"><div><strong>'+esc(c)+'</strong><div class="meta">'+esc(t('budgetSpent'))+' '+fmt(spent)+(limit?' '+esc(t('budgetOf'))+' '+fmt(limit):'')+'</div></div><input aria-label="'+esc(t('budgetPanelTitle'))+' '+esc(c)+'" data-budget="'+esc(c)+'" type="number" min="0" value="'+limit+'"><button class="primary save-budget" data-category="'+esc(c)+'">'+esc(t('budgetSave'))+'</button></div>'+(limit?'<div class="budget-bar'+(over?' over':'')+'"><i style="width:'+pct+'%"></i></div>':'')+'</div>'}).join(''):'<div class="empty"><span class="emoji">🗂️</span>'+esc(t('budgetEmpty'))+'</div>')+'</section>';}
+    function transactionPage(){const list=transactions.filter(x=>filter==='all'||x.type===filter);return '<h1 class="view-title">'+esc(t('transTitle'))+'</h1><p class="lead">'+esc(t('transLead'))+'</p><div class="toolbar"><button class="'+(filter==='all'?'active':'')+'" data-filter="all">'+esc(t('filterAll'))+'</button><button class="'+(filter==='expense'?'active':'')+'" data-filter="expense">'+esc(t('filterExpense'))+'</button><button class="'+(filter==='income'?'active':'')+'" data-filter="income">'+esc(t('filterIncome'))+'</button><button id="download">'+esc(t('exportCsv'))+'</button></div><section class="panel">'+(list.length?list.map(row).join(''):'<div class="empty"><span class="emoji">📒</span>'+esc(t('noEntries'))+'</div>')+'</section>';}
+    function recentRows(n){return transactions.length?transactions.slice(0,n).map(row).join(''):'<div class="empty"><span class="emoji">📒</span>'+esc(t('noEntriesShort'))+'</div>'}
+    function row(x,i){return '<div class="row-wrap" data-wrap-id="'+x.id+'"><div class="row-del" data-del="'+x.id+'">'+esc(t('deleteBtn'))+'</div><article class="row stagger" style="animation-delay:'+((i||0)*30)+'ms" data-id="'+x.id+'"><div><strong>'+esc(x.description)+'</strong><div class="meta">'+new Date(x.createdAt).toLocaleString(prefs.language==='English'?'en-GB':'th-TH',{dateStyle:'short',timeStyle:'short'})+' · '+esc(x.category)+'</div></div><span class="amount num '+x.type+'">'+(x.type==='income'?'+':'-')+fmt(x.amount)+'</span></article></div>'}
 
     function fmtExpiry(iso){if(!iso)return null;try{return new Date(iso).toLocaleDateString(prefs.language==='English'?'en-GB':'th-TH',{day:'numeric',month:'long',year:'numeric'})}catch{return null}}
     function settingsPage(){
@@ -486,14 +536,15 @@
       });
     }
     function openRecurringSheet(){
-      const html=(recurring&&recurring.length?recurring.map(x=>'<div class="row"><div><strong>'+esc(x.description)+'</strong><div class="meta">ทุกวันที่ '+x.day+' · '+esc(x.category)+'</div></div><div style="display:flex;align-items:center;gap:8px"><span class="amount num '+x.type+'">'+fmt(x.amount)+'</span><button class="danger" data-recurring="'+x.id+'">ลบ</button></div></div>').join(''):'<div class="empty"><span class="emoji">⟳</span>ยังไม่มีรายการประจำ</div>')
-        +'<div class="actions"><button class="primary" style="flex:1" id="addRecurringSheet">+ เพิ่มรายการประจำ</button></div>';
-      openSettingsSheet(html,'จดประจำ');
-      document.querySelectorAll('[data-recurring]').forEach(b=>b.onclick=async()=>{if(confirm('ลบรายการประจำ?')){await api('/api/recurring/'+b.dataset.recurring,{method:'DELETE'});toast('ลบรายการประจำแล้ว');await loadData();openRecurringSheet()}});
+      const html=(recurring&&recurring.length?recurring.map(x=>'<div class="row"><div><strong>'+esc(x.description)+'</strong><div class="meta">'+esc(t('recurringEvery'))+' '+x.day+' · '+esc(x.category)+'</div></div><div style="display:flex;align-items:center;gap:8px"><span class="amount num '+x.type+'">'+fmt(x.amount)+'</span><button class="danger" data-recurring="'+x.id+'">'+esc(t('deleteBtn'))+'</button></div></div>').join(''):'<div class="empty"><span class="emoji">⟳</span>'+esc(t('recurringEmptySheet'))+'</div>')
+        +'<div class="actions"><button class="primary" style="flex:1" id="addRecurringSheet">'+esc(t('addRecurringBtn'))+'</button></div>';
+      openSettingsSheet(html,t('recurringSheetTitle'));
+      document.querySelectorAll('[data-recurring]').forEach(b=>b.onclick=async()=>{if(confirm(t('recurringDeleteConfirm'))){await api('/api/recurring/'+b.dataset.recurring,{method:'DELETE'});toast(t('recurringDeleted'));await loadData();openRecurringSheet()}});
       document.getElementById('addRecurringSheet').onclick=async()=>{await addRecurring();openRecurringSheet()};
     }
 
     function render(){
+      applyStaticI18n();
       if(!loaded){view.innerHTML=skeletonSummary();return}
       if(page==='summary')view.innerHTML=summaryPage();
       else if(page==='analysis')view.innerHTML=analysisPage();
@@ -513,14 +564,14 @@
         wrap.addEventListener('touchmove',e=>{if(!active)return;dx=e.touches[0].clientX-startX;if(dx<0)article.style.transform='translateX('+Math.max(dx,-90)+'px)'},{passive:true});
         wrap.addEventListener('touchend',()=>{active=false;article.style.transform='';wrap.classList.toggle('swiped',dx<-40);dx=0});
       });
-      view.querySelectorAll('[data-del]').forEach(b=>b.onclick=async(e)=>{e.stopPropagation();const id=b.dataset.del;if(confirm('ลบรายการนี้?')){await api('/api/transactions/'+id,{method:'DELETE'});toast('ลบรายการแล้ว');await loadData()}else{b.closest('.row-wrap').classList.remove('swiped')}});
+      view.querySelectorAll('[data-del]').forEach(b=>b.onclick=async(e)=>{e.stopPropagation();const id=b.dataset.del;if(confirm(t('deleteEntryConfirm'))){await api('/api/transactions/'+id,{method:'DELETE'});toast(t('entryDeleted'));await loadData()}else{b.closest('.row-wrap').classList.remove('swiped')}});
     }
     function bindPage(){
       view.querySelectorAll('[data-filter]').forEach(b=>b.onclick=()=>{filter=b.dataset.filter;render()});
       view.querySelectorAll('.row-wrap .row').forEach(r=>r.onclick=()=>{if(r.closest('.row-wrap').classList.contains('swiped')){r.closest('.row-wrap').classList.remove('swiped');return}openForm(transactions.find(x=>x.id===r.dataset.id))});
       bindSwipe();
-      const download=document.getElementById('download');if(download)download.onclick=()=>{location.href='/api/transactions/export'+query;toast('กำลังส่งออก CSV')};
-      view.querySelectorAll('.save-budget').forEach(b=>b.onclick=async()=>{const category=b.dataset.category,input=view.querySelector('[data-budget="'+CSS.escape(category)+'"]');b.textContent='…';await api('/api/budgets/'+encodeURIComponent(category),{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({amount:Number(input.value)})});toast('บันทึกงบ'+category+'แล้ว');await loadData()});
+      const download=document.getElementById('download');if(download)download.onclick=()=>{location.href='/api/transactions/export'+query;toast(t('exportingCsv'))};
+      view.querySelectorAll('.save-budget').forEach(b=>b.onclick=async()=>{const category=b.dataset.category,input=view.querySelector('[data-budget="'+CSS.escape(category)+'"]');b.textContent='…';await api('/api/budgets/'+encodeURIComponent(category),{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({amount:Number(input.value)})});toast(t('budgetSaved')(category));await loadData()});
     }
     async function loadData(){[dashboard,transactions,budgets,recurring,subscription]=await Promise.all([api('/api/dashboard'),api('/api/transactions').then(x=>x.transactions),api('/api/budgets').then(x=>x.budgets),api('/api/recurring').then(x=>x.recurring).catch(()=>[]),api('/api/subscription').catch(()=>subscription)]);loaded=true;render()}
     function categorySuggestions(){
@@ -528,15 +579,15 @@
       const cats=[...new Set(transactions.map(x=>x.category))];
       list.innerHTML=cats.map(c=>'<option value="'+esc(c)+'">').join('');
     }
-    function openForm(x){const f=document.getElementById('transactionForm');f.reset();document.getElementById('transactionId').value=x?.id||'';document.getElementById('formTitle').textContent=x?'แก้ไขรายการ':'เพิ่มรายการ';type.value=x?.type||'expense';description.value=x?.description||'';amount.value=x?.amount||'';category.value=x?.category||'';createdAt.value=local(x?.createdAt);deleteButton.classList.toggle('hidden',!x);categorySuggestions();modal.classList.add('open');
-      if(prefs.categoryMemory&&!x){description.oninput=()=>{const m=transactions.find(t=>t.description.trim().toLowerCase()===description.value.trim().toLowerCase());if(m&&!category.value)category.value=m.category}}
+    function openForm(x){const f=document.getElementById('transactionForm');f.reset();document.getElementById('transactionId').value=x?.id||'';document.getElementById('formTitle').textContent=x?t('editEntry'):t('addEntry');type.value=x?.type||'expense';description.value=x?.description||'';amount.value=x?.amount||'';category.value=x?.category||'';createdAt.value=local(x?.createdAt);deleteButton.classList.toggle('hidden',!x);categorySuggestions();modal.classList.add('open');
+      if(prefs.categoryMemory&&!x){description.oninput=()=>{const m=transactions.find(tx=>tx.description.trim().toLowerCase()===description.value.trim().toLowerCase());if(m&&!category.value)category.value=m.category}}
     }
     document.getElementById('addButton').onclick=()=>openForm();
     document.getElementById('cancelButton').onclick=()=>modal.classList.remove('open');
-    document.getElementById('transactionForm').onsubmit=async e=>{e.preventDefault();const id=transactionId.value,body={type:type.value,description:description.value.trim(),amount:Number(amount.value),category:category.value.trim(),createdAt:new Date(createdAt.value).toISOString()};await api(id?'/api/transactions/'+id:'/api/transactions',{method:id?'PUT':'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});modal.classList.remove('open');toast(id?'แก้ไขรายการแล้ว':'บันทึกรายการแล้ว');await loadData()};
-    document.getElementById('deleteButton').onclick=async()=>{if(confirm('ลบรายการนี้?')){await api('/api/transactions/'+transactionId.value,{method:'DELETE'});modal.classList.remove('open');toast('ลบรายการแล้ว');await loadData()}};
+    document.getElementById('transactionForm').onsubmit=async e=>{e.preventDefault();const id=transactionId.value,body={type:type.value,description:description.value.trim(),amount:Number(amount.value),category:category.value.trim(),createdAt:new Date(createdAt.value).toISOString()};await api(id?'/api/transactions/'+id:'/api/transactions',{method:id?'PUT':'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});modal.classList.remove('open');toast(id?t('entryUpdated'):t('entrySaved'));await loadData()};
+    document.getElementById('deleteButton').onclick=async()=>{if(confirm(t('deleteEntryConfirm'))){await api('/api/transactions/'+transactionId.value,{method:'DELETE'});modal.classList.remove('open');toast(t('entryDeleted'));await loadData()}};
     document.getElementById('settingsModal').addEventListener('click',e=>{if(e.target.id==='settingsModal')closeSettingsSheet()});
-    async function addRecurring(){const description=prompt('ชื่อรายการประจำ เช่น ค่าเช่า');if(!description)return;const amount=Number(prompt('จำนวนเงิน (บาท)'));const category=prompt('หมวดหมู่','อื่น ๆ');const day=Number(prompt('บันทึกทุกวันที่ (1-31)',String(new Date().getDate())));if(!Number.isFinite(amount)||amount<=0||!category||!Number.isInteger(day)||day<1||day>31)return alert('ข้อมูลไม่ถูกต้อง');await api('/api/recurring',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({type:confirm('กด OK = รายรับ, Cancel = รายจ่าย')?'income':'expense',description,amount,category,day})});toast('ตั้งรายการประจำแล้ว')}
+    async function addRecurring(){const description=prompt(t('promptRecurringDesc'));if(!description)return;const amount=Number(prompt(t('promptRecurringAmount')));const category=prompt(t('promptRecurringCategory'),t('promptRecurringCategoryDefault'));const day=Number(prompt(t('promptRecurringDay'),String(new Date().getDate())));if(!Number.isFinite(amount)||amount<=0||!category||!Number.isInteger(day)||day<1||day>31)return alert(t('invalidData'));await api('/api/recurring',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({type:confirm(t('promptRecurringType'))?'income':'expense',description,amount,category,day})});toast(t('recurringAdded'))}
     document.querySelectorAll('.nav button').forEach(b=>b.onclick=()=>setPage(b.dataset.page));
     document.addEventListener('scroll',()=>document.getElementById('topbar').classList.toggle('scrolled',window.scrollY>4),{passive:true});
 
@@ -544,12 +595,13 @@
       let startY=0,pulling=false;const ptr=document.getElementById('ptr');
       document.addEventListener('touchstart',e=>{if(window.scrollY<=0){startY=e.touches[0].clientY;pulling=true}},{passive:true});
       document.addEventListener('touchmove',e=>{if(!pulling)return;const dy=e.touches[0].clientY-startY;if(dy>60)ptr.classList.add('show')},{passive:true});
-      document.addEventListener('touchend',async()=>{if(pulling&&ptr.classList.contains('show')){const seal=document.getElementById('seal');seal.classList.add('spin');await loadData().catch(()=>{});setTimeout(()=>seal.classList.remove('spin'),500);ptr.classList.remove('show');toast('อัปเดตข้อมูลแล้ว')}pulling=false},{passive:true});
+      document.addEventListener('touchend',async()=>{if(pulling&&ptr.classList.contains('show')){const seal=document.getElementById('seal');seal.classList.add('spin');await loadData().catch(()=>{});setTimeout(()=>seal.classList.remove('spin'),500);ptr.classList.remove('show');toast(t('dataRefreshed'))}pulling=false},{passive:true});
     })();
 
     render();
-    loadData().then(()=>setPage('summary')).catch(e=>{view.innerHTML='<div class="notice">เปิดข้อมูลไม่ได้: '+esc(e.message)+'</div>'});
+    loadData().then(()=>setPage('summary')).catch(e=>{view.innerHTML='<div class="notice">'+esc(t('loadError')(e.message))+'</div>'});
   </script>
 </body>
 </html>
+
 
