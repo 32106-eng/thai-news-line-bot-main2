@@ -406,6 +406,99 @@ async function saveConfirmedSlipTx({ userId, type, merchant, amount, authorId, i
   await saveUser(userId, user);
   return { user, tx };
 }
+// การ์ด Flex Message สำหรับคำสั่ง "เว็บ" — สรุปยอดเดือนนี้แบบย่อ + ปุ่มใหญ่กดเข้าแดชบอร์ด
+// แทนที่ข้อความ text ธรรมดา + ลิงก์ยาว ๆ แบบเดิม ให้ธีมตรงกับ txFlexMessage/receiptConfirmFlexMessage
+function dashboardFlexMessage(user, { isGroupChat, dashboardUrl } = {}) {
+  const pink = "#D23283";
+  const cream = "#FBF3EC";
+  const gold = "#C79A46";
+  const month = user.transactions.filter((tx) => sameMonth(tx.createdAt));
+  const t = totals(month);
+  const balance = t.income - t.expense;
+  const ratio = t.income > 0 ? Math.min(t.expense / t.income, 1) : (t.expense > 0 ? 1 : 0);
+  const overspending = t.income > 0 && t.expense > t.income;
+  const scopeLabel = isGroupChat ? "กองกลางของกลุ่มนี้" : "ของคุณเดือนนี้";
+
+  return {
+    type: "flex",
+    altText: "เปิดแดชบอร์ด 📊 ดูสรุปบัญชีแบบเต็มรูปแบบได้ที่เว็บ",
+    contents: {
+      type: "bubble",
+      size: "kilo",
+      body: {
+        type: "box",
+        layout: "vertical",
+        backgroundColor: cream,
+        paddingAll: "20px",
+        contents: [
+          // หัวการ์ด: ไอคอนดวงตรา + ชื่อ
+          {
+            type: "box",
+            layout: "horizontal",
+            spacing: "sm",
+            contents: [
+              {
+                type: "box", layout: "vertical", width: "34px", height: "34px", cornerRadius: "17px",
+                backgroundColor: pink, justifyContent: "center", alignItems: "center",
+                contents: [{ type: "text", text: "จ", size: "sm", weight: "bold", color: "#FFFFFF", align: "center", gravity: "center" }]
+              },
+              {
+                type: "box", layout: "vertical", flex: 1, justifyContent: "center",
+                contents: [
+                  { type: "text", text: "แดชบอร์ด", size: "lg", weight: "bold", color: "#3A3540" },
+                  { type: "text", text: scopeLabel, size: "xxs", color: "#9B94A0" }
+                ]
+              }
+            ]
+          },
+          { type: "separator", margin: "lg", color: "#EFE3D8" },
+          // สรุปรายรับ/รายจ่าย/คงเหลือ แบบย่อ
+          {
+            type: "box",
+            layout: "horizontal",
+            margin: "lg",
+            contents: [
+              { type: "box", layout: "vertical", flex: 1, contents: [
+                { type: "text", text: "รายรับ", size: "xxs", color: "#9B94A0" },
+                { type: "text", text: money(t.income), size: "md", weight: "bold", color: "#4B7A63", margin: "xs" }
+              ] },
+              { type: "box", layout: "vertical", flex: 1, contents: [
+                { type: "text", text: "รายจ่าย", size: "xxs", color: "#9B94A0", align: "center" },
+                { type: "text", text: money(t.expense), size: "md", weight: "bold", color: pink, align: "center", margin: "xs" }
+              ] },
+              { type: "box", layout: "vertical", flex: 1, contents: [
+                { type: "text", text: "คงเหลือ", size: "xxs", color: "#9B94A0", align: "end" },
+                { type: "text", text: money(balance), size: "md", weight: "bold", color: "#3A3540", align: "end", margin: "xs" }
+              ] }
+            ]
+          },
+          // แถบสัดส่วนรายจ่ายเทียบรายรับเดือนนี้ (เส้นบาง ๆ โทนทอง)
+          {
+            type: "box", layout: "horizontal", height: "6px", cornerRadius: "3px", margin: "md",
+            contents: [
+              { type: "box", layout: "vertical", flex: Math.max(Math.round(ratio * 100), ratio > 0 ? 3 : 0), backgroundColor: overspending ? pink : gold, contents: [] },
+              { type: "box", layout: "vertical", flex: Math.max(100 - Math.round(ratio * 100), 0), backgroundColor: "#F1E7DC", contents: [] }
+            ]
+          },
+          { type: "text", text: overspending ? "เดือนนี้ใช้เกินรายรับแล้วนะ" : `ใช้ไป ${Math.round(ratio * 100)}% ของรายรับเดือนนี้`, size: "xxs", color: overspending ? pink : "#9B94A0", margin: "sm" },
+          { type: "separator", margin: "lg", color: "#EFE3D8" },
+          { type: "text", text: "เปิดเว็บดูกราฟ ประวัติย้อนหลัง และตั้งงบประมาณแบบเต็ม ๆ ได้เลย", size: "xs", color: "#9B94A0", margin: "lg", wrap: true }
+        ]
+      },
+      footer: dashboardUrl
+        ? {
+            type: "box", layout: "vertical", paddingAll: "12px", backgroundColor: cream,
+            contents: [
+              { type: "button", style: "primary", height: "sm", color: pink, action: { type: "uri", label: "เปิดแดชบอร์ด", uri: dashboardUrl } }
+            ]
+          }
+        : {
+            type: "box", layout: "vertical", paddingAll: "12px", backgroundColor: cream,
+            contents: [{ type: "text", text: "ยังไม่ได้ตั้งค่า PUBLIC_BASE_URL สำหรับแดชบอร์ด", size: "xs", color: "#9B94A0", wrap: true }]
+          }
+    }
+  };
+}
 // คำนวณยอดรวมหมวดนี้ในเดือนนี้ เทียบกับงบที่ตั้งไว้ (ถ้ามี) สำหรับ progress bar ใน Flex Message
 function budgetProgressFor(user, tx) {
   if (tx.type !== "expense") return null;
@@ -416,7 +509,7 @@ function budgetProgressFor(user, tx) {
 }
 function dashboardEditUrl(userId) {
   const base = process.env.PUBLIC_BASE_URL?.replace(/\/$/, "");
-  return base ? `${base}/dashboard?token=${perUserToken(userId)}&u=${encodeURIComponent(userId)}` : null;
+  return base ? `${base}/dashboard-gate?token=${perUserToken(userId)}&u=${encodeURIComponent(userId)}` : null;
 }
 // ดึงชื่อสมาชิกกลุ่ม (ใช้แสดง "ใครจดอะไรบ้าง" ในกองกลาง) — ใช้ได้เฉพาะ userId ที่เคยส่งข้อความในกลุ่มนี้มาก่อน
 // (ข้อจำกัดของ LINE: ดึงรายชื่อสมาชิกกลุ่มทั้งหมดล่วงหน้าไม่ได้ ต้องรู้ userId ก่อนถึงจะสอบถามโปรไฟล์ได้)
@@ -541,6 +634,63 @@ document.querySelector('.close').onclick=()=>history.length>1?history.back():loc
 const dashboard = await fs.readFile(path.join(__dirname, "dashboard.html"), "utf8");
 
 app.get("/health", (_req, res) => res.json({ ok: true, app: "pa-nuan" }));
+
+// หน้าคั่นก่อนเข้าแดชบอร์ด (interstitial) — ผู้ใช้ทั่วไปต้อง "ดูโฆษณา" ก่อนเข้าทุกครั้ง
+// Premium ข้ามไปที่ /dashboard ตรงเลย ไม่ต้องผ่านหน้านี้
+// หมายเหตุ: ช่อง #ad-slot เป็น placeholder เท่านั้น — ยังไม่ได้ต่อ ad network จริง (เช่น AdSense/Adsterra)
+// ให้ใส่สคริปต์ของ network ที่เลือกไว้ในคอมเมนต์ที่ระบุไว้ด้านล่างทีหลัง
+function adInterstitial({ nextUrl, waitSeconds }) {
+  return String.raw`<!doctype html>
+<html lang="th"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>กำลังเข้าสู่แดชบอร์ด | ยายจันทร์</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#0f0e12;color:#fff;font-family:system-ui,-apple-system,"Noto Sans Thai",sans-serif;min-height:100vh;display:flex;flex-direction:column}
+.wrap{max-width:440px;margin:0 auto;width:100%;min-height:100vh;display:flex;flex-direction:column}
+.top{padding:16px 20px;display:flex;justify-content:space-between;align-items:center;color:#a09aa8;font-size:13px}
+.ad-slot{flex:1;margin:0 16px;border-radius:16px;background:linear-gradient(135deg,#25202c,#1a1720);border:1px dashed #43394f;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:8px;min-height:320px}
+.ad-slot b{font-size:15px;color:#c9a0d8}.ad-slot span{font-size:12px;color:#6f6878}
+.timer{text-align:center;padding:18px 20px 8px;font-size:13px;color:#a09aa8}
+.actions{padding:16px 20px 28px;display:flex;flex-direction:column;gap:10px}
+button{border:0;border-radius:12px;padding:14px;font:inherit;font-weight:700;font-size:15px}
+.skip{background:#2a2531;color:#5f5769}.skip.ready{background:#3a3244;color:#fff}
+.premium{background:linear-gradient(135deg,#D23283,#C79A46);color:#fff}
+</style><body><div class="wrap">
+<div class="top"><span>ยายจันทร์ 📒</span><span>โฆษณา</span></div>
+<div class="ad-slot" id="adSlot"><b>พื้นที่โฆษณา</b><span>ตรงนี้จะแสดงโฆษณาจริงเมื่อเปิดใช้งาน</span></div>
+<!-- TODO: ใส่สคริปต์ ad network จริงตรงนี้ (เช่น Google AdSense/Adsterra rewarded unit) แล้วยิง event ตอนดูจบไปแทนที่ setTimeout ด้านล่าง -->
+<div class="timer" id="timer">รอ ${waitSeconds} วินาที เพื่อข้ามโฆษณา…</div>
+<div class="actions">
+<button class="skip" id="skipBtn" disabled>ข้ามโฆษณา</button>
+<button class="premium" id="premiumBtn">สมัคร Premium เพื่อข้ามโฆษณาตลอดไป</button>
+</div>
+</div>
+<script>
+let remaining = ${waitSeconds};
+const timerEl = document.getElementById('timer'), skipBtn = document.getElementById('skipBtn');
+const tick = () => {
+  remaining -= 1;
+  if (remaining <= 0) {
+    timerEl.textContent = 'ข้ามได้แล้ว';
+    skipBtn.disabled = false; skipBtn.classList.add('ready');
+    clearInterval(interval);
+  } else {
+    timerEl.textContent = 'รอ ' + remaining + ' วินาที เพื่อข้ามโฆษณา…';
+  }
+};
+const interval = setInterval(tick, 1000);
+skipBtn.onclick = () => { if (!skipBtn.disabled) location.href = ${JSON.stringify(nextUrl)}; };
+document.getElementById('premiumBtn').onclick = () => { window.close(); };
+</script>
+</body></html>`;
+}
+app.get("/dashboard-gate", async (req, res) => {
+  if (!allowed(req)) return res.sendStatus(401);
+  const uid = req.query.u;
+  const query = `?token=${encodeURIComponent(req.query.token)}&u=${encodeURIComponent(uid)}`;
+  const premium = await subscriptionService.isPremium(uid).catch(() => false);
+  if (premium) return res.redirect(`/dashboard${query}`);
+  const waitSeconds = Number(process.env.DASHBOARD_AD_WAIT_SECONDS) || 5;
+  res.type("html").send(adInterstitial({ nextUrl: `/dashboard${query}`, waitSeconds }));
+});
 app.get("/dashboard", (req, res) => allowed(req) ? res.type("html").send(dashboard) : res.sendStatus(401));
 function transactionInput(body) {
   const type = body?.type === "income" ? "income" : body?.type === "expense" ? "expense" : null;
@@ -835,7 +985,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
     else if (text === "สรุปวันนี้") message = summary(user.transactions.filter((tx) => sameDay(tx.createdAt)), "วันนี้");
     else if (text === "สรุปเดือนนี้") { const month = user.transactions.filter((tx) => sameMonth(tx.createdAt)); message = `${summary(month, "เดือนนี้")}\n\n${advice(month)}`; }
     else if (text === "ลบล่าสุด") { const tx = user.transactions.pop(); if (tx) { await saveUser(userId, user); message = `ลบแล้ว: ${tx.description} ${money(tx.amount)} บาท`; } else message = "ยังไม่มีรายการให้ลบ"; }
-    else if (text === "เว็บ") { const base = process.env.PUBLIC_BASE_URL?.replace(/\/$/, ""); message = base ? `📊 แดชบอร์ด${isGroupChat ? "กองกลางของกลุ่มนี้" : "ส่วนตัวของคุณ"}\n${base}/dashboard?token=${perUserToken(userId)}&u=${encodeURIComponent(userId)}` : "ยังไม่ได้ตั้งค่า PUBLIC_BASE_URL สำหรับแดชบอร์ด"; }
+    else if (text === "เว็บ") message = dashboardFlexMessage(user, { isGroupChat, dashboardUrl: dashboardEditUrl(userId) });
     else {
       let tx = parse(text);
       if (tx) {
@@ -854,6 +1004,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
   }
 });
 app.listen(Number(process.env.PORT ?? 3000), () => console.log(`Ta Phin listening on ${process.env.PORT ?? 3000}`));
+
 
 
 
