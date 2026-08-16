@@ -229,6 +229,47 @@
     const PREFS_KEY='panuan-prefs';
     const prefs=Object.assign({categoryMemory:true,dailyReminder:false,language:'ไทย',currency:'บาท (฿)',timezone:'Bangkok (GMT+7)'},JSON.parse(localStorage.getItem(PREFS_KEY)||'{}'));
     function savePrefs(){localStorage.setItem(PREFS_KEY,JSON.stringify(prefs))}
+    let subscription={plan:'FREE',active:false,expiresAt:null,lineOaLink:null};
+
+    // ── i18n: หน้าตั้งค่าเท่านั้นที่มีสองภาษาตอนนี้ ─────────────────────────
+    const I18N={
+      'ไทย':{
+        settingsTitle:'ตั้งค่า',settingsLead:'จัดการรายการประจำ และปรับแต่งการใช้งาน',
+        proTag:'✦ Pro',proTitle:'ปลดล็อกทุกลูกเล่น',proDesc:'ไม่มีโฆษณาก่อนเข้าแดชบอร์ด จัดหมวดด้วย AI และแจ้งเตือนไม่จำกัด',proTitleActive:'คุณเป็นสมาชิก Pro อยู่แล้ว',proDescActive:'ขอบคุณที่อุดหนุนยายจันทร์นะคะ ✦',upgradeBtn:'อัปเกรดเป็น Pro',manageBtn:'จัดการสมาชิก',
+        sectionCategory:'หมวดและงบ',categoryMemoryTitle:'จัดหมวดด้วยความจำ',categoryMemoryOn:'จำหมวดจากชื่อรายการที่เคยพิมพ์',categoryMemoryOff:'ปิดอยู่ — พิมพ์หมวดเองทุกครั้ง',
+        recurringTitle:'จดประจำ',recurringCount:n=>n+' รายการที่ตั้งไว้',recurringEmpty:'ยังไม่มีรายการประจำ',
+        sectionNotify:'การแจ้งเตือน',dailyReminderTitle:'เตือนจดประจำวัน',dailyReminderOn:'แจ้งเตือนทุกวัน 20:00 น.',dailyReminderOff:'ปิดอยู่',
+        sectionMember:'สมาชิก',planTitle:'แพ็กเกจของฉัน',planSub:'ดูสิทธิ์และวันหมดอายุ',billingTitle:'ประวัติการชำระเงิน',billingSub:'ดูใบเสร็จย้อนหลัง',
+        sectionGeneral:'ทั่วไป',languageTitle:'ภาษา',currencyTitle:'สกุลเงิน',timezoneTitle:'โซนเวลา',
+        sectionLine:'ใช้ใน LINE',lineNotice:'พิมพ์ “ค่าอาหาร 80”, “เงินเดือน 15000”, “สรุปเดือนนี้” หรือ “เว็บ” ในแชตกับยายจันทร์ได้ ข้อมูลจะอัปเดตที่หน้านี้',
+        pillFree:'ฟรี',pillPro:'PRO',pillPremium:'Premium',
+        planFreeBody:'ตอนนี้ใช้แพ็กเกจฟรีอยู่ — มีโฆษณาก่อนเข้าแดชบอร์ด และจำกัดรายการประจำ อัปเกรดเป็น Pro เพื่อปลดล็อกทุกลูกเล่น',
+        planPremiumBody:expiresAt=>'คุณเป็นสมาชิก Premium อยู่แล้ว'+(expiresAt?'<br>ใช้งานได้ถึง '+expiresAt:''),
+        planHeaderTitle:'แพ็กเกจของฉัน',billingHeaderTitle:'ประวัติการชำระเงิน',billingEmpty:'ยังไม่มีประวัติการชำระเงิน',
+        upgradeHowTitle:'วิธีสมัคร Premium',upgradeHowBody:'การสมัครและชำระเงินต้องทำผ่านแชท LINE กับยายจันทร์เท่านั้น (แชทส่วนตัว 1:1) พิมพ์ “สมัครพรีเมียม” แล้วทำตามขั้นตอนได้เลย',
+        openLineChat:'เปิดแชท LINE',langSheetTitle:'ภาษา',currencySheetTitle:'สกุลเงิน',tzSheetTitle:'โซนเวลา',
+        toastOn:'เปิดใช้งานแล้ว',toastOff:'ปิดใช้งานแล้ว',toastLangChanged:'เปลี่ยนภาษาแล้ว',toastCurrencyChanged:'เปลี่ยนสกุลเงินแล้ว',toastTzChanged:'เปลี่ยนโซนเวลาแล้ว'
+      },
+      'English':{
+        settingsTitle:'Settings',settingsLead:'Manage recurring entries and customize your experience',
+        proTag:'✦ Pro',proTitle:'Unlock everything',proDesc:'No ads before the dashboard, AI category matching, and unlimited reminders',proTitleActive:'You already have Pro',proDescActive:'Thank you for supporting ยายจันทร์ ✦',upgradeBtn:'Upgrade to Pro',manageBtn:'Manage membership',
+        sectionCategory:'Categories & Budgets',categoryMemoryTitle:'Smart category memory',categoryMemoryOn:'Remembers categories from past entries',categoryMemoryOff:'Off — you\u2019ll type the category every time',
+        recurringTitle:'Recurring entries',recurringCount:n=>n+' entries set',recurringEmpty:'No recurring entries yet',
+        sectionNotify:'Notifications',dailyReminderTitle:'Daily logging reminder',dailyReminderOn:'Reminds you every day at 20:00',dailyReminderOff:'Off',
+        sectionMember:'Membership',planTitle:'My plan',planSub:'View benefits and expiry date',billingTitle:'Payment history',billingSub:'View past receipts',
+        sectionGeneral:'General',languageTitle:'Language',currencyTitle:'Currency',timezoneTitle:'Timezone',
+        sectionLine:'Using LINE',lineNotice:'You can type "food 80", "salary 15000", "summary this month", or "web" to ยายจันทร์ in chat. This page will update automatically.',
+        pillFree:'Free',pillPro:'PRO',pillPremium:'Premium',
+        planFreeBody:'You\u2019re currently on the Free plan — ads show before the dashboard and recurring entries are limited. Upgrade to Pro to unlock everything.',
+        planPremiumBody:expiresAt=>'You already have Premium'+(expiresAt?'<br>Valid until '+expiresAt:''),
+        planHeaderTitle:'My plan',billingHeaderTitle:'Payment history',billingEmpty:'No payment history yet',
+        upgradeHowTitle:'How to subscribe to Premium',upgradeHowBody:'Subscribing and payment can only be done through a 1:1 LINE chat with ยายจันทร์. Type "สมัครพรีเมียม" there and follow the steps.',
+        openLineChat:'Open LINE chat',langSheetTitle:'Language',currencySheetTitle:'Currency',tzSheetTitle:'Timezone',
+        toastOn:'Turned on',toastOff:'Turned off',toastLangChanged:'Language changed',toastCurrencyChanged:'Currency changed',toastTzChanged:'Timezone changed'
+      }
+    };
+    function t(key){const dict=I18N[prefs.language]||I18N['ไทย'];return dict[key]}
+    document.documentElement.lang=prefs.language==='English'?'en':'th';
 
     function animateNumber(el,to){
       const from=0,dur=650,start=performance.now(),isMoney=el.dataset.money==='1';
@@ -290,39 +331,44 @@
     function recentRows(n){return transactions.length?transactions.slice(0,n).map(row).join(''):'<div class="empty"><span class="emoji">📒</span>ยังไม่มีรายการ</div>'}
     function row(x,i){return '<div class="row-wrap" data-wrap-id="'+x.id+'"><div class="row-del" data-del="'+x.id+'">ลบ</div><article class="row stagger" style="animation-delay:'+((i||0)*30)+'ms" data-id="'+x.id+'"><div><strong>'+esc(x.description)+'</strong><div class="meta">'+new Date(x.createdAt).toLocaleString('th-TH',{dateStyle:'short',timeStyle:'short'})+' · '+esc(x.category)+'</div></div><span class="amount num '+x.type+'">'+(x.type==='income'?'+':'-')+fmt(x.amount)+'</span></article></div>'}
 
+    function fmtExpiry(iso){if(!iso)return null;try{return new Date(iso).toLocaleDateString(prefs.language==='English'?'en-GB':'th-TH',{day:'numeric',month:'long',year:'numeric'})}catch{return null}}
     function settingsPage(){
-      return '<h1 class="view-title">ตั้งค่า</h1><p class="lead">จัดการรายการประจำ และปรับแต่งการใช้งาน</p>'
-      +'<div class="pro-banner"><span class="tag">✦ Pro</span><h3>ปลดล็อกทุกลูกเล่น</h3><p>ไม่มีโฆษณาก่อนเข้าแดชบอร์ด จัดหมวดด้วย AI และแจ้งเตือนไม่จำกัด</p><button id="upgradeBtn">อัปเกรดเป็น Pro</button></div>'
-      +'<div class="section-label">หมวดและงบ</div>'
+      const isPremium=subscription.active;
+      const banner=isPremium
+        ? '<div class="pro-banner"><span class="tag">'+esc(t('pillPremium'))+'</span><h3>'+esc(t('proTitleActive'))+'</h3><p>'+esc(t('proDescActive'))+'</p><button id="upgradeBtn">'+esc(t('manageBtn'))+'</button></div>'
+        : '<div class="pro-banner"><span class="tag">'+esc(t('proTag'))+'</span><h3>'+esc(t('proTitle'))+'</h3><p>'+esc(t('proDesc'))+'</p><button id="upgradeBtn">'+esc(t('upgradeBtn'))+'</button></div>';
+      return '<h1 class="view-title">'+esc(t('settingsTitle'))+'</h1><p class="lead">'+esc(t('settingsLead'))+'</p>'
+      +banner
+      +'<div class="section-label">'+esc(t('sectionCategory'))+'</div>'
       +'<section class="panel" style="padding:6px 17px">'
-        +settingRow({icon:'✨',title:'จัดหมวดด้วยความจำ',sub:prefs.categoryMemory?'จำหมวดจากชื่อรายการที่เคยพิมพ์':'ปิดอยู่ — พิมพ์หมวดเองทุกครั้ง',right:'toggle',id:'categoryMemory',pro:true})
-        +settingRow({icon:'⟳',title:'จดประจำ',sub:(recurring&&recurring.length?recurring.length+' รายการที่ตั้งไว้':'ยังไม่มีรายการประจำ'),right:'chevron',id:'recurring'})
+        +settingRow({icon:'✨',title:t('categoryMemoryTitle'),sub:prefs.categoryMemory?t('categoryMemoryOn'):t('categoryMemoryOff'),right:'toggle',id:'categoryMemory',pro:true})
+        +settingRow({icon:'⟳',title:t('recurringTitle'),sub:(recurring&&recurring.length?t('recurringCount')(recurring.length):t('recurringEmpty')),right:'chevron',id:'recurring'})
       +'</section>'
-      +'<div class="section-label">การแจ้งเตือน</div>'
+      +'<div class="section-label">'+esc(t('sectionNotify'))+'</div>'
       +'<section class="panel" style="padding:6px 17px">'
-        +settingRow({icon:'🔔',title:'เตือนจดประจำวัน',sub:prefs.dailyReminder?'แจ้งเตือนทุกวัน 20:00 น.':'ปิดอยู่',right:'toggle',id:'dailyReminder'})
+        +settingRow({icon:'🔔',title:t('dailyReminderTitle'),sub:prefs.dailyReminder?t('dailyReminderOn'):t('dailyReminderOff'),right:'toggle',id:'dailyReminder'})
       +'</section>'
-      +'<div class="section-label">สมาชิก</div>'
+      +'<div class="section-label">'+esc(t('sectionMember'))+'</div>'
       +'<section class="panel" style="padding:6px 17px">'
-        +settingRow({icon:'👑',title:'แพ็กเกจของฉัน',sub:'ดูสิทธิ์และวันหมดอายุ',right:'pill',id:'plan'})
-        +settingRow({icon:'🧾',title:'ประวัติการชำระเงิน',sub:'ดูใบเสร็จย้อนหลัง',right:'chevron',id:'billing'})
+        +settingRow({icon:'👑',title:t('planTitle'),sub:t('planSub'),right:'pill',id:'plan',pillState:isPremium?'premium':'free'})
+        +settingRow({icon:'🧾',title:t('billingTitle'),sub:t('billingSub'),right:'chevron',id:'billing'})
       +'</section>'
-      +'<div class="section-label">ทั่วไป</div>'
+      +'<div class="section-label">'+esc(t('sectionGeneral'))+'</div>'
       +'<section class="panel" style="padding:6px 17px">'
-        +settingRow({icon:'🌐',title:'ภาษา',sub:'',right:'value',id:'language',value:prefs.language})
-        +settingRow({icon:'฿',title:'สกุลเงิน',sub:'',right:'value',id:'currency',value:prefs.currency})
-        +settingRow({icon:'🕐',title:'โซนเวลา',sub:'',right:'value',id:'timezone',value:prefs.timezone})
+        +settingRow({icon:'🌐',title:t('languageTitle'),sub:'',right:'value',id:'language',value:prefs.language})
+        +settingRow({icon:'฿',title:t('currencyTitle'),sub:'',right:'value',id:'currency',value:prefs.currency})
+        +settingRow({icon:'🕐',title:t('timezoneTitle'),sub:'',right:'value',id:'timezone',value:prefs.timezone})
       +'</section>'
-      +'<div class="section-label">ใช้ใน LINE</div>'
-      +'<section class="panel"><div class="notice">พิมพ์ “ค่าอาหาร 80”, “เงินเดือน 15000”, “สรุปเดือนนี้” หรือ “เว็บ” ในแชตกับยายจันทร์ได้ ข้อมูลจะอัปเดตที่หน้านี้</div></section>';
+      +'<div class="section-label">'+esc(t('sectionLine'))+'</div>'
+      +'<section class="panel"><div class="notice">'+esc(t('lineNotice'))+'</div></section>';
     }
     function settingRow(o){
       const icon=o.icon,title=o.title,sub=o.sub,right=o.right,id=o.id,value=o.value,pro=o.pro;
       const rightHtml = right==='toggle' ? '<button class="toggle '+(prefs[id]?'on':'')+'" data-toggle="'+id+'" role="switch" aria-checked="'+!!prefs[id]+'" aria-label="'+esc(title)+'"></button>'
         : right==='chevron' ? '<span class="chev">›</span>'
-        : right==='pill' ? '<span class="pill free">ฟรี</span><span class="chev">›</span>'
+        : right==='pill' ? '<span class="pill '+(o.pillState==='premium'?'pro':'free')+'">'+esc(o.pillState==='premium'?t('pillPremium'):t('pillFree'))+'</span><span class="chev">›</span>'
         : '<span class="si-right">'+esc(value)+'<span class="chev">›</span></span>';
-      return '<div class="setting-item" data-setting="'+id+'"><div class="si-main"><span class="si-icon">'+icon+'</span><div class="si-text"><strong>'+esc(title)+(pro?' <span class="pill pro">PRO</span>':'')+'</strong>'+(sub?'<span>'+esc(sub)+'</span>':'')+'</div></div>'+rightHtml+'</div>';
+      return '<div class="setting-item" data-setting="'+id+'"><div class="si-main"><span class="si-icon">'+icon+'</span><div class="si-text"><strong>'+esc(title)+(pro?' <span class="pill pro">'+esc(t('pillPro'))+'</span>':'')+'</strong>'+(sub?'<span>'+esc(sub)+'</span>':'')+'</div></div>'+rightHtml+'</div>';
     }
     function openSettingsSheet(html,title){
       const sheet=document.getElementById('settingsSheet');
@@ -339,25 +385,38 @@
       openSettingsSheet(html,title);
       document.querySelectorAll('[data-pick]').forEach(el=>el.onclick=()=>{onPick(el.dataset.pick);closeSettingsSheet()});
     }
+    // เปิดแชท LINE 1:1 เพื่อสมัคร/จัดการ Premium — ระบบนี้ไม่มีหน้าชำระเงินบนเว็บ
+    // การสมัครทำได้เฉพาะทางแชท LINE เท่านั้น (พิมพ์ "สมัครพรีเมียม") ดู README/ARCHITECTURE
+    function goToLineUpgrade(){
+      if(subscription.lineOaLink){window.open(subscription.lineOaLink,'_blank');return}
+      openSettingsSheet('<div class="notice">'+esc(t('upgradeHowBody'))+'</div>',t('upgradeHowTitle'));
+    }
     function bindSettings(){
-      document.querySelectorAll('[data-toggle]').forEach(t=>t.onclick=()=>{
-        const id=t.dataset.toggle;prefs[id]=!prefs[id];savePrefs();
-        t.classList.toggle('on',prefs[id]);t.setAttribute('aria-checked',String(prefs[id]));
-        toast(prefs[id]?'เปิดใช้งานแล้ว':'ปิดใช้งานแล้ว');
+      document.querySelectorAll('[data-toggle]').forEach(tg=>tg.onclick=()=>{
+        const id=tg.dataset.toggle;prefs[id]=!prefs[id];savePrefs();
+        tg.classList.toggle('on',prefs[id]);tg.setAttribute('aria-checked',String(prefs[id]));
+        toast(prefs[id]?t('toastOn'):t('toastOff'));
         render();
       });
-      const upgrade=document.getElementById('upgradeBtn');if(upgrade)upgrade.onclick=()=>{window.open('/upgrade'+query,'_blank')||toast('เปิดหน้าชำระเงินไม่ได้ ลองอีกครั้ง')};
+      const upgrade=document.getElementById('upgradeBtn');if(upgrade)upgrade.onclick=goToLineUpgrade;
       view.querySelectorAll('[data-setting]').forEach(el=>{
         const id=el.dataset.setting;
         if(el.querySelector('[data-toggle]'))return;
         el.onclick=(e)=>{
           if(e.target.closest('[data-toggle]'))return;
-          if(id==='language')return radioSheet('ภาษา',['ไทย','English'],prefs.language,v=>{prefs.language=v;savePrefs();toast('เปลี่ยนภาษาแล้ว');render()});
-          if(id==='currency')return radioSheet('สกุลเงิน',['บาท (฿)','ดอลลาร์สหรัฐ ($)'],prefs.currency,v=>{prefs.currency=v;savePrefs();toast('เปลี่ยนสกุลเงินแล้ว');render()});
-          if(id==='timezone')return radioSheet('โซนเวลา',['Bangkok (GMT+7)','London (GMT+0)','Tokyo (GMT+9)'],prefs.timezone,v=>{prefs.timezone=v;savePrefs();toast('เปลี่ยนโซนเวลาแล้ว');render()});
+          if(id==='language')return radioSheet(t('langSheetTitle'),['ไทย','English'],prefs.language,v=>{prefs.language=v;savePrefs();toast(I18N[v].toastLangChanged);document.documentElement.lang=v==='English'?'en':'th';render()});
+          if(id==='currency')return radioSheet(t('currencySheetTitle'),['บาท (฿)','ดอลลาร์สหรัฐ ($)'],prefs.currency,v=>{prefs.currency=v;savePrefs();toast(t('toastCurrencyChanged'));render()});
+          if(id==='timezone')return radioSheet(t('tzSheetTitle'),['Bangkok (GMT+7)','London (GMT+0)','Tokyo (GMT+9)'],prefs.timezone,v=>{prefs.timezone=v;savePrefs();toast(t('toastTzChanged'));render()});
           if(id==='recurring')return openRecurringSheet();
-          if(id==='plan'){openSettingsSheet('<div class="notice">ตอนนี้ใช้แพ็กเกจฟรีอยู่ — มีโฆษณาก่อนเข้าแดชบอร์ด และจำกัดรายการประจำ อัปเกรดเป็น Pro เพื่อปลดล็อกทุกลูกเล่น</div><div class="actions"><button class="primary" style="flex:1" id="planUpgrade">อัปเกรดเป็น Pro</button></div>','แพ็กเกจของฉัน');document.getElementById('planUpgrade').onclick=()=>window.open('/upgrade'+query,'_blank');return}
-          if(id==='billing')return openSettingsSheet('<div class="empty"><span class="emoji">🧾</span>ยังไม่มีประวัติการชำระเงิน</div>','ประวัติการชำระเงิน');
+          if(id==='plan'){
+            const isPremium=subscription.active;
+            const body=isPremium?t('planPremiumBody')(fmtExpiry(subscription.expiresAt)):t('planFreeBody');
+            const actionLabel=isPremium?t('manageBtn'):t('upgradeBtn');
+            openSettingsSheet('<div class="notice">'+body+'</div><div class="actions"><button class="primary" style="flex:1" id="planUpgrade">'+esc(actionLabel)+'</button></div>',t('planHeaderTitle'));
+            document.getElementById('planUpgrade').onclick=goToLineUpgrade;
+            return;
+          }
+          if(id==='billing')return openSettingsSheet('<div class="empty"><span class="emoji">🧾</span>'+esc(t('billingEmpty'))+'</div>',t('billingHeaderTitle'));
         };
       });
     }
@@ -398,7 +457,7 @@
       const download=document.getElementById('download');if(download)download.onclick=()=>{location.href='/api/transactions/export'+query;toast('กำลังส่งออก CSV')};
       view.querySelectorAll('.save-budget').forEach(b=>b.onclick=async()=>{const category=b.dataset.category,input=view.querySelector('[data-budget="'+CSS.escape(category)+'"]');b.textContent='…';await api('/api/budgets/'+encodeURIComponent(category),{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({amount:Number(input.value)})});toast('บันทึกงบ'+category+'แล้ว');await loadData()});
     }
-    async function loadData(){[dashboard,transactions,budgets,recurring]=await Promise.all([api('/api/dashboard'),api('/api/transactions').then(x=>x.transactions),api('/api/budgets').then(x=>x.budgets),api('/api/recurring').then(x=>x.recurring).catch(()=>[])]);loaded=true;render()}
+    async function loadData(){[dashboard,transactions,budgets,recurring,subscription]=await Promise.all([api('/api/dashboard'),api('/api/transactions').then(x=>x.transactions),api('/api/budgets').then(x=>x.budgets),api('/api/recurring').then(x=>x.recurring).catch(()=>[]),api('/api/subscription').catch(()=>subscription)]);loaded=true;render()}
     function categorySuggestions(){
       const list=document.getElementById('catList');if(!list)return;
       const cats=[...new Set(transactions.map(x=>x.category))];
@@ -428,4 +487,5 @@
   </script>
 </body>
 </html>
+
 
