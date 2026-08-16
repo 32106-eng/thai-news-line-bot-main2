@@ -135,7 +135,7 @@ const INCOME_WORDS = ["เงินเดือน", "รายรับ", "ร�
 // คำนำหน้าสั้น ๆ ที่หมายถึง "นี่คือรายรับ" เช่น "รับ 30", "+30", "จดรับ30"
 const INCOME_PREFIX = /^(?:\+|รับ)\s*(?=[0-9])|^จดรับ\s*(?=[0-9]|\s)/;
 
-function emptyUser() { return { transactions: [], recurring: [], budgets: {} }; }
+function emptyUser() { return { transactions: [], recurring: [], budgets: {}, dailyReminder: false, reminderTime: "20:00" }; }
 async function getUser(uid) {
   const snap = await usersCol.doc(String(uid)).get();
   return snap.exists ? { ...emptyUser(), ...snap.data() } : emptyUser();
@@ -611,6 +611,27 @@ async function pushWeeklySummaries() {
 // Every Sunday at 20:00 (Asia/Bangkok). Change the cron expression or set WEEKLY_SUMMARY_CRON in .env to adjust.
 cron.schedule(process.env.WEEKLY_SUMMARY_CRON ?? "0 20 * * 0", () => { pushWeeklySummaries().catch((error) => console.error("Weekly summary job failed:", error.message)); }, { timezone: "Asia/Bangkok" });
 
+// เตือนจดประจำวัน — ผู้ใช้ตั้งเวลาเองต่อคน (user.reminderTime, HH:mm ตามเวลาไทย) จากหน้าตั้งค่าเว็บ
+// รันทุกนาทีแล้วเทียบ "นาฬิกาไทยตอนนี้" กับเวลาที่แต่ละคนตั้งไว้ ไม่ใช่ cron ตายตัวแบบสรุปรายสัปดาห์
+// เพราะผู้ใช้แต่ละคนเลือกเวลาต่างกันได้ — ตรวจ dailyReminder===true เท่านั้น และข้ามคนที่จดรายการวันนี้ไปแล้ว (ไม่กวนซ้ำ)
+// หมายเหตุ: ถ้าเซิร์ฟเวอร์ sleep อยู่พอดีในนาทีนั้น (เช่น host แบบ free-tier ที่ sleep เมื่อไม่มี traffic)
+// การเตือนของนาทีนั้นจะไม่ยิง และจะไม่ยิงย้อนหลังให้เมื่อเซิร์ฟเวอร์ตื่นขึ้นมาอีกครั้ง
+function bangkokHHMM(date = new Date()) {
+  return new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Bangkok", hour: "2-digit", minute: "2-digit", hour12: false }).format(date);
+}
+async function pushDailyReminders() {
+  const nowHHMM = bangkokHHMM();
+  const snap = await usersCol.get(); // กรองในหน่วยความจำแทน compound where ฝั่ง Firestore เพื่อไม่ต้องสร้าง composite index เพิ่ม (เข้าคู่กับ pushWeeklySummaries)
+  for (const doc of snap.docs) {
+    const uid = doc.id, user = { ...emptyUser(), ...doc.data() };
+    if (!user.dailyReminder || (user.reminderTime ?? "20:00") !== nowHHMM) continue;
+    if ((user.transactions ?? []).some((tx) => sameDay(tx.createdAt))) continue; // จดวันนี้ไปแล้ว ไม่ต้องเตือนซ้ำ
+    try { await push(uid, "🔔 อย่าลืมจดรายรับรายจ่ายวันนี้นะคะ พิมพ์ เช่น “ค่าอาหาร 80” หรือ “เงินเดือน 15000” ได้เลย"); }
+    catch (error) { console.warn(`Daily reminder push failed for ${uid}:`, error.message); }
+  }
+}
+cron.schedule("* * * * *", () => { pushDailyReminders().catch((error) => console.error("Daily reminder job failed:", error.message)); }, { timezone: "Asia/Bangkok" });
+
 const legacyDashboard = String.raw`<!doctype html>
 <html lang="th"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>รายการ | ยายจันทร์</title>
 <style>
@@ -708,6 +729,13 @@ function recurringInput(body) {
   if (!type || !description || !category || !Number.isFinite(amount) || amount <= 0 || amount > 10_000_000 || !Number.isInteger(day) || day < 1 || day > 31) return null;
   return { type, description, category, amount, day };
 }
+// HH:mm ตามเวลาไทย เช่น "20:00" — ผู้ใช้ตั้งเองในหน้าตั้งค่า
+function reminderInput(body) {
+  const enabled = Boolean(body?.enabled);
+  const time = String(body?.time ?? "20:00").trim();
+  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) return null;
+  return { dailyReminder: enabled, reminderTime: time };
+}
 function applyRecurring(user) {
   user.recurring ??= [];
   const now = new Date(), key = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
@@ -741,6 +769,19 @@ app.put("/api/budgets/:category", express.json(), async (req, res) => {
   if (!category || !Number.isFinite(amount) || amount < 0 || amount > 10_000_000) return res.status(400).json({ error: "ข้อมูลงบประมาณไม่ถูกต้อง" });
   const uid = req.query.u, user = await getUser(uid); user.budgets ??= {}; user.budgets[category] = amount;
   await saveUser(uid, user); res.json({ category, amount });
+});
+// เตือนจดประจำวัน: ผู้ใช้ตั้งเปิด/ปิด และเวลาที่ต้องการเอง (HH:mm ตามเวลาไทย) — cron ทุกนาทีจะเช็คและ push ให้ (ดู pushDailyReminders)
+app.get("/api/reminder", async (req, res) => {
+  if (!allowed(req)) return res.sendStatus(401);
+  const user = await getUser(req.query.u);
+  res.json({ dailyReminder: Boolean(user.dailyReminder), reminderTime: user.reminderTime ?? "20:00" });
+});
+app.put("/api/reminder", express.json(), async (req, res) => {
+  if (!allowed(req)) return res.sendStatus(401);
+  const input = reminderInput(req.body); if (!input) return res.status(400).json({ error: "เวลาที่ตั้งไม่ถูกต้อง" });
+  const uid = req.query.u, user = await getUser(uid);
+  user.dailyReminder = input.dailyReminder; user.reminderTime = input.reminderTime;
+  await saveUser(uid, user); res.json(input);
 });
 app.post("/api/recurring", express.json(), async (req, res) => {
   if (!allowed(req)) return res.sendStatus(401);
