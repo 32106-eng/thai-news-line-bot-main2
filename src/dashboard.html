@@ -405,8 +405,8 @@
       +'</section>'
       +'<div class="section-label">'+esc(t('sectionNotify'))+'</div>'
       +'<section class="panel" style="padding:6px 17px">'
-        +settingRow({icon:'🔔',title:t('dailyReminderTitle'),sub:prefs.dailyReminder?t('dailyReminderOn')(prefs.reminderTime):t('dailyReminderOff'),right:'toggle',id:'dailyReminder'})
-        +(prefs.dailyReminder?settingRow({icon:'⏰',title:t('reminderTimeRow'),sub:'',right:'value',id:'reminderTime',value:prefs.reminderTime}):'')
+        +settingRow({icon:'🔔',title:t('dailyReminderTitle'),sub:prefs.dailyReminder?t('dailyReminderOn')(prefs.reminderTime):t('dailyReminderOff'),right:'toggle',id:'dailyReminder',pro:true})
+        +(prefs.dailyReminder&&subscription.active?settingRow({icon:'⏰',title:t('reminderTimeRow'),sub:'',right:'value',id:'reminderTime',value:prefs.reminderTime}):'')
       +'</section>'
       +'<div class="section-label">'+esc(t('sectionMember'))+'</div>'
       +'<section class="panel" style="padding:6px 17px">'
@@ -507,9 +507,12 @@
         reader.readAsDataURL(file);
       });
     }
+    const PRO_TOGGLES=['categoryMemory','dailyReminder']; // ตั้งค่าที่ต้องเป็น Premium ถึงเปิดได้ — non-premium แตะแล้วเด้งไปหน้าปลดล็อกแทน ไม่ให้เปิดเฉยๆ
     function bindSettings(){
       document.querySelectorAll('[data-toggle]').forEach(tg=>tg.onclick=async()=>{
-        const id=tg.dataset.toggle;prefs[id]=!prefs[id];savePrefs();
+        const id=tg.dataset.toggle;
+        if(PRO_TOGGLES.includes(id)&&!subscription.active&&!prefs[id])return openUpgradeSheet();
+        prefs[id]=!prefs[id];savePrefs();
         tg.classList.toggle('on',prefs[id]);tg.setAttribute('aria-checked',String(prefs[id]));
         toast(prefs[id]?t('toastOn'):t('toastOff'));
         if(id==='dailyReminder'){
@@ -529,20 +532,22 @@
           if(id==='timezone')return radioSheet(t('tzSheetTitle'),['Bangkok (GMT+7)','London (GMT+0)','Tokyo (GMT+9)'],prefs.timezone,v=>{prefs.timezone=v;savePrefs();toast(t('toastTzChanged'));render()});
           if(id==='reminderTime')return openReminderTimeSheet();
           if(id==='recurring')return openRecurringSheet();
-          if(id==='plan'){
-            const isPremium=subscription.active;
-            const body=isPremium?t('planPremiumBody')(fmtExpiry(subscription.expiresAt)):t('planFreeBody');
-            const actionLabel=isPremium?t('manageBtn'):t('upgradeBtn');
-            openSettingsSheet('<div class="notice">'+body+'</div><div class="actions"><button class="primary" style="flex:1" id="planUpgrade">'+esc(actionLabel)+'</button></div>',t('planHeaderTitle'));
-            document.getElementById('planUpgrade').onclick=goToLineUpgrade;
-            return;
-          }
+          if(id==='plan')return openUpgradeSheet();
           if(id==='billing')return openSettingsSheet('<div class="empty"><span class="emoji">🧾</span>'+esc(t('billingEmpty'))+'</div>',t('billingHeaderTitle'));
         };
       });
     }
+    // ใช้ทั้งตอนกดแถว "แพ็กเกจ" และตอนแตะ toggle ที่ล็อกไว้เฉพาะ Premium (เช่น เตือนจดประจำวัน, จัดหมวดด้วยความจำ)
+    function openUpgradeSheet(){
+      const isPremium=subscription.active;
+      const body=isPremium?t('planPremiumBody')(fmtExpiry(subscription.expiresAt)):t('planFreeBody');
+      const actionLabel=isPremium?t('manageBtn'):t('upgradeBtn');
+      openSettingsSheet('<div class="notice">'+body+'</div><div class="actions"><button class="primary" style="flex:1" id="planUpgrade">'+esc(actionLabel)+'</button></div>',t('planHeaderTitle'));
+      document.getElementById('planUpgrade').onclick=goToLineUpgrade;
+    }
     // แผงเลือกเวลาแจ้งเตือน — เลือกชั่วโมง/นาทีแยกกันแบบ scroll list ง่าย ๆ ให้ทัชง่ายบนมือถือ ไม่ใช้ <input type=time> เพราะ UI แต่ละแพลตฟอร์มไม่เหมือนกันและคุมสไตล์ไม่ได้
     function openReminderTimeSheet(){
+      if(!subscription.active)return openUpgradeSheet();
       const [curH,curM]=prefs.reminderTime.split(':');
       const hours=Array.from({length:24},(_,i)=>String(i).padStart(2,'0'));
       const minutes=['00','15','30','45'];
@@ -615,7 +620,7 @@
       list.innerHTML=cats.map(c=>'<option value="'+esc(c)+'">').join('');
     }
     function openForm(x){const f=document.getElementById('transactionForm');f.reset();document.getElementById('transactionId').value=x?.id||'';document.getElementById('formTitle').textContent=x?t('editEntry'):t('addEntry');type.value=x?.type||'expense';description.value=x?.description||'';amount.value=x?.amount||'';category.value=x?.category||'';createdAt.value=local(x?.createdAt);deleteButton.classList.toggle('hidden',!x);categorySuggestions();modal.classList.add('open');
-      if(prefs.categoryMemory&&!x){description.oninput=()=>{const m=transactions.find(tx=>tx.description.trim().toLowerCase()===description.value.trim().toLowerCase());if(m&&!category.value)category.value=m.category}}
+      if(prefs.categoryMemory&&subscription.active&&!x){description.oninput=()=>{const m=transactions.find(tx=>tx.description.trim().toLowerCase()===description.value.trim().toLowerCase());if(m&&!category.value)category.value=m.category}}
     }
     document.getElementById('addButton').onclick=()=>openForm();
     document.getElementById('cancelButton').onclick=()=>modal.classList.remove('open');
@@ -638,4 +643,5 @@
   </script>
 </body>
 </html>
+
 
