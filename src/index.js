@@ -222,6 +222,19 @@ function advice(monthTransactions) {
 function summary(list, title) { const t = totals(list); return `📊 สรุป${title}\nรายรับ: ${money(t.income)} บาท\nรายจ่าย: ${money(t.expense)} บาท\nคงเหลือ: ${money(t.income - t.expense)} บาท\nจำนวนรายการ: ${list.length}`; }
 function signatureValid(raw, signature) { const expected = crypto.createHmac("sha256", process.env.LINE_CHANNEL_SECRET).update(raw).digest("base64"); return Boolean(signature) && crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected)); }
 async function line(endpoint, body) { const r = await fetch(`https://api.line.me/v2/bot/message/${endpoint}`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}` }, body: JSON.stringify(body) }); if (!r.ok) { const detail = await r.text().catch(() => ""); throw new Error(`LINE ${endpoint}: ${r.status} ${detail}`); } }
+// แสดง "..." กำลังพิมพ์ในแชท ระหว่างรอ AI อ่านสลิป — ใช้ได้เฉพาะแชท 1:1 เท่านั้น (LINE ไม่รองรับในกลุ่ม/ห้อง)
+// จะหายไปเองตอนบอทตอบกลับ (reply) หรือหมดเวลาตาม loadingSeconds แล้วแต่ว่าอันไหนถึงก่อน จึงไม่ต้องมีฟังก์ชันหยุดแยก
+// ยิงแบบ fire-and-forget เสมอ (ไม่ await ตรง call site) เพราะแค่พลาดแล้วไม่มี loading โชว์ ไม่ควรทำให้ทั้ง flow ล้ม
+async function startLoadingAnimation(chatId, loadingSeconds = 20) {
+  try {
+    const r = await fetch("https://api.line.me/v2/bot/chat/loading/start", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}` },
+      body: JSON.stringify({ chatId, loadingSeconds }),
+    });
+    if (!r.ok) console.warn(`LINE loading animation failed: ${r.status}`);
+  } catch (error) { console.warn("LINE loading animation failed:", error.message); }
+}
 async function replyMessages(token, messages) { return line("reply", { replyToken: token, messages }); }
 async function reply(token, text) { return replyMessages(token, [{ type: "text", text: text.slice(0, 4900) }]); }
 async function push(to, text) { return line("push", { to, messages: [{ type: "text", text: text.slice(0, 4900) }] }); }
@@ -500,7 +513,72 @@ function dashboardFlexMessage(user, { isGroupChat, dashboardUrl } = {}) {
     }
   };
 }
-// คำนวณยอดรวมหมวดนี้ในเดือนนี้ เทียบกับงบที่ตั้งไว้ (ถ้ามี) สำหรับ progress bar ใน Flex Message
+// การ์ดต้อนรับตอนบอทถูกเชิญเข้ากลุ่ม/ห้อง (ใช้ธีมเดียวกับ dashboardFlexMessage — ครีม/ชมพู + ตรา "จ")
+// ต้องมีใครยืนยันเป็น "เจ้าของ" ภายใน CONFIRM_WINDOW_MINUTES ไม่งั้นบอทออกจากกลุ่มเอง (ดู housekeeping cron ด้านบน)
+function groupWelcomeFlexMessage() {
+  const pink = "#D23283", cream = "#FBF3EC";
+  return {
+    type: "flex",
+    altText: `สวัสดีค่า ยายจันทร์มาแล้ว 👵 พิมพ์ "/บอท ยืนยันเจ้าของ" ภายใน ${CONFIRM_WINDOW_MINUTES} นาที เพื่อเริ่มใช้งานในกลุ่มนี้`,
+    contents: {
+      type: "bubble",
+      body: {
+        type: "box", layout: "vertical", paddingAll: "20px", backgroundColor: cream,
+        contents: [
+          {
+            type: "box", layout: "horizontal", alignItems: "center", spacing: "md",
+            contents: [
+              { type: "box", layout: "vertical", width: "44px", height: "44px", cornerRadius: "22px", backgroundColor: pink, justifyContent: "center", alignItems: "center",
+                contents: [{ type: "text", text: "จ", color: "#FFFFFF", weight: "bold", size: "lg", align: "center" }] },
+              { type: "box", layout: "vertical", contents: [
+                { type: "text", text: "สวัสดีค่า ยายจันทร์มาแล้ว 👵", weight: "bold", size: "md", color: "#2B2320", wrap: true },
+                { type: "text", text: "สมุดบัญชีกลุ่มที่จดง่ายในแชท", size: "xxs", color: "#9B94A0" }
+              ] }
+            ]
+          },
+          { type: "separator", margin: "lg", color: "#EFE3D8" },
+          { type: "text", text: "ฟีเจอร์นี้ใช้ได้เฉพาะกลุ่มที่มีสมาชิก Premium เชิญเข้ามาเท่านั้นนะคะ", size: "xs", color: pink, weight: "bold", margin: "lg", wrap: true },
+          { type: "text", text: `ถ้าคุณเป็น Premium อยู่แล้ว ต้องมีคนพิมพ์ยืนยันก่อน ถึงจะเริ่มจดบัญชีในกลุ่มนี้ได้ (ภายใน ${CONFIRM_WINDOW_MINUTES} นาที ไม่งั้นยายจันทร์ขอตัวออกจากกลุ่มก่อนนะคะ)`, size: "xs", color: "#5B5450", margin: "sm", wrap: true },
+          {
+            type: "box", layout: "vertical", margin: "lg", paddingAll: "12px", cornerRadius: "12px", backgroundColor: "#FFFFFF",
+            contents: [
+              { type: "text", text: "พิมพ์ในกลุ่มนี้เลย", size: "xxs", color: "#9B94A0" },
+              { type: "text", text: "/บอท ยืนยันเจ้าของ", weight: "bold", size: "sm", color: pink, margin: "xs" }
+            ]
+          },
+          { type: "text", text: "หลังยืนยันแล้ว ทุกคำสั่งในกลุ่มต้องขึ้นต้นด้วย \"/บอท\" เสมอ เช่น /บอท กาแฟ 60", size: "xxs", color: "#9B94A0", margin: "md", wrap: true }
+        ]
+      }
+    }
+  };
+}
+// การ์ดแจ้งเตือนสั้น ๆ ทั่วไป (สำเร็จ/ผิดพลาด/แจ้งข้อมูล) แทนข้อความ text ล้วน — ใช้แทนที่ reply(token, "ข้อความยาว ๆ") เดิม
+// tone: 'success' | 'error' | 'info' — คุมสีแถบด้านซ้ายกับไอคอนหัวการ์ดเท่านั้น เนื้อหายังเป็นข้อความปกติ ใส่ \n ได้ตามเดิม
+function noticeFlexMessage(text, tone = "info") {
+  const theme = {
+    success: { icon: "✅", bar: "#4B6A58", altPrefix: "" },
+    error: { icon: "⚠️", bar: "#7A2B3D", altPrefix: "" },
+    info: { icon: "ℹ️", bar: "#D23283", altPrefix: "" },
+  }[tone] ?? { icon: "ℹ️", bar: "#D23283" };
+  return {
+    type: "flex",
+    altText: text.slice(0, 400),
+    contents: {
+      type: "bubble",
+      body: {
+        type: "box", layout: "horizontal", paddingAll: "16px", backgroundColor: "#FBF3EC",
+        contents: [
+          { type: "box", layout: "vertical", width: "4px", backgroundColor: theme.bar, cornerRadius: "2px", contents: [{ type: "filler" }] },
+          { type: "box", layout: "vertical", paddingStart: "12px", spacing: "xs", contents: [
+            { type: "text", text: theme.icon, size: "sm" },
+            { type: "text", text: text.slice(0, 900), size: "sm", color: "#2B2320", wrap: true, margin: "xs" }
+          ] }
+        ]
+      }
+    }
+  };
+}
+
 function budgetProgressFor(user, tx) {
   if (tx.type !== "expense") return null;
   const limit = user.budgets?.[tx.category];
@@ -927,7 +1005,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
       if (!groupId) continue;
       try {
         await groupLinkService.startPending(groupId);
-        await reply(event.replyToken, `สวัสดีค่ะ ยายจันทร์พร้อมจดบัญชีกองกลางให้กลุ่มนี้ 📒\n\nฟีเจอร์นี้ใช้ได้เฉพาะกลุ่มที่มีสมาชิก Premium เชิญเข้ามาเท่านั้น\nถ้าคุณเป็น Premium อยู่แล้ว พิมพ์:\n/บอท ยืนยันเจ้าของ\n\nภายใน ${CONFIRM_WINDOW_MINUTES} นาที ไม่งั้นยายจันทร์ขอตัวออกจากกลุ่มนะคะ\n\nทุกคำสั่งในกลุ่มต้องขึ้นต้นด้วย "/บอท" เสมอ เช่น "/บอท กาแฟ 60"`);
+        await replyMessages(event.replyToken, [groupWelcomeFlexMessage()]);
       } catch (error) { console.error("Group join handling failed:", error.message); }
       continue;
     }
@@ -987,22 +1065,26 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
       try {
         const waiting = await groupLinkService.consumeReceiptWait(userId, authorId);
         if (!waiting) { continue; } // ไม่มีใครสั่ง "/บอท สลิป" ไว้ก่อน (หรือหมดเวลาแล้ว) -> เพิกเฉยรูปนี้ทั้งหมด
-        if (!ai || !visionModel) message = "ยังไม่ได้ตั้งค่าโมเดล AI แบบอ่านรูปภาพ (ตั้งค่า OPENAI_VISION_MODEL หรือ OPENAI_MODEL ที่รองรับรูปภาพใน .env) ตอนนี้พิมพ์รายการแทนได้ก่อน เช่น /บอท กาแฟ 60";
+        if (!ai || !visionModel) message = noticeFlexMessage("ยังไม่ได้ตั้งค่าโมเดล AI แบบอ่านรูปภาพ (ตั้งค่า OPENAI_VISION_MODEL หรือ OPENAI_MODEL ที่รองรับรูปภาพใน .env) ตอนนี้พิมพ์รายการแทนได้ก่อน เช่น /บอท กาแฟ 60", "info");
         else {
+          // หมายเหตุ: ไม่มี "..." กำลังพิมพ์ในกลุ่ม/ห้อง เพราะ LINE ไม่รองรับ loading animation นอกแชท 1:1
           try {
             const { mime, base64 } = await downloadLineImage(event.message.id);
             const receipt = await readReceipt(mime, base64);
-            if (!receipt) message = "อ่านยอดเงินจากใบเสร็จนี้ไม่ได้ ลองถ่ายให้เห็นยอดรวมชัด ๆ อีกครั้ง หรือพิมพ์รายการเองแทนได้ เช่น /บอท กาแฟ 60";
+            if (!receipt) message = noticeFlexMessage("อ่านยอดเงินจากใบเสร็จนี้ไม่ได้ ลองถ่ายให้เห็นยอดรวมชัด ๆ อีกครั้ง หรือพิมพ์รายการเองแทนได้ เช่น /บอท กาแฟ 60", "error");
             else message = receiptConfirmFlexMessage(receipt, { authorId }); // ยังไม่บันทึก รอผู้ใช้กดยืนยันรายรับ/รายจ่ายก่อน (ดู postback handler)
-          } catch (error) { console.error("Receipt read failed", error.message); message = "ระบบประมวลผลภาพใช้เวลานานกว่าปกติ กรุณาลองใหม่อีกครั้ง"; }
+          } catch (error) { console.error("Receipt read failed", error.message); message = noticeFlexMessage("ระบบประมวลผลภาพใช้เวลานานกว่าปกติ กรุณาลองใหม่อีกครั้ง", "error"); }
         }
-      } catch (error) { console.error("Group image handling failed", error.message); message = "ระบบประมวลผลภาพใช้เวลานานกว่าปกติ กรุณาลองใหม่อีกครั้ง"; }
+      } catch (error) { console.error("Group image handling failed", error.message); message = noticeFlexMessage("ระบบประมวลผลภาพใช้เวลานานกว่าปกติ กรุณาลองใหม่อีกครั้ง", "error"); }
       try { await (typeof message === "string" ? reply(event.replyToken, message) : replyMessages(event.replyToken, [message])); } catch (error) { console.error("Could not reply", error.message); }
       continue;
     }
     if (event.message?.type === "image") {
       // 1:1 เดิม: รูปภาพอาจเป็น "สลิปการชำระเงิน Premium" (ถ้ามี upload_session ค้างรออยู่) หรือ "ใบเสร็จ" (ฟีเจอร์ Premium)
       // การตัดสินใจว่าเป็นแบบไหน และการตรวจสิทธิ์ Premium เกิดที่ backend เสมอ ไม่เชื่อ Rich Menu ที่ผู้ใช้กดมา (spec §16)
+      // ทั้งสองเส้นทางเรียก AI อ่านรูป (readSlip/readReceipt) ซึ่งมักใช้เวลาหลายวินาที จึงโชว์ "..." ให้เห็นทันทีที่รู้ว่าเป็นรูปภาพ
+      // ไม่ต้องรอผลว่าจะเป็นสลิปหรือใบเสร็จก่อน เพราะยิงแบบ fire-and-forget (ไม่ await) ไม่เสียเวลาจริง
+      startLoadingAnimation(event.source?.userId);
       let message;
       try {
         const routing = await subLineHandlers.handleReceiptOrSlipImage(userId, () => downloadLineImage(event.message.id));
@@ -1012,17 +1094,17 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
           message = routing.message;
         } else {
           // routing.type === "receipt" && routing.isPremium === true -> ฟีเจอร์เดิม: อ่านใบเสร็จบันทึกบัญชี
-          if (!ai || !visionModel) message = "ยังไม่ได้ตั้งค่าโมเดล AI แบบอ่านรูปภาพ (ตั้งค่า OPENAI_VISION_MODEL หรือ OPENAI_MODEL ที่รองรับรูปภาพใน .env) ตอนนี้พิมพ์รายการแทนได้ก่อน เช่น กาแฟ 60";
+          if (!ai || !visionModel) message = noticeFlexMessage("ยังไม่ได้ตั้งค่าโมเดล AI แบบอ่านรูปภาพ (ตั้งค่า OPENAI_VISION_MODEL หรือ OPENAI_MODEL ที่รองรับรูปภาพใน .env) ตอนนี้พิมพ์รายการแทนได้ก่อน เช่น กาแฟ 60", "info");
           else {
             try {
               const { mime, base64 } = await downloadLineImage(event.message.id);
               const receipt = await readReceipt(mime, base64);
-              if (!receipt) message = "อ่านยอดเงินจากใบเสร็จนี้ไม่ได้ ลองถ่ายให้เห็นยอดรวมชัด ๆ อีกครั้ง หรือพิมพ์รายการเองแทนได้ เช่น กาแฟ 60";
+              if (!receipt) message = noticeFlexMessage("อ่านยอดเงินจากใบเสร็จนี้ไม่ได้ ลองถ่ายให้เห็นยอดรวมชัด ๆ อีกครั้ง หรือพิมพ์รายการเองแทนได้ เช่น กาแฟ 60", "error");
               else message = receiptConfirmFlexMessage(receipt); // ยังไม่บันทึก รอผู้ใช้กดยืนยันรายรับ/รายจ่ายก่อน (ดู postback handler)
-            } catch (error) { console.error("Receipt read failed", error.message); message = "ระบบประมวลผลภาพใช้เวลานานกว่าปกติ กรุณาลองใหม่อีกครั้ง"; }
+            } catch (error) { console.error("Receipt read failed", error.message); message = noticeFlexMessage("ระบบประมวลผลภาพใช้เวลานานกว่าปกติ กรุณาลองใหม่อีกครั้ง", "error"); }
           }
         }
-      } catch (error) { console.error("Image handling failed", error.message); message = "ระบบประมวลผลภาพใช้เวลานานกว่าปกติ กรุณาลองใหม่อีกครั้ง"; }
+      } catch (error) { console.error("Image handling failed", error.message); message = noticeFlexMessage("ระบบประมวลผลภาพใช้เวลานานกว่าปกติ กรุณาลองใหม่อีกครั้ง", "error"); }
       try { await (typeof message === "string" ? reply(event.replyToken, message) : replyMessages(event.replyToken, [message])); } catch (error) { console.error("Could not reply", error.message); }
       continue;
     }
@@ -1035,22 +1117,22 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
       try {
         const result = await groupLinkService.confirmOwner(userId, authorId);
         if (result.ok) {
-          message = "✅ ยืนยันสำเร็จ กลุ่มนี้ปลดล็อกฟีเจอร์ Premium แล้ว (ใช้ได้เฉพาะในกลุ่มนี้เท่านั้น)\n\nทุกคำสั่งต้องขึ้นต้นด้วย \"/บอท\" เสมอ เช่น \"/บอท กาแฟ 60\"";
+          message = noticeFlexMessage("ยืนยันสำเร็จ กลุ่มนี้ปลดล็อกฟีเจอร์ Premium แล้ว (ใช้ได้เฉพาะในกลุ่มนี้เท่านั้น)\n\nทุกคำสั่งต้องขึ้นต้นด้วย \"/บอท\" เสมอ เช่น \"/บอท กาแฟ 60\"", "success");
         } else if (result.reason === "NOT_PREMIUM") {
-          message = "บัญชีของคุณยังไม่ใช่ Premium ยายจันทร์ขอตัวออกจากกลุ่มนี้นะคะ 🙏\nถ้าอยากใช้งานฟีเจอร์นี้ ต้องสมัคร Premium แบบส่วนตัวกับยายจันทร์ก่อน (แชท 1:1 พิมพ์ \"สมัครพรีเมียม\")";
-          try { await reply(event.replyToken, message); } catch (error) { console.error("Could not reply", error.message); }
+          message = noticeFlexMessage("บัญชีของคุณยังไม่ใช่ Premium ยายจันทร์ขอตัวออกจากกลุ่มนี้นะคะ 🙏\nถ้าอยากใช้งานฟีเจอร์นี้ ต้องสมัคร Premium แบบส่วนตัวกับยายจันทร์ก่อน (แชท 1:1 พิมพ์ \"สมัครพรีเมียม\")", "error");
+          try { await replyMessages(event.replyToken, [message]); } catch (error) { console.error("Could not reply", error.message); }
           try { await leaveGroup(userId); await groupLinkService.markLeft(userId); } catch (error) { console.error("Leaving group after rejection failed:", error.message); }
           continue;
         } else if (result.reason === "EXPIRED") {
-          message = "หมดเวลายืนยันแล้ว ยายจันทร์ขอตัวออกจากกลุ่มนี้นะคะ 🙏 เชิญเข้ามาใหม่ได้เลยถ้าต้องการลองอีกครั้ง";
-          try { await reply(event.replyToken, message); } catch (error) { console.error("Could not reply", error.message); }
+          message = noticeFlexMessage("หมดเวลายืนยันแล้ว ยายจันทร์ขอตัวออกจากกลุ่มนี้นะคะ 🙏 เชิญเข้ามาใหม่ได้เลยถ้าต้องการลองอีกครั้ง", "error");
+          try { await replyMessages(event.replyToken, [message]); } catch (error) { console.error("Could not reply", error.message); }
           try { await leaveGroup(userId); await groupLinkService.markLeft(userId); } catch (error) { console.error("Leaving group after expiry failed:", error.message); }
           continue;
         } else {
-          message = "กลุ่มนี้ยืนยันเจ้าของไปแล้ว หรือไม่มีคำขอที่รอยืนยันอยู่";
+          message = noticeFlexMessage("กลุ่มนี้ยืนยันเจ้าของไปแล้ว หรือไม่มีคำขอที่รอยืนยันอยู่", "info");
         }
-      } catch (error) { console.error("Confirm owner failed", error.message); message = "เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง"; }
-      try { await reply(event.replyToken, message); } catch (error) { console.error("Could not reply", error.message); }
+      } catch (error) { console.error("Confirm owner failed", error.message); message = noticeFlexMessage("เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง", "error"); }
+      try { await replyMessages(event.replyToken, [message]); } catch (error) { console.error("Could not reply", error.message); }
       continue;
     }
 
@@ -1067,27 +1149,27 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
       continue;
     }
     if (isGroupChat && text === "สมัครพรีเมียม") {
-      try { await reply(event.replyToken, "สมัคร Premium ทำได้เฉพาะแชทส่วนตัวกับยายจันทร์เท่านั้นนะ ไปคุย 1:1 แล้วพิมพ์ \"สมัครพรีเมียม\" ได้เลย\n\nพอสมัครเสร็จแล้ว เชิญยายจันทร์เข้ากลุ่มนี้ (หรือกลุ่มอื่น) แล้วพิมพ์ \"/บอท ยืนยันเจ้าของ\" เพื่อปลดล็อก Premium ให้ทั้งกลุ่มได้เลย"); } catch (error) { console.error("Could not reply", error.message); }
+      try { await replyMessages(event.replyToken, [noticeFlexMessage("สมัคร Premium ทำได้เฉพาะแชทส่วนตัวกับยายจันทร์เท่านั้นนะ ไปคุย 1:1 แล้วพิมพ์ \"สมัครพรีเมียม\" ได้เลย\n\nพอสมัครเสร็จแล้ว เชิญยายจันทร์เข้ากลุ่มนี้ (หรือกลุ่มอื่น) แล้วพิมพ์ \"/บอท ยืนยันเจ้าของ\" เพื่อปลดล็อก Premium ให้ทั้งกลุ่มได้เลย", "info")]); } catch (error) { console.error("Could not reply", error.message); }
       continue;
     }
     if (!isGroupChat && text === "ส่งสลิป") {
       let message;
       try { message = await subLineHandlers.handleSendSlipCommand(userId); }
       catch (error) { console.error("Send-slip command failed", error.message); message = "เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง"; }
-      try { await reply(event.replyToken, message); } catch (error) { console.error("Could not reply", error.message); }
+      try { await replyMessages(event.replyToken, [noticeFlexMessage(message, "info")]); } catch (error) { console.error("Could not reply", error.message); }
       continue;
     }
     // ในกลุ่ม "/บอท สลิป" ใช้แค่เพื่อ "รอรับรูปใบเสร็จ" มาจดรายจ่ายกองกลาง (ต้องเป็นกลุ่ม Premium อยู่แล้วเท่านั้น)
     // คนละเรื่องกับ "ส่งสลิป" แบบ 1:1 ที่ผูกกับ payment_session ตอนสมัคร Premium — ในกลุ่มไม่มี payment_session ให้ผูก
     // จึงใช้ groupLinkService.openReceiptWait/consumeReceiptWait แทน uploadSessionService โดยสิ้นเชิง
     if (isGroupChat && text === "สลิป") {
-      let message;
+      let message, tone = "info";
       try {
         const isPremiumGroup = await groupLinkService.isPremiumGroup(userId);
-        if (!isPremiumGroup) message = "กลุ่มนี้ยังไม่ได้ปลดล็อก Premium นะ (ต้องมีสมาชิก Premium เป็นเจ้าของกลุ่ม)\nไปสมัคร Premium แบบ 1:1 กับยายจันทร์ก่อน แล้วเชิญเข้ากลุ่มพร้อมพิมพ์ \"/บอท ยืนยันเจ้าของ\"";
+        if (!isPremiumGroup) { message = "กลุ่มนี้ยังไม่ได้ปลดล็อก Premium นะ (ต้องมีสมาชิก Premium เป็นเจ้าของกลุ่ม)\nไปสมัคร Premium แบบ 1:1 กับยายจันทร์ก่อน แล้วเชิญเข้ากลุ่มพร้อมพิมพ์ \"/บอท ยืนยันเจ้าของ\""; tone = "error"; }
         else { await groupLinkService.openReceiptWait(userId, authorId); message = "กรุณาส่งรูปใบเสร็จตามมาได้เลย 🧾"; }
-      } catch (error) { console.error("Group slip command failed", error.message); message = "เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง"; }
-      try { await reply(event.replyToken, message); } catch (error) { console.error("Could not reply", error.message); }
+      } catch (error) { console.error("Group slip command failed", error.message); message = "เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง"; tone = "error"; }
+      try { await replyMessages(event.replyToken, [noticeFlexMessage(message, tone)]); } catch (error) { console.error("Could not reply", error.message); }
       continue;
     }
 
@@ -1100,7 +1182,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
     if (["เริ่ม", "ช่วยเหลือ", "help"].includes(text.toLowerCase())) message = helpText;
     else if (text === "สรุปวันนี้") message = summary(user.transactions.filter((tx) => sameDay(tx.createdAt)), "วันนี้");
     else if (text === "สรุปเดือนนี้") { const month = user.transactions.filter((tx) => sameMonth(tx.createdAt)); message = `${summary(month, "เดือนนี้")}\n\n${advice(month)}`; }
-    else if (text === "ลบล่าสุด") { const tx = user.transactions.pop(); if (tx) { await saveUser(userId, user); message = `ลบแล้ว: ${tx.description} ${money(tx.amount)} บาท`; } else message = "ยังไม่มีรายการให้ลบ"; }
+    else if (text === "ลบล่าสุด") { const tx = user.transactions.pop(); if (tx) { await saveUser(userId, user); message = noticeFlexMessage(`ลบแล้ว: ${tx.description} ${money(tx.amount)} บาท`, "success"); } else message = noticeFlexMessage("ยังไม่มีรายการให้ลบ", "info"); }
     else if (text === "เว็บ") message = dashboardFlexMessage(user, { isGroupChat, dashboardUrl: dashboardEditUrl(userId) });
     else {
       let tx = parse(text);
