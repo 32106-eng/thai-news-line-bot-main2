@@ -626,6 +626,8 @@ async function pushDailyReminders() {
     const uid = doc.id, user = { ...emptyUser(), ...doc.data() };
     if (!user.dailyReminder || (user.reminderTime ?? "20:00") !== nowHHMM) continue;
     if ((user.transactions ?? []).some((tx) => sameDay(tx.createdAt))) continue; // จดวันนี้ไปแล้ว ไม่ต้องเตือนซ้ำ
+    const premium = await subscriptionService.isPremium(uid).catch(() => false);
+    if (!premium) continue; // เตือนจดประจำวันเป็นฟีเจอร์ Premium — เผื่อสมัครหมดอายุไปแล้วแต่ค่ายังเปิดค้างอยู่ในโปรไฟล์
     try { await push(uid, "🔔 อย่าลืมจดรายรับรายจ่ายวันนี้นะคะ พิมพ์ เช่น “ค่าอาหาร 80” หรือ “เงินเดือน 15000” ได้เลย"); }
     catch (error) { console.warn(`Daily reminder push failed for ${uid}:`, error.message); }
   }
@@ -780,6 +782,11 @@ app.put("/api/reminder", express.json(), async (req, res) => {
   if (!allowed(req)) return res.sendStatus(401);
   const input = reminderInput(req.body); if (!input) return res.status(400).json({ error: "เวลาที่ตั้งไม่ถูกต้อง" });
   const uid = req.query.u, user = await getUser(uid);
+  // ฟีเจอร์ Premium: ผู้ใช้ฟรีเปิดใช้งานไม่ได้ (แต่ปิดได้เสมอ เผื่อเคยเปิดไว้ตอนยังเป็น Premium แล้วหมดอายุ)
+  if (input.dailyReminder) {
+    const premium = await subscriptionService.isPremium(uid).catch(() => false);
+    if (!premium) return res.status(403).json({ error: "เตือนจดประจำวันเป็นฟีเจอร์ของสมาชิก Premium" });
+  }
   user.dailyReminder = input.dailyReminder; user.reminderTime = input.reminderTime;
   await saveUser(uid, user); res.json(input);
 });
