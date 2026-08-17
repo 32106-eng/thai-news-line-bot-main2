@@ -788,7 +788,10 @@ app.get("/dashboard-gate", async (req, res) => {
   if (!allowed(req)) return res.sendStatus(401);
   const uid = req.query.u;
   const query = `?token=${encodeURIComponent(req.query.token)}&u=${encodeURIComponent(uid)}`;
-  const premium = await subscriptionService.isPremium(uid).catch(() => false);
+  // uid อาจเป็นบัญชีส่วนตัว (userId) หรือกลุ่ม/ห้อง (groupId/roomId) — isPremium เช็คได้เฉพาะบัญชีส่วนตัว
+  // ถ้าไม่ใช่ Premium ส่วนตัว ต้องเช็คต่อว่าเป็นกลุ่มที่ปลดล็อก Premium ไว้แล้วหรือเปล่า (เจ้าของกลุ่มเป็น Premium + ยืนยันแล้ว)
+  // ไม่งั้นสมาชิกกลุ่ม Premium ทุกคนจะโดนโฆษณาอยู่ดีทั้งที่กลุ่มปลดล็อกแล้ว
+  const premium = (await subscriptionService.isPremium(uid).catch(() => false)) || (await groupLinkService.isPremiumGroup(uid).catch(() => false));
   if (premium) return res.redirect(`/dashboard${query}`);
   const waitSeconds = Number(process.env.DASHBOARD_AD_WAIT_SECONDS) || 25;
   res.type("html").send(adInterstitial({ nextUrl: `/dashboard${query}`, waitSeconds }));
