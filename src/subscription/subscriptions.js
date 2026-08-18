@@ -56,7 +56,9 @@ export function createSubscriptionService({ subscriptions, FieldValue, db }, aud
       tx.set(ref, {
         plan: PLAN.PREMIUM,
         status: SUB_STATUS.ACTIVE,
-        startedAt: current?.startedAt ?? FieldValue.serverTimestamp(),
+        // startedAt ต้องผูกกับ stillActive เดียวกับที่ใช้คำนวณ newExpiry — ถ้าไม่ใช่การต่ออายุ (สมัครใหม่ตั้งแต่ต้น
+        // เช่นหลังแอดมินยกเลิกไปแล้ว) ต้องรีเซ็ตเป็นตอนนี้ ไม่งั้นวันที่เริ่มเดิมจะค้างอยู่ทั้งที่หมดอายุ/ยกเลิกไปแล้วจริง ๆ
+        startedAt: stillActive ? current.startedAt : FieldValue.serverTimestamp(),
         expiresAt: newExpiry,
         paymentTransactionId,
         updatedAt: FieldValue.serverTimestamp()
@@ -122,3 +124,4 @@ export function createSubscriptionService({ subscriptions, FieldValue, db }, aud
 
   return { getRaw, isPremium, getStatusView, activateOrRenew, adminCancel, markExpiredIfNeeded, sweepExpired };
 }
+
