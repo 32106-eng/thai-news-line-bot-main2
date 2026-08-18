@@ -237,7 +237,7 @@ async function startLoadingAnimation(chatId, loadingSeconds = 20) {
 }
 async function replyMessages(token, messages) { return line("reply", { replyToken: token, messages }); }
 async function reply(token, text) { return replyMessages(token, [{ type: "text", text: text.slice(0, 4900) }]); }
-async function push(to, text) { return line("push", { to, messages: [{ type: "text", text: text.slice(0, 4900) }] }); }
+async function push(to, message) { const messages = typeof message === "string" ? [{ type: "text", text: message.slice(0, 4900) }] : [message]; return line("push", { to, messages }); }
 function qrImageMessage(url) { return { type: "image", originalContentUrl: url, previewImageUrl: url }; }
 
 // การ์ด Flex Message แสดงผลตอนจดรายการสำเร็จ (แทนข้อความ text ธรรมดา)
@@ -1070,13 +1070,17 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
         if (!waiting) { continue; } // ไม่มีใครสั่ง "/บอท สลิป" ไว้ก่อน (หรือหมดเวลาแล้ว) -> เพิกเฉยรูปนี้ทั้งหมด
         if (!ai || !visionModel) message = noticeFlexMessage("ยังไม่ได้ตั้งค่าโมเดล AI แบบอ่านรูปภาพ (ตั้งค่า OPENAI_VISION_MODEL หรือ OPENAI_MODEL ที่รองรับรูปภาพใน .env) ตอนนี้พิมพ์รายการแทนได้ก่อน เช่น /บอท กาแฟ 60", "info");
         else {
-          // หมายเหตุ: ไม่มี "..." กำลังพิมพ์ในกลุ่ม/ห้อง เพราะ LINE ไม่รองรับ loading animation นอกแชท 1:1
+          // ไม่มี "..." กำลังพิมพ์ในกลุ่ม/ห้อง เพราะ LINE ไม่รองรับ loading animation นอกแชท 1:1 (ทำได้แค่แชทเดี่ยวเท่านั้น)
+          // เลยตอบข้อความสั้น ๆ ผ่าน reply token ก่อนแทน (ใช้ได้แค่ครั้งเดียว) แล้วค่อย push ผลลัพธ์จริงตามหลัง
+          try { await reply(event.replyToken, "รอยายอ่านรูปแป๊บนึงนะจ๊ะ 👀"); } catch (error) { console.error("Could not reply", error.message); }
           try {
             const { mime, base64 } = await downloadLineImage(event.message.id);
             const receipt = await readReceipt(mime, base64);
             if (!receipt) message = noticeFlexMessage("อ่านยอดเงินจากใบเสร็จนี้ไม่ได้ ลองถ่ายให้เห็นยอดรวมชัด ๆ อีกครั้ง หรือพิมพ์รายการเองแทนได้ เช่น /บอท กาแฟ 60", "error");
             else message = receiptConfirmFlexMessage(receipt, { authorId }); // ยังไม่บันทึก รอผู้ใช้กดยืนยันรายรับ/รายจ่ายก่อน (ดู postback handler)
           } catch (error) { console.error("Receipt read failed", error.message); message = noticeFlexMessage("ระบบประมวลผลภาพใช้เวลานานกว่าปกติ กรุณาลองใหม่อีกครั้ง", "error"); }
+          try { await push(userId, message); } catch (error) { console.error("Could not push", error.message); }
+          continue;
         }
       } catch (error) { console.error("Group image handling failed", error.message); message = noticeFlexMessage("ระบบประมวลผลภาพใช้เวลานานกว่าปกติ กรุณาลองใหม่อีกครั้ง", "error"); }
       try { await (typeof message === "string" ? reply(event.replyToken, message) : replyMessages(event.replyToken, [message])); } catch (error) { console.error("Could not reply", error.message); }
@@ -1205,7 +1209,6 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
   }
 });
 app.listen(Number(process.env.PORT ?? 3000), () => console.log(`Ta Phin listening on ${process.env.PORT ?? 3000}`));
-
 
 
 
