@@ -24,7 +24,8 @@
   .card .label{font-size:12.5px;color:var(--grey);margin-top:2px}
   .card.pink .num{color:var(--pink)}
   section{margin-bottom:32px}
-  section h2{font-size:14px;text-transform:uppercase;letter-spacing:.06em;color:var(--grey);margin:0 0 12px}
+  section h2{font-size:14px;text-transform:uppercase;letter-spacing:.06em;color:var(--grey);margin:0 0 12px;display:flex;align-items:center;gap:8px}
+  section h2 .count{background:var(--light-pink);color:var(--pink-dark);font-size:11px;padding:2px 8px;border-radius:99px;text-transform:none;letter-spacing:0}
   .review{background:var(--white);border:1px solid var(--line);border-radius:14px;padding:16px 18px;margin-bottom:10px;display:flex;justify-content:space-between;gap:16px;align-items:flex-start;flex-wrap:wrap}
   .review .meta{font-size:13px;color:var(--grey);line-height:1.7}
   .review .ref{font-weight:700;color:var(--pink-dark);font-size:14px}
@@ -44,6 +45,25 @@
   #loginWrap button{width:100%;padding:10px;border-radius:8px;border:none;background:var(--pink);color:#fff;font-weight:600;cursor:pointer}
   #loginErr{color:var(--danger);font-size:12.5px;min-height:16px}
   [hidden]{display:none !important}
+  /* แท็บสลับหมวด — ลดความรกของหน้าเดิมที่โชว์ทุกส่วนพร้อมกันยาวเป็นหน้ากระดาษ */
+  .tabs{display:flex;gap:6px;margin-bottom:24px;border-bottom:1px solid var(--line)}
+  .tab{border:none;background:transparent;padding:10px 16px;font-size:13.5px;font-weight:600;color:var(--grey);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}
+  .tab.active{color:var(--pink-dark);border-bottom-color:var(--pink)}
+  .tabpanel[hidden]{display:none}
+  /* ตารางรายชื่อ Premium — แถวเดียวจบ เห็นชื่อ วันหมดอายุ ปุ่มยกเลิก ไม่ต้องเดา userId เอง */
+  table.plist{width:100%;border-collapse:collapse;background:#fff;border-radius:14px;overflow:hidden;border:1px solid var(--line)}
+  table.plist th{text-align:left;font-size:11.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--grey);padding:10px 14px;background:#faf5f8;border-bottom:1px solid var(--line)}
+  table.plist td{padding:12px 14px;font-size:13.5px;border-bottom:1px solid var(--line);vertical-align:middle}
+  table.plist tr:last-child td{border-bottom:none}
+  table.plist .name{font-weight:600;color:var(--dark)}
+  table.plist .uid{font-size:11px;color:var(--grey);font-family:monospace}
+  table.plist .soon{color:var(--warn);font-weight:600}
+  .searchBox{margin-bottom:14px}
+  .searchBox input{width:100%;max-width:320px;padding:9px 12px;border-radius:8px;border:1px solid var(--line);font-size:13.5px}
+  .lookup{background:var(--white);border:1px solid var(--line);border-radius:14px;padding:16px 18px}
+  .lookup .row{display:flex;gap:8px}
+  .lookup input{flex:1;padding:10px 12px;border-radius:8px;border:1px solid var(--line);font-size:14px}
+  .lookup p{margin:10px 0 0;font-size:12.5px;color:var(--grey)}
 </style>
 </head>
 <body>
@@ -62,32 +82,45 @@
   <button id="logout">ออกจากระบบ</button>
 </header>
 <main>
-  <section>
-    <h2>ภาพรวม</h2>
-    <div class="grid" id="overviewGrid"></div>
-  </section>
+  <div class="grid" id="overviewGrid"></div>
 
-  <section>
-    <h2>ยกเลิก Premium ของ User</h2>
-    <div class="review" style="flex-wrap:nowrap">
-      <input id="cancelUserId" placeholder="LINE userId" style="flex:1;padding:10px 12px;border-radius:8px;border:1px solid var(--line);font-size:14px" />
-      <div class="actions">
-        <button id="checkUserBtn" class="approve" style="background:var(--dark)">ตรวจสอบสถานะ</button>
-        <button id="cancelUserBtn" class="reject">ยกเลิก Premium</button>
+  <div class="tabs">
+    <button class="tab active" data-tab="premium">รายชื่อ Premium</button>
+    <button class="tab" data-tab="reviews">รอตรวจสอบ</button>
+    <button class="tab" data-tab="logs">Audit Log</button>
+  </div>
+
+  <div class="tabpanel" id="panel-premium">
+    <section>
+      <h2>สมาชิก Premium <span class="count" id="premiumCount">0</span></h2>
+      <div class="searchBox"><input id="premiumSearch" placeholder="ค้นหาชื่อ..." /></div>
+      <div id="premiumList"></div>
+    </section>
+    <section>
+      <h2>ค้นหา user โดยตรง</h2>
+      <div class="lookup">
+        <div class="row">
+          <input id="cancelUserId" placeholder="LINE userId (เผื่อ user ที่ไม่ active หรือหา displayName ไม่เจอ)" />
+          <button id="checkUserBtn" class="approve" style="background:var(--dark)">ตรวจสอบ</button>
+        </div>
+        <p id="cancelUserResult"></p>
       </div>
-    </div>
-    <div id="cancelUserResult" class="meta" style="padding:0 4px;font-size:13px;color:var(--grey)"></div>
-  </section>
+    </section>
+  </div>
 
-  <section>
-    <h2>รอตรวจสอบ (Pending Review)</h2>
-    <div id="reviews"></div>
-  </section>
+  <div class="tabpanel" id="panel-reviews" hidden>
+    <section>
+      <h2>รอตรวจสอบ (Pending Review) <span class="count" id="reviewCount">0</span></h2>
+      <div id="reviews"></div>
+    </section>
+  </div>
 
-  <section>
-    <h2>Audit Log ล่าสุด</h2>
-    <div id="logs"></div>
-  </section>
+  <div class="tabpanel" id="panel-logs" hidden>
+    <section>
+      <h2>Audit Log ล่าสุด</h2>
+      <div id="logs"></div>
+    </section>
+  </div>
 </main>
 </div>
 
@@ -112,6 +145,12 @@ $('#loginBtn').onclick = async () => {
 };
 $('#logout').onclick = async () => { await api('/logout', { method: 'POST' }); showLogin(); };
 
+// สลับแท็บ — เก็บ state แค่ใน DOM ไม่ต้องยุ่งกับ URL/router เพราะหน้านี้เล็ก ไม่จำเป็น
+document.querySelectorAll('.tab').forEach(btn => btn.onclick = () => {
+  document.querySelectorAll('.tab').forEach(b => b.classList.toggle('active', b === btn));
+  document.querySelectorAll('.tabpanel').forEach(p => p.hidden = p.id !== `panel-${btn.dataset.tab}`);
+});
+
 function card(num, label, pink) { return `<div class="card ${pink ? 'pink' : ''}"><div class="num">${num}</div><div class="label">${label}</div></div>`; }
 
 async function loadOverview() {
@@ -128,8 +167,52 @@ async function loadOverview() {
   ].join('');
 }
 
+let premiumUsers = [];
+function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+
+async function loadPremiumUsers() {
+  const d = await api('/api/premium-users');
+  premiumUsers = d.users;
+  $('#premiumCount').textContent = premiumUsers.length;
+  renderPremiumList(premiumUsers);
+}
+
+function renderPremiumList(list) {
+  const el = $('#premiumList');
+  if (!list.length) { el.innerHTML = '<div class="empty">ยังไม่มีสมาชิก Premium ตอนนี้</div>'; return; }
+  const soon = Date.now() + 3 * 86_400_000;
+  el.innerHTML = `<table class="plist"><thead><tr><th>ชื่อ LINE</th><th>เริ่มเมื่อ</th><th>หมดอายุ</th><th></th></tr></thead><tbody>
+    ${list.map(u => `
+      <tr data-uid="${esc(u.userId)}">
+        <td><div class="name">${esc(u.displayName) || '(ไม่พบชื่อ — อาจบล็อกบอทไปแล้ว)'}</div><div class="uid">${esc(u.userId)}</div></td>
+        <td>${esc(u.startedAt) || '-'}</td>
+        <td>${esc(u.expiresAt) || '-'}</td>
+        <td><button class="reject cancel-btn">ยกเลิก</button></td>
+      </tr>`).join('')}
+  </tbody></table>`;
+  el.querySelectorAll('.cancel-btn').forEach(btn => {
+    const tr = btn.closest('tr');
+    const u = premiumUsers.find(x => x.userId === tr.dataset.uid);
+    btn.onclick = () => cancelPremium(tr.dataset.uid, u?.displayName);
+  });
+}
+
+$('#premiumSearch').oninput = (e) => {
+  const q = e.target.value.trim().toLowerCase();
+  renderPremiumList(!q ? premiumUsers : premiumUsers.filter(u => (u.displayName ?? '').toLowerCase().includes(q) || u.userId.toLowerCase().includes(q)));
+};
+
+async function cancelPremium(userId, displayName) {
+  if (!confirm(`ยืนยันยกเลิก Premium ของ ${displayName || userId}?`)) return;
+  try {
+    await api(`/api/users/${encodeURIComponent(userId)}/cancel-premium`, { method: 'POST', body: JSON.stringify({ reason: 'admin_manual' }) });
+    await Promise.all([loadOverview(), loadPremiumUsers()]);
+  } catch (e) { alert(e.message); }
+}
+
 async function loadReviews() {
   const d = await api('/api/reviews');
+  $('#reviewCount').textContent = d.reviews.length;
   const el = $('#reviews');
   if (!d.reviews.length) { el.innerHTML = '<div class="empty">ไม่มีรายการรอตรวจสอบ 🎉</div>'; return; }
   el.innerHTML = d.reviews.map(r => `
@@ -172,20 +255,10 @@ $('#checkUserBtn').onclick = async () => {
   try {
     const d = await api(`/api/users/${encodeURIComponent(userId)}`);
     out.innerHTML = d.active
-      ? `<b style="color:var(--pink-dark)">Premium Active</b> · หมดอายุ ${d.expiresAt ?? '-'}`
+      ? `<b style="color:var(--pink-dark)">Premium Active</b> · หมดอายุ ${d.expiresAt ?? '-'} · <a href="#" id="cancelFromLookup" style="color:var(--danger)">ยกเลิก Premium นี้</a>`
       : `ไม่ใช่ Premium (สถานะ: ${d.plan})`;
-  } catch (e) { out.textContent = e.message; }
-};
-
-$('#cancelUserBtn').onclick = async () => {
-  const userId = $('#cancelUserId').value.trim();
-  const out = $('#cancelUserResult');
-  if (!userId) { out.textContent = 'กรุณากรอก userId'; return; }
-  if (!confirm(`ยืนยันยกเลิก Premium ของ ${userId}?`)) return;
-  try {
-    await api(`/api/users/${encodeURIComponent(userId)}/cancel-premium`, { method: 'POST', body: JSON.stringify({ reason: 'admin_manual' }) });
-    out.textContent = 'ยกเลิก Premium สำเร็จ';
-    await loadAll();
+    const link = $('#cancelFromLookup');
+    if (link) link.onclick = async (e) => { e.preventDefault(); await cancelPremium(userId); out.textContent = 'ยกเลิก Premium สำเร็จ'; };
   } catch (e) { out.textContent = e.message; }
 };
 
@@ -195,7 +268,7 @@ async function loadLogs() {
 }
 
 async function loadAll() {
-  try { await Promise.all([loadOverview(), loadReviews(), loadLogs()]); }
+  try { await Promise.all([loadOverview(), loadPremiumUsers(), loadReviews(), loadLogs()]); }
   catch (e) { if (e.message !== 'unauthorized') console.error(e); }
 }
 
@@ -204,4 +277,5 @@ api('/api/overview').then(showApp).catch(showLogin);
 </script>
 </body>
 </html>
+
 
