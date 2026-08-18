@@ -111,6 +111,35 @@ export function createAdminRouter({ collections, adminAuth, subscriptionService,
     res.json({ ok: true });
   });
 
+  // ดึงชื่อโปรไฟล์ LINE ของ user (ใช้ userId 1:1 เท่านั้น ไม่ใช่ groupId — กลุ่มไม่มี subscription เป็นของตัวเอง)
+  // ถ้าดึงไม่ได้ (เช่น user บล็อกบอทไปแล้ว) จะได้ null กลับมา ฝั่งหน้าเว็บ fallback ไปโชว์ userId แทน
+  async function getLineDisplayName(userId) {
+    try {
+      const r = await fetch(`https://api.line.me/v2/bot/profile/${userId}`, { headers: { authorization: `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}` } });
+      if (!r.ok) return null;
+      const profile = await r.json();
+      return profile.displayName ?? null;
+    } catch { return null; }
+  }
+
+  // รายชื่อ Premium ทั้งหมดที่ active อยู่ตอนนี้ (เรียงหมดอายุเร็วสุดก่อน) พร้อมชื่อ LINE จริง ไม่ใช่แค่ userId
+  // ใช้แทนการต้องพิมพ์ userId เดาเองในฟอร์ม "ยกเลิก Premium ของ User" เดิม — ตอนนี้กดยกเลิกจากรายการได้เลย
+  router.get("/api/premium-users", requireAdmin, async (_req, res) => {
+    const snap = await collections.subscriptions.where("status", "==", SUB_STATUS.ACTIVE).get();
+    const now = Date.now();
+    const active = snap.docs
+      .map((doc) => ({ userId: doc.id, expiresAt: toDate(doc.data().expiresAt), startedAt: toDate(doc.data().startedAt) }))
+      .filter((u) => u.expiresAt && u.expiresAt.getTime() > now)
+      .sort((a, b) => a.expiresAt.getTime() - b.expiresAt.getTime());
+    const withNames = await Promise.all(active.map(async (u) => ({
+      ...u,
+      displayName: await getLineDisplayName(u.userId),
+      expiresAt: formatThaiDateTime(u.expiresAt),
+      startedAt: u.startedAt ? formatThaiDateTime(u.startedAt) : null
+    })));
+    res.json({ users: withNames });
+  });
+
   // ค้นหา user ตาม LINE userId ตรง ๆ เพื่อดูสถานะ Premium ก่อนยกเลิก
   router.get("/api/users/:userId", requireAdmin, async (req, res) => {
     const sub = await subscriptionService.getStatusView(req.params.userId);
@@ -147,3 +176,4 @@ export function createAdminRouter({ collections, adminAuth, subscriptionService,
 
   return router;
 }
+
