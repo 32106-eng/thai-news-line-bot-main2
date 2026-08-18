@@ -64,6 +64,32 @@ test("activateOrRenew: renewing after expiry starts fresh from now (doesn't stac
   assert.ok(daysFromNow > 27 && daysFromNow < 32);
 });
 
+test("activateOrRenew: still-active renewal keeps the original startedAt (it's the same subscription continuing)", async () => {
+  const { service, subscriptions } = setup();
+  const originalStart = new Date(Date.now() - 20 * 86_400_000); // started 20 days ago
+  const currentExpiry = new Date(Date.now() + 10 * 86_400_000);
+  await subscriptions.doc("user1").set({ status: SUB_STATUS.ACTIVE, expiresAt: currentExpiry, startedAt: originalStart });
+  await service.activateOrRenew({ userId: "user1", paymentTransactionId: "TX4" });
+  const raw = await service.getRaw("user1");
+  assert.equal(raw.startedAt.getTime(), originalStart.getTime());
+});
+
+test("activateOrRenew: re-subscribing after an admin cancellation resets startedAt to now, not the old signup date", async () => {
+  const { service, subscriptions } = setup();
+  const originalStart = new Date(Date.now() - 60 * 86_400_000); // originally started 60 days ago (e.g. signed up on the 9th)
+  const stillFutureExpiry = new Date(Date.now() + 15 * 86_400_000); // admin cancel doesn't touch expiresAt, only status
+  await subscriptions.doc("user1").set({ status: SUB_STATUS.ACTIVE, expiresAt: stillFutureExpiry, startedAt: originalStart });
+  const cancelResult = await service.adminCancel({ userId: "user1", adminUsername: "admin1" });
+  assert.equal(cancelResult.ok, true);
+
+  const before = Date.now();
+  const { wasRenewal } = await service.activateOrRenew({ userId: "user1", paymentTransactionId: "TX5" }); // user re-subscribes fresh (e.g. on the 11th)
+  assert.equal(wasRenewal, false); // this is a brand new signup, not a renewal — status was EXPIRED going in
+  const raw = await service.getRaw("user1");
+  assert.notEqual(raw.startedAt.getTime(), originalStart.getTime()); // must NOT still show the old (e.g. 9th) date
+  assert.ok(Math.abs(raw.startedAt.getTime() - before) < 5000); // should be ~now instead
+});
+
 test("markExpiredIfNeeded: flips ACTIVE-but-past-expiry to EXPIRED", async () => {
   const { service, subscriptions } = setup();
   await subscriptions.doc("user1").set({ status: SUB_STATUS.ACTIVE, expiresAt: new Date(Date.now() - 1000) });
