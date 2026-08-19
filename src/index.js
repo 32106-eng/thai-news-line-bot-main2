@@ -343,7 +343,8 @@ function txFlexMessage(tx, opts = {}) {
   }
   // ปุ่ม "ลบ": ยิง postback กลับมาให้บอทลบรายการนี้ทันที (ไม่เปิดเว็บ, ไม่ถามยืนยันซ้ำ)
   if (userId && tx.id) {
-    footerButtons.push({ type: "button", style: "secondary", height: "sm", color: "#FCE4EF", action: { type: "postback", label: "ลบ", data: `delete_tx=${tx.id}&u=${encodeURIComponent(userId)}`, displayText: "ลบรายการนี้" } });
+    // displayText เว้นว่างไว้ตั้งใจ: กันไม่ให้มีข้อความ "ลบรายการนี้" เด้งขึ้นฝั่งเราเองตอนกด (จะรกแชท)
+    footerButtons.push({ type: "button", style: "secondary", height: "sm", color: "#FCE4EF", action: { type: "postback", label: "ลบ", data: `delete_tx=${tx.id}&u=${encodeURIComponent(userId)}`, displayText: "\u200b" } });
   }
 
   return {
