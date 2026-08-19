@@ -241,13 +241,13 @@ async function push(to, message) { const messages = typeof message === "string" 
 function qrImageMessage(url) { return { type: "image", originalContentUrl: url, previewImageUrl: url }; }
 
 // การ์ด Flex Message แสดงผลตอนจดรายการสำเร็จ (แทนข้อความ text ธรรมดา)
-// tx: รายการที่เพิ่งบันทึก, opts.budget: { limit, spent } หมวดนี้ในเดือนนี้ (ถ้ามีตั้งงบไว้), opts.dashboardUrl: ลิงก์แก้ไข/ลบผ่านเว็บ
+// tx: รายการที่เพิ่งบันทึก, opts.budget: { limit, spent } หมวดนี้ในเดือนนี้ (ถ้ามีตั้งงบไว้), opts.dashboardUrl: ลิงก์แก้ไขผ่านเว็บ, opts.userId: เจ้าของบัญชี (ใช้ผูกปุ่มลบ)
 function txFlexMessage(tx, opts = {}) {
   const isIncome = tx.type === "income";
   const typeLabel = isIncome ? "รายรับ" : "รายจ่าย";
   const pink = "#D23283";
   const cream = "#FBF3EC";
-  const { budget, dashboardUrl } = opts;
+  const { budget, dashboardUrl, userId } = opts;
 
   const bodyContents = [
     // แถวแท็ก: ประเภท + หมวดหมู่ (พื้นชมพู ตัวอักษรขาว) — กล่องสีพื้นหลังต้องอยู่บน box ไม่ใช่ text โดยตรง
@@ -339,10 +339,11 @@ function txFlexMessage(tx, opts = {}) {
 
   const footerButtons = [];
   if (dashboardUrl) {
-    footerButtons.push(
-      { type: "button", style: "secondary", height: "sm", color: "#F1E7DC", action: { type: "uri", label: "แก้ไข", uri: dashboardUrl } },
-      { type: "button", style: "secondary", height: "sm", color: "#FCE4EF", action: { type: "uri", label: "ลบ", uri: dashboardUrl } }
-    );
+    footerButtons.push({ type: "button", style: "secondary", height: "sm", color: "#F1E7DC", action: { type: "uri", label: "แก้ไข", uri: dashboardUrl } });
+  }
+  // ปุ่ม "ลบ": ยิง postback กลับมาให้บอทลบรายการนี้ทันที (ไม่เปิดเว็บ, ไม่ถามยืนยันซ้ำ)
+  if (userId && tx.id) {
+    footerButtons.push({ type: "button", style: "secondary", height: "sm", color: "#FCE4EF", action: { type: "postback", label: "ลบ", data: `delete_tx=${tx.id}&u=${encodeURIComponent(userId)}`, displayText: "ลบรายการนี้" } });
   }
 
   return {
@@ -1023,6 +1024,27 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
     if (event.type === "postback") {
       const data = event.postback?.data ?? "";
       const params = new URLSearchParams(data);
+      // --- ปุ่ม "ลบ" บนการ์ดจดสำเร็จ (ดู txFlexMessage) — ลบรายการทันที ไม่ถามยืนยันซ้ำ ---
+      if (params.has("delete_tx")) {
+        const txId = params.get("delete_tx");
+        const delUserId = params.get("u");
+        let message;
+        if (!txId || !delUserId) message = noticeFlexMessage("ข้อมูลรายการหมดอายุแล้ว", "info");
+        else {
+          try {
+            const user = await getUser(delUserId);
+            const index = (user.transactions ?? []).findIndex((t) => t.id === txId);
+            if (index === -1) message = noticeFlexMessage("ไม่พบรายการนี้แล้ว อาจถูกลบไปก่อนหน้านี้", "info");
+            else {
+              const [removed] = user.transactions.splice(index, 1);
+              await saveUser(delUserId, user);
+              message = noticeFlexMessage(`ลบแล้ว: ${removed.description} ${money(removed.amount)} บาท`, "success");
+            }
+          } catch (error) { console.error("Delete tx postback failed", error.message); message = noticeFlexMessage("เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง", "error"); }
+        }
+        try { await replyMessages(event.replyToken, [message]); } catch (error) { console.error("Could not reply", error.message); }
+        continue;
+      }
       if (params.get("slip_type") === "income" || params.get("slip_type") === "expense") {
         const pbSourceType = event.source?.type;
         const pbIsGroupChat = pbSourceType === "group" || pbSourceType === "room";
@@ -1037,7 +1059,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
           if (!Number.isFinite(amount) || amount <= 0) message = "ข้อมูลสลิปหมดอายุแล้ว ลองส่งรูปใหม่อีกครั้ง";
           else {
             const { user, tx } = await saveConfirmedSlipTx({ userId: pbUserId, type, merchant, amount, authorId, isGroupChat: pbIsGroupChat });
-            message = txFlexMessage(tx, { budget: budgetProgressFor(user, tx), dashboardUrl: dashboardEditUrl(pbUserId) });
+            message = txFlexMessage(tx, { budget: budgetProgressFor(user, tx), dashboardUrl: dashboardEditUrl(pbUserId), userId: pbUserId });
           }
         } catch (error) { console.error("Slip postback confirm failed", error.message); message = "เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง"; }
         try { await (typeof message === "string" ? reply(event.replyToken, message) : replyMessages(event.replyToken, [message])); } catch (error) { console.error("Could not reply", error.message); }
@@ -1198,7 +1220,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
         tx = await enrichWithAi(tx, text, ambiguous);
         if (isGroupChat) tx = { ...tx, authorId, authorName: await getGroupMemberName(userId, authorId) };
         user.transactions.push(tx); await saveUser(userId, user);
-        message = txFlexMessage(tx, { budget: budgetProgressFor(user, tx), dashboardUrl: dashboardEditUrl(userId) });
+        message = txFlexMessage(tx, { budget: budgetProgressFor(user, tx), dashboardUrl: dashboardEditUrl(userId), userId });
       }
       else {
         const aiAnswer = await askFinanceAi(user, text);
@@ -1209,6 +1231,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
   }
 });
 app.listen(Number(process.env.PORT ?? 3000), () => console.log(`Ta Phin listening on ${process.env.PORT ?? 3000}`));
+
 
 
 
