@@ -941,7 +941,13 @@ app.get("/api/transactions/export", async (req, res) => {
 app.get("/api/subscription", async (req, res) => {
   if (!allowed(req)) return res.sendStatus(401);
   const uid = req.query.u;
-  const status = await subscriptionService.getStatusView(uid).catch(() => ({ plan: PLAN.FREE, active: false }));
+  // เดิมเช็คแค่ subscriptionService.getStatusView(uid) ทางเดียว ถ้า uid เป็น groupId (ไม่ใช่ userId ของคนจ่ายเงิน)
+  // จะหา subscription doc ด้วย groupId ซึ่งไม่มีทางเจอ (Premium ผูกกับ ownerId ของกลุ่ม ไม่ใช่ groupId เอง)
+  // -> fallback เป็น FREE เสมอ แม้เจ้าของกลุ่มจะเป็น Premium จริงก็ตาม (จุดเดียวกับที่ /dashboard บรรทัด ~822 เช็คถูกอยู่แล้ว
+  // ผ่าน groupLinkService.isPremiumGroup แต่ endpoint นี้ลืมเช็คทางกลุ่มไปจุดเดียว ทำให้เข้าหน้าเว็บได้แต่ปุ่ม Premium กดไม่ติด)
+  const groupLink = await groupLinkService.getRaw(uid).catch(() => null);
+  const statusUid = groupLink?.ownerId ?? uid;
+  const status = await subscriptionService.getStatusView(statusUid).catch(() => ({ plan: PLAN.FREE, active: false }));
   const lineOaLink = process.env.LINE_OA_BASIC_ID ? `https://line.me/R/ti/p/${encodeURIComponent(process.env.LINE_OA_BASIC_ID)}` : null;
   res.json({ ...status, lineOaLink });
 });
