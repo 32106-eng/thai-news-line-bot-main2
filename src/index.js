@@ -189,7 +189,11 @@ async function enrichWithAi(tx, source, typeWasAmbiguous) {
   try {
     const instructions = [];
     if (needType) instructions.push('"type": ตัดสินว่าข้อความนี้เป็น "income" (เงินเข้า/รายรับ) หรือ "expense" (เงินออก/รายจ่าย)');
-    if (needCategory) instructions.push('"category": จัดหมวดรายจ่ายนี้เป็นหนึ่งใน อาหาร, เดินทาง, บิล, สุขภาพ, บันเทิง, ช้อปปิ้ง, อื่น ๆ (ใส่เฉพาะกรณีเป็นรายจ่ายเท่านั้น)');
+    // เดิมบังคับเลือกจาก 7 หมวดคงที่เท่านั้น (Object.hasOwn(CATEGORIES, ...) กรองทิ้งถ้าไม่ตรง) ทำให้รายจ่ายที่ไม่เข้าหมวดไหนเลย
+    // ถูกจัดเป็น "อื่น ๆ" เสมอ แม้ผู้ใช้จะพิมพ์ชัดเจนแค่ไหนก็ตาม (เช่น "ค่าเลี้ยงลูก", "ค่าเทอม", "ทำบุญ") ตอนนี้ให้ AI ตั้งชื่อหมวดใหม่ได้เอง
+    // ถ้าเข้ากับหมวดเดิม (อาหาร/เดินทาง/บิล/สุขภาพ/บันเทิง/ช้อปปิ้ง) ให้ใช้หมวดเดิมต่อ (กันหมวดเดียวกันแตกเป็นหลายชื่อโดยไม่จำเป็น
+    // เช่น "อาหาร" กับ "ค่ากิน" ควรเป็นหมวดเดียวกัน) ใช้เฉพาะตอนไม่เข้าหมวดไหนจริง ๆ เท่านั้นถึงตั้งชื่อหมวดใหม่สั้น ๆ ให้
+    if (needCategory) instructions.push(`"category": จัดหมวดรายจ่ายนี้ (ใส่เฉพาะกรณีเป็นรายจ่ายเท่านั้น) — ถ้าเข้ากับหมวดใดหมวดหนึ่งใน ${Object.keys(CATEGORIES).filter((c) => c !== "อื่น ๆ").join(", ")} ให้ใช้ชื่อหมวดเดิมนั้นเป๊ะ ๆ แต่ถ้าไม่เข้าหมวดไหนเลยจริง ๆ ให้ตั้งชื่อหมวดใหม่สั้น ๆ ภาษาไทยเอง (1-3 คำ ไม่ต้องมีคำว่า "ค่า" นำหน้าถ้าไม่จำเป็น เช่น "เลี้ยงลูก" "การศึกษา" "ทำบุญ") ห้ามใช้ "อื่น ๆ" ถ้าพอเดาความหมายของรายการได้`);
     const fields = [needType ? '"type":"income"|"expense"' : null, needCategory ? '"category":"..."' : null].filter(Boolean).join(", ");
     const completion = await ai.chat.completions.create({
       model: process.env.OPENAI_MODEL,
@@ -206,8 +210,11 @@ async function enrichWithAi(tx, source, typeWasAmbiguous) {
     if (needType && (parsed.type === "income" || parsed.type === "expense") && parsed.type !== next.type) {
       next = { ...next, type: parsed.type, category: parsed.type === "income" ? "รายรับ" : categoryFor(source) };
     }
-    if (needCategory && next.type === "expense" && Object.hasOwn(CATEGORIES, parsed.category)) {
-      next = { ...next, category: parsed.category };
+    // รับชื่อหมวดจาก AI ได้ทั้งหมวดเดิม (Object.hasOwn) และหมวดใหม่ที่ AI ตั้งเอง — validate ขั้นต่ำกันขยะ/พัง:
+    // ต้องเป็น string, ไม่ว่างหลัง trim, ไม่ยาวเกินไป (กัน AI หลุดตอบเป็นประโยคยาวแทนชื่อหมวด), ไม่ใช่ "อื่น ๆ" ซ้ำ (ไม่มีประโยชน์)
+    if (needCategory && next.type === "expense" && typeof parsed.category === "string") {
+      const proposedCategory = parsed.category.trim().slice(0, 20);
+      if (proposedCategory && proposedCategory !== "อื่น ๆ") next = { ...next, category: proposedCategory };
     }
     return next;
   } catch (error) { console.warn("AI enrichment skipped:", error.message); return tx; }
@@ -517,6 +524,46 @@ function dashboardFlexMessage(user, { isGroupChat, dashboardUrl } = {}) {
 }
 // การ์ดต้อนรับตอนบอทถูกเชิญเข้ากลุ่ม/ห้อง (ใช้ธีมเดียวกับ dashboardFlexMessage — ครีม/ชมพู + ตรา "จ")
 // ต้องมีใครยืนยันเป็น "เจ้าของ" ภายใน CONFIRM_WINDOW_MINUTES ไม่งั้นบอทออกจากกลุ่มเอง (ดู housekeeping cron ด้านบน)
+// การ์ดต้อนรับตอนผู้ใช้แอดบอทเป็นเพื่อนใหม่ (1-1 chat) — คนละ flow กับ groupWelcomeFlexMessage ด้านล่าง (นั่นคือตอนถูกเชิญเข้ากลุ่ม)
+// ในแชทเดี่ยวไม่ต้องมี "/บอท" นำหน้าคำสั่ง (จำกัดเฉพาะในกลุ่มเท่านั้น ดู BOT_PREFIX ด้านบน) เลยตัวอย่างคำสั่งในการ์ดนี้จะพิมพ์สั้น ๆ ได้เลย
+function followWelcomeFlexMessage() {
+  const pink = "#D23283", cream = "#FBF3EC";
+  return {
+    type: "flex",
+    altText: `สวัสดีค่า ยายจันทร์มาแล้ว 👵 พิมพ์ "กาแฟ 60" เพื่อจดรายจ่ายแรกได้เลยนะ`,
+    contents: {
+      type: "bubble",
+      body: {
+        type: "box", layout: "vertical", paddingAll: "20px", backgroundColor: cream,
+        contents: [
+          {
+            type: "box", layout: "horizontal", alignItems: "center", spacing: "md",
+            contents: [
+              { type: "box", layout: "vertical", width: "44px", height: "44px", cornerRadius: "22px", backgroundColor: pink, justifyContent: "center", alignItems: "center",
+                contents: [{ type: "text", text: "จ", color: "#FFFFFF", weight: "bold", size: "lg", align: "center" }] },
+              { type: "box", layout: "vertical", contents: [
+                { type: "text", text: "สวัสดีค่า ยายจันทร์มาแล้ว 👵", weight: "bold", size: "md", color: "#2B2320", wrap: true },
+                { type: "text", text: "สมุดบัญชีที่จดง่ายในแชท", size: "xxs", color: "#9B94A0" }
+              ] }
+            ]
+          },
+          { type: "separator", margin: "lg", color: "#EFE3D8" },
+          { type: "text", text: "ยายช่วยจดรายรับ-รายจ่ายให้หลานได้เลย พิมพ์เป็นประโยคธรรมดา ยายเข้าใจเอง", size: "xs", color: "#5B5450", margin: "lg", wrap: true },
+          {
+            type: "box", layout: "vertical", margin: "lg", paddingAll: "12px", cornerRadius: "12px", backgroundColor: "#FFFFFF",
+            contents: [
+              { type: "text", text: "ลองพิมพ์ดูสิ", size: "xxs", color: "#9B94A0" },
+              { type: "text", text: "กาแฟ 60", weight: "bold", size: "sm", color: pink, margin: "xs" },
+              { type: "text", text: "เงินเดือน 15000", weight: "bold", size: "sm", color: pink, margin: "xs" }
+            ]
+          },
+          { type: "text", text: "ถามยายได้ด้วยนะ เช่น \"เดือนนี้ใช้จ่ายอะไรเยอะสุด\" ยายจะดึงรายการมาสรุปให้เลย", size: "xxs", color: "#9B94A0", margin: "md", wrap: true }
+        ]
+      }
+    }
+  };
+}
+
 function groupWelcomeFlexMessage() {
   const pink = "#D23283", cream = "#FBF3EC";
   return {
@@ -714,27 +761,6 @@ async function pushDailyReminders() {
 }
 cron.schedule("* * * * *", () => { pushDailyReminders().catch((error) => console.error("Daily reminder job failed:", error.message)); }, { timezone: "Asia/Bangkok" });
 
-const legacyDashboard = String.raw`<!doctype html>
-<html lang="th"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>รายการ | ยายจันทร์</title>
-<style>
-*{box-sizing:border-box}body{margin:0;background:#faf9f7;color:#25242a;font-family:system-ui,-apple-system,"Noto Sans Thai",sans-serif}.app{max-width:440px;min-height:100vh;margin:auto;background:#fff;padding-bottom:100px}.top{padding:16px 20px 12px;border-bottom:1px solid #eee}.top b{font-size:19px}.site{font-size:12px;color:#b0adb0;margin-top:3px}.close{float:right;font-size:32px;font-weight:300;line-height:20px;color:#222}main{padding:18px}.date,.filters,.toolbar,.item{border:1px solid #ebe8e8;border-radius:13px;background:white;box-shadow:0 1px 3px #0000000d}.date{padding:16px;text-align:center;font-weight:700;font-size:16px}.filters{padding:10px 13px;margin-top:17px}.filters h2{font-size:18px;margin:0 0 10px}.chips{display:flex;gap:8px}.chip{border:0;border-radius:6px;background:#e9e9ee;color:#3e3d42;padding:5px 20px;font-size:14px}.chip.active{background:#d23283;color:#fff}.tools{display:grid;grid-template-columns:1fr 1fr 70px;gap:8px;margin-top:17px}.toolbar{border-radius:9px;padding:8px 11px;color:#777;text-align:center;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.export{border:1px solid #ebe8e8;border-radius:13px;background:#fff;font-size:13px;font-weight:600}.day{display:flex;justify-content:space-between;align-items:center;padding:15px 15px 5px;border-bottom:2px solid #a7adb9;color:#6c6b72;font-size:14px}.total{color:#bd3e78;font-weight:700}.item{display:grid;grid-template-columns:1fr auto;align-items:center;padding:15px 18px;margin-top:14px;cursor:pointer}.desc{font-weight:700;font-size:16px}.meta{font-size:14px;color:#777;margin-top:8px}.badge{background:#f1f1f3;border-radius:4px;padding:3px 9px;margin-left:10px}.money{font-size:16px;font-weight:700}.expense{color:#c14379}.income{color:#07835b}.arrow{color:#a0a0a4;font-size:25px;margin-left:10px}.add{position:fixed;right:max(20px,calc((100vw - 440px)/2 + 18px));bottom:80px;border:0;background:#d23283;color:#fff;width:64px;height:64px;border-radius:50%;font-size:42px;box-shadow:0 4px 10px #a8105c66}.nav{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:min(440px,100%);height:72px;background:#fff;border-top:1px solid #e8e7e7;display:flex;justify-content:space-around;padding-top:10px}.nav span{font-size:12px;color:#9b9ba0;text-align:center}.nav i{display:block;font-style:normal;font-size:24px;line-height:27px}.nav .selected{color:#c43d7a}.modal{position:fixed;inset:0;background:#0008;display:none;align-items:end;justify-content:center}.modal.open{display:flex}.sheet{width:min(440px,100%);background:#fff;border-radius:22px 22px 0 0;padding:20px}.sheet h2{margin:0 0 16px}.sheet label{display:block;font-size:13px;margin:11px 0 4px;color:#65636a}.sheet input,.sheet select{width:100%;border:1px solid #ddd;border-radius:9px;padding:11px;font:inherit}.actions{display:flex;gap:8px;margin-top:18px}.save,.cancel,.delete{border:0;border-radius:9px;padding:12px;flex:1;font:inherit;font-weight:700}.save{background:#d23283;color:#fff}.cancel{background:#eee}.delete{background:#fff0f3;color:#c22;border:1px solid #f1cbd3}.empty{text-align:center;color:#9b9b9f;padding:36px 0}
-</style><body><div class="app"><header class="top"><button class="close" aria-label="ปิด">×</button><b>รายการ</b><div class="site">app.panuan.com</div></header><main><div class="date" id="period">เดือนนี้&nbsp; 📅</div><section class="filters"><h2>คัดกรองประเภทรายการ</h2><div class="chips"><button class="chip active" data-type="all">ทั้งหมด</button><button class="chip" data-type="expense">รายจ่าย</button><button class="chip" data-type="income">รายรับ</button></div></section><div class="tools"><button class="toolbar" id="select">เลือกหลายรายการ ☷</button><button class="toolbar" id="refresh">ตั้งรายการรอดประจำ ↻</button><button class="export" id="export">⇩<br>ส่งออก</button></div><div id="list"></div></main></div><button class="add" id="add" aria-label="เพิ่มรายการ">+</button><nav class="nav"><span><i>⌂</i>สรุป</span><span><i>▥</i>วิเคราะห์</span><span><i>◴</i>หมวด / งบ</span><span class="selected"><i>☷</i>รายการ</span><span><i>⚙</i>ตั้งค่า</span></nav><div class="modal" id="modal"><form class="sheet" id="form"><h2 id="formTitle">เพิ่มรายการ</h2><label>ประเภทรายการ</label><select id="type"><option value="expense">รายจ่าย</option><option value="income">รายรับ</option></select><label>ชื่อรายการ</label><input id="description" required placeholder="เช่น ค่าอาหาร"><label>จำนวนเงิน (บาท)</label><input id="amount" required type="number" min="0.01" step="0.01" placeholder="0"><label>หมวดหมู่</label><input id="category" required placeholder="เช่น อื่น ๆ"><label>วันที่และเวลา</label><input id="createdAt" required type="datetime-local"><input id="id" type="hidden"><div class="actions"><button class="delete" type="button" id="remove" hidden>ลบ</button><button class="cancel" type="button" id="cancel">ยกเลิก</button><button class="save">บันทึก</button></div></form></div><script>
-const token=new URLSearchParams(location.search).get('token'),q='?token='+encodeURIComponent(token),fmt=n=>new Intl.NumberFormat('th-TH',{style:'currency',currency:'THB',maximumFractionDigits:2}).format(n),esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));let data=[],filter='all';
-async function api(url,opt){const r=await fetch(url+q,opt);if(!r.ok)throw new Error('บันทึกไม่สำเร็จ');return r.json()}
-function render(){const rows=data.filter(x=>filter==='all'||x.type===filter),groups={};rows.forEach(x=>{const d=x.date||new Date(x.createdAt).toLocaleDateString('th-TH',{day:'numeric',month:'short'});(groups[d]??=[]).push(x)});list.innerHTML=Object.entries(groups).map(([d,a])=>{const total=a.reduce((s,x)=>s+(x.type==='income'?x.amount:-x.amount),0);return '<div class="day"><span>'+d+'</span><span class="total">รวม: '+(total>=0?'+':'-')+fmt(Math.abs(total))+'</span></div>'+a.map(x=>'<article class="item" data-id="'+x.id+'"><div><div class="desc">'+esc(x.description)+'</div><div class="meta">'+new Date(x.createdAt).toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit'})+' น. <span class="badge">'+esc(x.category)+'</span></div></div><div><span class="money '+x.type+'">'+(x.type==='income'?'+':'-')+fmt(x.amount)+'</span><span class="arrow">›</span></div></article>').join('')}).join('')||'<div class="empty">ยังไม่มีรายการ<br>กด + เพื่อเพิ่มรายการ</div>';document.querySelectorAll('.item').forEach(e=>e.onclick=()=>open(data.find(x=>x.id===e.dataset.id)))}
-async function load(){const d=await api('/api/transactions');data=d.transactions;period.textContent=d.label+'  📅';render()}
-function local(dt){const d=new Date(dt),z=n=>String(n).padStart(2,'0');return d.getFullYear()+'-'+z(d.getMonth()+1)+'-'+z(d.getDate())+'T'+z(d.getHours())+':'+z(d.getMinutes())}
-function open(x){form.reset();id.value=x?.id||'';formTitle.textContent=x?'แก้ไขรายการ':'เพิ่มรายการ';type.value=x?.type||'expense';description.value=x?.description||'';amount.value=x?.amount||'';category.value=x?.category||'อื่น ๆ';createdAt.value=x?local(x.createdAt):local(new Date());remove.hidden=!x;modal.classList.add('open')}
-document.querySelectorAll('.chip').forEach(b=>b.onclick=()=>{filter=b.dataset.type;document.querySelectorAll('.chip').forEach(x=>x.classList.toggle('active',x===b));render()});add.onclick=()=>open();cancel.onclick=()=>modal.classList.remove('open');refresh.onclick=load;form.onsubmit=async e=>{e.preventDefault();const body=JSON.stringify({type:type.value,description:description.value.trim(),amount:Number(amount.value),category:category.value.trim(),createdAt:new Date(createdAt.value).toISOString()});try{await api(id.value?'/api/transactions/'+id.value:'/api/transactions',{method:id.value?'PUT':'POST',headers:{'content-type':'application/json'},body});modal.classList.remove('open');load()}catch(e){alert(e.message)}};remove.onclick=async()=>{if(confirm('ลบรายการนี้?')){await api('/api/transactions/'+id.value,{method:'DELETE'});modal.classList.remove('open');load()}};export.onclick=()=>location='/api/transactions/export'+q;load().catch(()=>document.body.innerHTML='<p>เข้าถึงไม่ได้: ตรวจลิงก์แดชบอร์ด</p>');
-</script><script>
-let selecting=false,selectedIds=new Set(),monthFilter='';const baseRender=render;
-function updateSelectButton(){select.textContent=selecting?'ลบที่เลือก ('+selectedIds.size+')':'เลือกหลายรายการ ☷'}
-render=function(){const original=data;if(monthFilter)data=data.filter(x=>x.createdAt.slice(0,7)===monthFilter);baseRender();data=original;period.title='กดเพื่อเลือกเดือน';document.querySelectorAll('.item').forEach(card=>{if(!selecting)return;const box=document.createElement('input');box.type='checkbox';box.checked=selectedIds.has(card.dataset.id);box.style.cssText='width:20px;height:20px;margin-right:12px;accent-color:#d23283';box.onclick=e=>{e.stopPropagation();box.checked?selectedIds.add(card.dataset.id):selectedIds.delete(card.dataset.id);updateSelectButton()};card.prepend(box);card.onclick=e=>{if(e.target!==box){box.checked=!box.checked;box.checked?selectedIds.add(card.dataset.id):selectedIds.delete(card.dataset.id);updateSelectButton()}}});updateSelectButton()};
-select.onclick=async()=>{if(!selecting){selecting=true;selectedIds.clear();render();return}if(!selectedIds.size){selecting=false;render();return}if(!confirm('ลบ '+selectedIds.size+' รายการที่เลือก?'))return;try{await Promise.all([...selectedIds].map(id=>api('/api/transactions/'+id,{method:'DELETE'})));selecting=false;selectedIds.clear();await load()}catch(e){alert(e.message)}};
-period.onclick=()=>{const value=prompt('เลือกเดือน (รูปแบบ YYYY-MM)\nเว้นว่างเพื่อแสดงทั้งหมด',monthFilter);if(value===null)return;if(value!==''&&!/^\d{4}-\d{2}$/.test(value)){alert('รูปแบบเดือนไม่ถูกต้อง');return}monthFilter=value;period.textContent=monthFilter||'ทุกเดือน';render()};
-refresh.onclick=async()=>{const description=prompt('ชื่อรายการประจำ เช่น ค่าเช่า');if(!description)return;const amount=Number(prompt('จำนวนเงิน (บาท)'));const category=prompt('หมวดหมู่','อื่น ๆ');const day=Number(prompt('ให้บันทึกทุกวันที่ (1-31)',String(new Date().getDate())));if(!Number.isFinite(amount)||amount<=0||!category||!Number.isInteger(day)||day<1||day>31){alert('ข้อมูลไม่ถูกต้อง');return}try{await api('/api/recurring',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({type:confirm('กด OK สำหรับรายรับ\nกด Cancel สำหรับรายจ่าย')?'income':'expense',description,amount,category,day})});alert('ตั้งรายการประจำแล้ว ระบบจะสร้างรายการให้อัตโนมัติทุกเดือน')}catch(e){alert(e.message)}};
-document.querySelector('.close').onclick=()=>history.length>1?history.back():location.href='about:blank';document.querySelectorAll('.nav span').forEach(item=>item.onclick=()=>{if(item.classList.contains('selected'))return;alert('หน้านี้กำลังอยู่ระหว่างจัดทำ ตอนนี้คุณจัดการรายการได้ครบจากหน้านี้')});load();
-</script></body></html>`;
 const dashboard = await fs.readFile(path.join(__dirname, "dashboard.html"), "utf8");
 
 app.get("/health", (_req, res) => res.json({ ok: true, app: "pa-nuan" }));
@@ -1004,6 +1030,14 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
   if (!signatureValid(req.body, req.get("x-line-signature"))) return res.sendStatus(401);
   res.sendStatus(200); const payload = JSON.parse(req.body.toString("utf8"));
   for (const event of payload.events ?? []) {
+    // --- ผู้ใช้แอดบอทเป็นเพื่อนใหม่ (1-1 chat) — คนละ event กับ "join" (นั่นคือถูกเชิญเข้ากลุ่ม/ห้อง ดูด้านล่าง) ---
+    if (event.type === "follow") {
+      const uid = event.source?.userId;
+      if (!uid) continue;
+      try { await replyMessages(event.replyToken, [followWelcomeFlexMessage()]); }
+      catch (error) { console.error("Follow welcome message failed:", error.message); }
+      continue;
+    }
     // --- บอทถูกเชิญเข้ากลุ่ม/ห้อง: เริ่มรอยืนยันเจ้าของ (spec: กลุ่มจดบัญชี) ---
     if (event.type === "join") {
       const groupId = event.source?.groupId ?? event.source?.roomId;
