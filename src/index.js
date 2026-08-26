@@ -382,9 +382,13 @@ function txFlexMessage(tx, opts = {}) {
 function receiptConfirmFlexMessage(receipt, meta = {}) {
   const pink = "#D23283";
   const cream = "#FBF3EC";
-  const merchant = String(receipt.merchant ?? "อื่น ๆ").slice(0, 60);
-  // LINE postback data จำกัดไม่เกิน 300 ตัวอักษร — เก็บเฉพาะฟิลด์ที่จำเป็นแบบย่อ
-  const payload = (type) => `slip_type=${type}&m=${encodeURIComponent(merchant)}&a=${receipt.amount}${meta.authorId ? `&aid=${meta.authorId}` : ""}`;
+  const merchant = String(receipt.merchant ?? "อื่น ๆ").slice(0, 60); // ใช้ตัวเต็มแค่ตอนแสดงผลในการ์ด
+  // LINE postback data จำกัดไม่เกิน 300 ตัวอักษร ภาษาไทย 1 ตัวอักษร URL-encode แล้วกินพื้นที่ ~9 ไบต์
+  // ตัด merchant เหลือ 15 ตัวในพารามิเตอร์ m (คนละตัวกับ merchant ด้านบนที่ใช้แสดงผล) กันเกิน limit ตอนรวมกับ slip_step/aid/c (เพิ่มมาใหม่)
+  const payloadMerchant = merchant.slice(0, 15);
+  // "รายจ่าย" ไม่บันทึกทันทีอีกต่อไป -> ไปที่ slip_step=category ก่อน (ดู categoryPickerFlexMessage) ให้เลือกหมวดก่อนค่อยบันทึกจริง
+  // "รายรับ" ยังบันทึกทันทีเหมือนเดิม เพราะรายรับไม่มีแนวคิดเรื่องหมวดหมู่ในระบบนี้ (category ถูกตั้งเป็น "รายรับ" คงที่เสมอ)
+  const payload = (step, type) => `slip_step=${step}&slip_type=${type}&m=${encodeURIComponent(payloadMerchant)}&a=${receipt.amount}${meta.authorId ? `&aid=${meta.authorId}` : ""}`;
   return {
     type: "flex",
     altText: `อ่านสลิปได้ ${money(receipt.amount)} บาท — เป็นรายรับหรือรายจ่าย?`,
@@ -411,8 +415,61 @@ function receiptConfirmFlexMessage(receipt, meta = {}) {
         paddingAll: "12px",
         backgroundColor: cream,
         contents: [
-          { type: "button", style: "primary", height: "sm", color: pink, action: { type: "postback", label: "รายจ่าย", data: payload("expense"), displayText: "รายจ่าย" } },
-          { type: "button", style: "secondary", height: "sm", color: "#F1E7DC", action: { type: "postback", label: "รายรับ", data: payload("income"), displayText: "รายรับ" } }
+          { type: "button", style: "primary", height: "sm", color: pink, action: { type: "postback", label: "รายจ่าย", data: payload("category", "expense"), displayText: "รายจ่าย" } },
+          { type: "button", style: "secondary", height: "sm", color: "#F1E7DC", action: { type: "postback", label: "รายรับ", data: payload("save", "income"), displayText: "รายรับ" } }
+        ]
+      }
+    }
+  };
+}
+// การ์ดเลือกหมวดหมู่ — โผล่หลังกดปุ่ม "รายจ่าย" บนการ์ดยืนยันสลิป (ก่อนหน้านี้กดปุ่ม "รายจ่าย" แล้วบันทึกเลย
+// ให้ categoryFor()/enrichWithAi ตัดสินหมวดเอาเองทั้งหมด ตอนนี้เปิดให้ผู้ใช้เลือกเองก่อนได้ ลดโอกาสตกไปเป็น "อื่น ๆ" ผิด ๆ)
+// เลือก "ให้ยายเลือกให้" ได้ ถ้าไม่อยากเลือกเอง -> ทำงานเหมือนพฤติกรรมเดิมทุกอย่าง (keyword match + AI ช่วยตัดสินตอน "อื่น ๆ")
+function categoryPickerFlexMessage(merchant, amount, meta = {}) {
+  const pink = "#D23283";
+  const cream = "#FBF3EC";
+  const displayMerchant = String(merchant ?? "อื่น ๆ").slice(0, 60); // ใช้ตัวเต็มแค่ตอนแสดงผลในการ์ด
+  // ตัด merchant ให้สั้นลงเหลือ 15 ตัวอักษรตอนใส่ใน postback data เท่านั้น (คนละตัวกับ displayMerchant ด้านบน, เท่ากับ limit ที่ใช้ใน receiptConfirmFlexMessage)
+  // เพราะภาษาไทย 1 ตัวอักษร URL-encode แล้วกินพื้นที่ ~9 ไบต์ ถ้าปล่อยยาวเกินไปรวมกับ slip_step/c/aid จะเกิน 300 ตัวอักษรที่ LINE postback data รับได้
+  const payloadMerchant = String(merchant ?? "อื่น ๆ").slice(0, 15);
+  const payload = (category) => `slip_step=save&slip_type=expense&m=${encodeURIComponent(payloadMerchant)}&a=${amount}&c=${encodeURIComponent(category)}${meta.authorId ? `&aid=${meta.authorId}` : ""}`;
+  const categoryLabels = Object.keys(CATEGORIES).filter((c) => c !== "อื่น ๆ"); // "อื่น ๆ" ไม่ต้องมีปุ่มเฉพาะ ใช้ปุ่ม "ให้ยายเลือกให้" แทน (ครอบคลุมเคสนี้อยู่แล้ว)
+  const categoryButtons = categoryLabels.map((label) => ({
+    type: "button", style: "secondary", height: "sm", color: "#F1E7DC",
+    action: { type: "postback", label, data: payload(label), displayText: label }
+  }));
+  return {
+    type: "flex",
+    altText: `${displayMerchant} ${money(amount)} บาท — เลือกหมวดหมู่รายจ่าย`,
+    contents: {
+      type: "bubble",
+      size: "kilo",
+      body: {
+        type: "box",
+        layout: "vertical",
+        backgroundColor: cream,
+        paddingAll: "20px",
+        contents: [
+          { type: "text", text: displayMerchant, size: "md", weight: "bold", color: "#3A3540", wrap: true },
+          { type: "text", text: `${money(amount)} บาท`, size: "xl", weight: "bold", color: pink, margin: "xs" },
+          { type: "separator", margin: "lg", color: "#EFE3D8" },
+          { type: "text", text: "รายจ่ายนี้เป็นหมวดไหน?", size: "sm", color: "#9B94A0", margin: "lg" },
+          {
+            type: "box", layout: "vertical", spacing: "sm", margin: "md",
+            contents: [
+              // จัดปุ่มเป็นแถวละ 2 ปุ่ม อ่านง่ายกว่าเรียงแนวตั้งยาว ๆ ทีละปุ่ม
+              ...Array.from({ length: Math.ceil(categoryButtons.length / 2) }, (_, i) => ({
+                type: "box", layout: "horizontal", spacing: "sm",
+                contents: categoryButtons.slice(i * 2, i * 2 + 2)
+              }))
+            ]
+          }
+        ]
+      },
+      footer: {
+        type: "box", layout: "vertical", paddingAll: "12px", backgroundColor: cream,
+        contents: [
+          { type: "button", style: "primary", height: "sm", color: pink, action: { type: "postback", label: "ให้ยายเลือกให้ 👵", data: payload(""), displayText: "ให้ยายเลือกให้" } }
         ]
       }
     }
@@ -420,10 +477,13 @@ function receiptConfirmFlexMessage(receipt, meta = {}) {
 }
 // สร้างและบันทึกรายการจากสลิปที่ยืนยันประเภทแล้ว (เรียกจาก postback handler)
 // merchant/amount มาจาก postback data ที่ผู้ใช้กดยืนยัน, type คือ "income" | "expense"
-async function saveConfirmedSlipTx({ userId, type, merchant, amount, authorId, isGroupChat }) {
+// category: ถ้าผู้ใช้เลือกเองจาก categoryPickerFlexMessage จะส่งมาตรงนี้ ถ้าไม่ส่งมา (undefined/"") ให้ categoryFor()/enrichWithAi ตัดสินเองเหมือนเดิม
+async function saveConfirmedSlipTx({ userId, type, merchant, amount, category, authorId, isGroupChat }) {
   const user = await getUser(userId);
-  let tx = { id: crypto.randomUUID(), type, category: type === "income" ? "รายรับ" : categoryFor(merchant), description: merchant, amount, createdAt: new Date().toISOString() };
-  if (type === "expense") tx = await enrichWithAi(tx, merchant); // ยังจำแนกหมวดหมู่ต่อได้ตามปกติถ้าเป็น "อื่น ๆ"
+  const resolvedCategory = type === "income" ? "รายรับ" : (category || categoryFor(merchant));
+  let tx = { id: crypto.randomUUID(), type, category: resolvedCategory, description: merchant, amount, createdAt: new Date().toISOString() };
+  // ถ้าผู้ใช้เลือกหมวดเองแล้ว ไม่ต้องให้ AI มาเดาซ้ำทับ (เฉพาะตอนยังเป็น "อื่น ๆ" หรือไม่ได้เลือกมาเท่านั้นถึงให้ AI ช่วย)
+  if (type === "expense" && tx.category === "อื่น ๆ") tx = await enrichWithAi(tx, merchant);
   if (isGroupChat) tx = { ...tx, authorId, authorName: await getGroupMemberName(userId, authorId) };
   user.transactions.push(tx);
   await saveUser(userId, user);
@@ -1094,12 +1154,17 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
         let message;
         try {
           const type = params.get("slip_type");
+          const step = params.get("slip_step") ?? "save"; // เดิมไม่มี step, บันทึกทันที — เผื่อ postback เก่าที่ยังไม่มี slip_step ค้างอยู่ในมือถือผู้ใช้ ให้ default เป็น "save" (พฤติกรรมเดิม)
           const merchant = decodeURIComponent(params.get("m") ?? "อื่น ๆ").slice(0, 120) || "อื่น ๆ";
           const amount = Number(params.get("a"));
           const authorId = params.get("aid") ?? event.source?.userId ?? null;
           if (!Number.isFinite(amount) || amount <= 0) message = "ข้อมูลสลิปหมดอายุแล้ว ลองส่งรูปใหม่อีกครั้ง";
-          else {
-            const { user, tx } = await saveConfirmedSlipTx({ userId: pbUserId, type, merchant, amount, authorId, isGroupChat: pbIsGroupChat });
+          else if (step === "category") {
+            // ปุ่ม "รายจ่าย" ถูกกด -> ยังไม่บันทึก แสดงการ์ดเลือกหมวดหมู่ต่อก่อน (ดู categoryPickerFlexMessage)
+            message = categoryPickerFlexMessage(merchant, amount, { authorId });
+          } else {
+            const category = decodeURIComponent(params.get("c") ?? ""); // ว่างได้ถ้ากด "ให้ยายเลือกให้" หรือเป็นรายรับ (ไม่มี c เลย)
+            const { user, tx } = await saveConfirmedSlipTx({ userId: pbUserId, type, merchant, amount, category, authorId, isGroupChat: pbIsGroupChat });
             message = txFlexMessage(tx, { budget: budgetProgressFor(user, tx), dashboardUrl: dashboardEditUrl(pbUserId), userId: pbUserId });
           }
         } catch (error) { console.error("Slip postback confirm failed", error.message); message = "เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง"; }
