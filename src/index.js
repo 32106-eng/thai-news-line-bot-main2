@@ -756,32 +756,45 @@ async function downloadLineImage(messageId) {
     .toBuffer();
   return { mime: "image/jpeg", base64: resized.toString("base64") };
 }
+// คืนค่า { receipt } ถ้าอ่านสำเร็จ, { error: "system" } ถ้า provider/AI พัง (ไม่เกี่ยวกับภาพ), { error: "unreadable" } ถ้าอ่านได้แต่ไม่เจอยอดเงินที่สมเหตุสมผล
+// แยกสองเคสนี้ออกจากกัน เพราะข้อความที่ควรบอกผู้ใช้ต่างกันมาก — เดิมรวมเป็น null เดียวกันหมด ทำให้ปัญหาฝั่งระบบ (เช่น provider error 500)
+// ถูกเข้าใจผิดว่าเป็นปัญหาความชัดของภาพ ทั้งที่ภาพชัดแค่ไหนก็อ่านไม่ได้เพราะ request ไปไม่ถึงขั้นตอนอ่านภาพเลยด้วยซ้ำ
 async function readReceipt(mime, base64) {
-  if (!ai || !visionModel) return null;
-  try {
-    const completion = await ai.chat.completions.create({
-      model: visionModel,
-      temperature: 0,
-      max_tokens: 80, // เอาต์พุตเป็น JSON เล็ก ๆ แค่ {"merchant":"...","amount":number} เท่านั้น
-      // ไม่ใส่ response_format: json_object เพราะ NVIDIA NIM VLM บางตัว (เช่น nemotron-nano-12b-v2-vl)
-      // ตอบ 500 "EngineCore encountered an issue" เมื่อถูกบังคับ structured output แบบนี้ — คุม JSON ผ่าน prompt แทน
-      messages: [
-        { role: "system", content: "You read Thai/English receipt or bank-transfer slip photos. Reply with ONLY a raw JSON object, no markdown code fences, no explanation, in this exact shape: {\"merchant\":\"...\",\"amount\":number}. \"amount\" is the final total paid or transferred (บาท), as a plain number with no currency symbol or commas. If you cannot read a merchant/payee name, use \"อื่น ๆ\". If you cannot find a clear total amount, set amount to 0." },
-        { role: "user", content: [
-          { type: "text", text: "อ่านยอดรวมและชื่อร้านค้าจากใบเสร็จนี้" },
-          { type: "image_url", image_url: { url: `data:${mime};base64,${base64}` } }
-        ] }
-      ]
-    });
-    const raw = completion.choices[0]?.message?.content ?? "{}";
-    // บางโมเดล (โดยเฉพาะเมื่อไม่ได้บังคับ response_format) ยังห่อคำตอบด้วย ```json ... ``` ทั้งที่สั่งห้ามแล้ว — ตัดออกกันพังก่อน parse
-    const cleaned = raw.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
-    const parsed = JSON.parse(cleaned || "{}");
-    const amount = Number(parsed.amount);
-    if (!Number.isFinite(amount) || amount <= 0 || amount > 10_000_000) return null;
-    const merchant = String(parsed.merchant ?? "อื่น ๆ").trim().slice(0, 120) || "อื่น ๆ";
-    return { merchant, amount };
-  } catch (error) { console.warn("Receipt AI read failed:", error.message); return null; }
+  if (!ai || !visionModel) return { error: "system" };
+  // ลองใหม่ได้ 1 ครั้งถ้าเจอ error 5xx (เช่น "EngineCore encountered an issue" จาก NVIDIA NIM) เพราะมักเป็นปัญหาชั่วคราวฝั่ง provider
+  // ไม่ใช่ปัญหาภาพหรือโค้ดเรา — ถ้าลองใหม่แล้วยังพังอีก ถึงจะถือว่าเป็น error ฝั่งระบบจริง ๆ (ดู error handling ท้ายฟังก์ชัน)
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const completion = await ai.chat.completions.create({
+        model: visionModel,
+        temperature: 0,
+        max_tokens: 80, // เอาต์พุตเป็น JSON เล็ก ๆ แค่ {"merchant":"...","amount":number} เท่านั้น
+        // ไม่ใส่ response_format: json_object เพราะ NVIDIA NIM VLM บางตัว (เช่น nemotron-nano-12b-v2-vl)
+        // ตอบ 500 "EngineCore encountered an issue" เมื่อถูกบังคับ structured output แบบนี้ — คุม JSON ผ่าน prompt แทน
+        messages: [
+          { role: "system", content: "You read Thai/English receipt or bank-transfer slip photos. Reply with ONLY a raw JSON object, no markdown code fences, no explanation, in this exact shape: {\"merchant\":\"...\",\"amount\":number}. \"amount\" is the final total paid or transferred (บาท), as a plain number with no currency symbol or commas. If you cannot read a merchant/payee name, use \"อื่น ๆ\". If you cannot find a clear total amount, set amount to 0." },
+          { role: "user", content: [
+            { type: "text", text: "อ่านยอดรวมและชื่อร้านค้าจากใบเสร็จนี้" },
+            { type: "image_url", image_url: { url: `data:${mime};base64,${base64}` } }
+          ] }
+        ]
+      });
+      const raw = completion.choices[0]?.message?.content ?? "{}";
+      // บางโมเดล (โดยเฉพาะเมื่อไม่ได้บังคับ response_format) ยังห่อคำตอบด้วย ```json ... ``` ทั้งที่สั่งห้ามแล้ว — ตัดออกกันพังก่อน parse
+      const cleaned = raw.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
+      const parsed = JSON.parse(cleaned || "{}");
+      const amount = Number(parsed.amount);
+      if (!Number.isFinite(amount) || amount <= 0 || amount > 10_000_000) return { error: "unreadable" }; // โมเดลตอบสำเร็จ แต่ไม่เจอยอดเงินที่สมเหตุสมผลในภาพจริง ๆ
+      const merchant = String(parsed.merchant ?? "อื่น ๆ").trim().slice(0, 120) || "อื่น ๆ";
+      return { receipt: { merchant, amount } };
+    } catch (error) {
+      const status = error?.status ?? error?.response?.status;
+      const isServerError = typeof status === "number" && status >= 500;
+      console.warn(`Receipt AI read failed (attempt ${attempt + 1}/2, status=${status ?? "n/a"}):`, error.message);
+      if (attempt === 0 && isServerError) continue; // ลองใหม่อีกครั้งเฉพาะ error 5xx (ฝั่ง provider พัง) ไม่ retry error อื่น เช่น 400 (รูปแบบ request ผิดเอง ลองใหม่ก็พังเหมือนเดิม)
+      return { error: "system" }; // ทั้ง 5xx ที่ retry แล้วไม่หาย และ error อื่น ๆ (network, parse ผิดปกติ ฯลฯ) ถือเป็นปัญหาฝั่งระบบทั้งหมด ไม่ใช่ความผิดภาพ
+    }
+  }
 }
 function inLastDays(date, days) { const value = date instanceof Date ? date : new Date(date); return !Number.isNaN(value.getTime()) && Date.now() - value.getTime() <= days * 86_400_000; }
 async function pushWeeklySummaries() {
@@ -1203,9 +1216,10 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
           try { await reply(event.replyToken, "รอยายอ่านรูปแป๊บนึงนะจ๊ะ 👀"); } catch (error) { console.error("Could not reply", error.message); }
           try {
             const { mime, base64 } = await downloadLineImage(event.message.id);
-            const receipt = await readReceipt(mime, base64);
-            if (!receipt) message = noticeFlexMessage("อ่านยอดเงินจากใบเสร็จนี้ไม่ได้ ลองถ่ายให้เห็นยอดรวมชัด ๆ อีกครั้ง หรือพิมพ์รายการเองแทนได้ เช่น /บอท กาแฟ 60", "error");
-            else message = receiptConfirmFlexMessage(receipt, { authorId }); // ยังไม่บันทึก รอผู้ใช้กดยืนยันรายรับ/รายจ่ายก่อน (ดู postback handler)
+            const result = await readReceipt(mime, base64);
+            if (result.error === "system") message = noticeFlexMessage("ตอนนี้ระบบอ่านภาพขัดข้องชั่วคราว ไม่เกี่ยวกับความชัดของรูปเลย ลองส่งรูปเดิมอีกครั้งใน 1-2 นาที หรือพิมพ์รายการเองแทนได้เลย เช่น /บอท กาแฟ 60", "error");
+            else if (result.error === "unreadable") message = noticeFlexMessage("อ่านยอดเงินจากใบเสร็จนี้ไม่ได้ ลองถ่ายให้เห็นยอดรวมชัด ๆ อีกครั้ง หรือพิมพ์รายการเองแทนได้ เช่น /บอท กาแฟ 60", "error");
+            else message = receiptConfirmFlexMessage(result.receipt, { authorId }); // ยังไม่บันทึก รอผู้ใช้กดยืนยันรายรับ/รายจ่ายก่อน (ดู postback handler)
           } catch (error) { console.error("Receipt read failed", error.message); message = noticeFlexMessage("ระบบประมวลผลภาพใช้เวลานานกว่าปกติ กรุณาลองใหม่อีกครั้ง", "error"); }
           try { await push(userId, message); } catch (error) { console.error("Could not push", error.message); }
           continue;
@@ -1233,9 +1247,10 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
           else {
             try {
               const { mime, base64 } = await downloadLineImage(event.message.id);
-              const receipt = await readReceipt(mime, base64);
-              if (!receipt) message = noticeFlexMessage("อ่านยอดเงินจากใบเสร็จนี้ไม่ได้ ลองถ่ายให้เห็นยอดรวมชัด ๆ อีกครั้ง หรือพิมพ์รายการเองแทนได้ เช่น กาแฟ 60", "error");
-              else message = receiptConfirmFlexMessage(receipt); // ยังไม่บันทึก รอผู้ใช้กดยืนยันรายรับ/รายจ่ายก่อน (ดู postback handler)
+              const result = await readReceipt(mime, base64);
+              if (result.error === "system") message = noticeFlexMessage("ตอนนี้ระบบอ่านภาพขัดข้องชั่วคราว ไม่เกี่ยวกับความชัดของรูปเลย ลองส่งรูปเดิมอีกครั้งใน 1-2 นาที หรือพิมพ์รายการเองแทนได้เลย เช่น กาแฟ 60", "error");
+              else if (result.error === "unreadable") message = noticeFlexMessage("อ่านยอดเงินจากใบเสร็จนี้ไม่ได้ ลองถ่ายให้เห็นยอดรวมชัด ๆ อีกครั้ง หรือพิมพ์รายการเองแทนได้ เช่น กาแฟ 60", "error");
+              else message = receiptConfirmFlexMessage(result.receipt); // ยังไม่บันทึก รอผู้ใช้กดยืนยันรายรับ/รายจ่ายก่อน (ดู postback handler)
             } catch (error) { console.error("Receipt read failed", error.message); message = noticeFlexMessage("ระบบประมวลผลภาพใช้เวลานานกว่าปกติ กรุณาลองใหม่อีกครั้ง", "error"); }
           }
         }
