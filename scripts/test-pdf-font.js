@@ -34,4 +34,3 @@ const outPath = path.join(outDir, "font-test.pdf");
 fs.writeFileSync(outPath, output);
 console.log(`สร้างไฟล์ทดสอบแล้วที่: ${outPath}`);
 console.log("เปิดไฟล์นี้ดูด้วยตา — ถ้าตัวอักษรไทยอ่านออกปกติ (ไม่ใช่กล่องเปล่า) แปลว่าฟอนต์พร้อมใช้งานจริง");
-
