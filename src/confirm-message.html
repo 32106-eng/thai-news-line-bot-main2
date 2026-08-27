@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>ข้อความยืนยัน — ยายจันทร์</title>
+<style>
+  @font-face{font-family:"Noto Sans Thai";font-display:swap}
+  :root{
+    --paper:#FBF3EC;--card:#FFFDFA;--ink:#2B2320;--ink-soft:#8A8078;--line:#EFE3D8;
+    --accent:#D23283;--accent-soft:#FCE4EF;--accent-deep:#B0225F;--cream:#FBF3EC;
+    --radius:18px;--radius-sm:12px;
+    --shadow:0 1px 2px rgba(43,35,32,.05),0 10px 28px -14px rgba(43,35,32,.16);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);font-family:"Noto Sans Thai",system-ui,-apple-system,sans-serif;-webkit-font-smoothing:antialiased}
+  .app{max-width:480px;margin:auto;min-height:100vh;padding:0 0 40px;position:relative}
+  .num{font-variant-numeric:tabular-nums}
+
+  /* ---- top bar ---- */
+  .top{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:12px;padding:16px 18px 12px;background:linear-gradient(var(--paper) 70%,transparent)}
+  .back{width:36px;height:36px;border-radius:50%;border:1px solid var(--line);background:var(--card);display:flex;align-items:center;justify-content:center;font-size:17px;color:var(--ink);flex:none;transition:transform .12s,background .15s}
+  .back:active{transform:scale(.9);background:var(--accent-soft)}
+  .top h1{font-size:16px;margin:0;font-weight:800;letter-spacing:-.01em}
+  .top p{margin:1px 0 0;font-size:11.5px;color:var(--ink-soft)}
+
+  /* ---- preview stage ---- */
+  .stage{padding:6px 18px 4px;display:flex;flex-direction:column;align-items:center}
+  .stage-label{font-size:10.5px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-soft);margin-bottom:12px;display:flex;align-items:center;gap:7px}
+  .stage-label::before,.stage-label::after{content:"";height:1px;width:22px;background:var(--line)}
+  .phone{width:100%;max-width:300px;border-radius:26px;background:#111014;padding:9px;box-shadow:0 20px 46px -20px rgba(17,16,20,.55)}
+  .phone-screen{border-radius:19px;background:#7B7481;background-image:linear-gradient(165deg,#8B8492 0%,#6F6876 100%);padding:16px 10px 14px;min-height:280px;display:flex;flex-direction:column;justify-content:flex-end}
+
+  /* ---- the flex card itself (mirrors txFlexMessage bubble) ---- */
+  .bubble{width:220px;margin-left:auto;margin-right:auto;border-radius:14px;overflow:hidden;box-shadow:0 6px 18px -6px rgba(0,0,0,.35);font-size:12px;animation:pop .35s cubic-bezier(.22,1,.36,1) both}
+  @keyframes pop{from{opacity:0;transform:translateY(8px) scale(.97)}}
+  .bubble-body{padding:14px}
+  .bubble-title{font-size:13px;font-weight:800;color:#3A3540;margin:0 0 9px}
+  .tagrow{display:flex;gap:6px;margin-bottom:9px}
+  .tag{border-radius:8px;padding:3px 8px;font-size:9.5px;font-weight:800;color:#fff}
+  .tag.soft{color:var(--tag-accent,#D23283);background:var(--tag-accent-soft,#FCE4EF)}
+  .bubble-desc{font-size:12.5px;font-weight:700;color:#3A3540;margin:0 0 2px}
+  .bubble-author{font-size:9.5px;color:#9B94A0;margin:0 0 8px}
+  .bubble-sep{height:1px;background:#EFE3D8;margin:8px 0}
+  .bubble-amt-label{font-size:9px;color:#9B94A0;margin:8px 0 1px}
+  .bubble-amt{font-size:19px;font-weight:800;margin:0}
+  .bubble-budget-label{display:flex;justify-content:space-between;font-size:9px;color:#9B94A0;margin-bottom:4px}
+  .bubble-budget-track{height:5px;border-radius:99px;background:#F1E7DC;overflow:hidden}
+  .bubble-budget-fill{height:100%;border-radius:99px;transition:width .4s cubic-bezier(.22,1,.36,1),background .2s}
+  .bubble-over{font-size:8.5px;margin-top:4px;font-weight:700}
+  .bubble-footer{display:flex;gap:6px;padding:9px}
+  .bubble-btn{flex:1;text-align:center;font-size:10.5px;font-weight:800;padding:7px 0;border-radius:8px}
+
+  /* ---- sections ---- */
+  .section{padding:22px 18px 0}
+  .section-title{font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-soft);margin:0 4px 9px}
+  .panel{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden}
+
+  /* toggles */
+  .opt{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:14px 16px}
+  .opt+.opt{border-top:1px dashed var(--line)}
+  .opt-text strong{display:block;font-size:13.5px;font-weight:700}
+  .opt-text span{display:block;font-size:11.5px;color:var(--ink-soft);margin-top:2px;line-height:1.4}
+  .toggle{width:44px;height:26px;border-radius:99px;background:var(--line);position:relative;flex:none;border:0;padding:0;transition:background .2s}
+  .toggle::after{content:"";position:absolute;top:2px;left:2px;width:22px;height:22px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.25);transition:transform .2s cubic-bezier(.4,0,.2,1)}
+  .toggle.on{background:var(--accent)}
+  .toggle.on::after{transform:translateX(18px)}
+  .toggle:disabled{opacity:.5}
+
+  /* theme swatches */
+  .swatches{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;padding:16px}
+  .swatch{display:flex;flex-direction:column;align-items:center;gap:8px;padding:12px 6px;border-radius:var(--radius-sm);border:1.5px solid transparent;transition:border-color .15s,background .15s;cursor:pointer}
+  .swatch.checked{border-color:var(--swatch-color);background:color-mix(in srgb, var(--swatch-color) 8%, transparent)}
+  .swatch-dot{width:30px;height:30px;border-radius:50%;box-shadow:inset 0 -3px 0 rgba(0,0,0,.15),0 2px 6px -2px rgba(0,0,0,.25);position:relative}
+  .swatch-dot::after{content:"✓";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#fff;font-size:14px;font-weight:800;opacity:0;transition:opacity .15s}
+  .swatch.checked .swatch-dot::after{opacity:1}
+  .swatch span{font-size:11.5px;font-weight:700;color:var(--ink)}
+
+  /* save bar */
+  .savebar{position:sticky;bottom:0;padding:16px 18px calc(16px + env(safe-area-inset-bottom));background:linear-gradient(transparent,var(--paper) 30%)}
+  .save-btn{width:100%;border:0;border-radius:var(--radius-sm);padding:15px;font-size:14.5px;font-weight:800;color:#fff;background:var(--accent);box-shadow:0 10px 22px -10px color-mix(in srgb, var(--accent) 70%, transparent);transition:transform .12s,opacity .15s}
+  .save-btn:active{transform:scale(.98)}
+  .save-btn:disabled{opacity:.55;box-shadow:none}
+  .save-btn.saved{background:#4B6A58}
+
+  .notice{margin:14px 18px 0;padding:14px 16px;border-radius:var(--radius-sm);background:var(--accent-soft);color:var(--accent-deep);font-size:12.5px;line-height:1.55}
+  .notice.error{background:#FBEAEA;color:#7A2B3D}
+
+  .hidden{display:none!important}
+  .skel{background:linear-gradient(100deg,var(--line) 30%,#faf6ef 50%,var(--line) 70%);background-size:200% 100%;animation:shimmer 1.3s ease infinite;border-radius:8px}
+  @keyframes shimmer{to{background-position:-200% 0}}
+
+  .toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(14px);background:var(--ink);color:#fff;padding:11px 20px;border-radius:99px;font-size:13px;font-weight:600;box-shadow:0 10px 24px -8px rgba(0,0,0,.4);opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;z-index:20}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+  @media(prefers-reduced-motion:reduce){*{animation-duration:.001ms!important;transition-duration:.001ms!important}}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <button class="back" id="backBtn" aria-label="กลับ">‹</button>
+    <div>
+      <h1>ข้อความยืนยัน</h1>
+      <p>ปรับการ์ด "จดสำเร็จ" ที่ยายจันทร์ส่งให้</p>
+    </div>
+  </header>
+
+  <div id="root">
+    <!-- loading skeleton -->
+    <div class="stage">
+      <div class="stage-label">ตัวอย่างการ์ด</div>
+      <div class="phone"><div class="phone-screen"><div class="skel" style="height:170px;border-radius:14px"></div></div></div>
+    </div>
+    <div class="section"><div class="skel" style="height:230px;border-radius:18px"></div></div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+</div>
+
+<script>
+  const params = new URLSearchParams(location.search);
+  const token = params.get('token');
+  const uid = params.get('u');
+  const query = '?token=' + encodeURIComponent(token || '') + '&u=' + encodeURIComponent(uid || '');
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const money = n => new Intl.NumberFormat('th-TH', { maximumFractionDigits: 2 }).format(Number(n) || 0);
+
+  // Mirrors CONFIRM_MESSAGE_THEMES in src/index.js exactly.
+  const THEMES = {
+    pink:   { accent:'#D23283', accentSoft:'#FCE4EF', accentDeep:'#B0225F', label:'ชมพู'   },
+    green:  { accent:'#4B6A58', accentSoft:'#E7EFE8', accentDeep:'#33493C', label:'เขียว'   },
+    brown:  { accent:'#8A5A3B', accentSoft:'#F1E4D8', accentDeep:'#623F29', label:'น้ำตาล' },
+    gold:   { accent:'#A6772E', accentSoft:'#F5ECD9', accentDeep:'#7A5820', label:'ทอง'     },
+    purple: { accent:'#7B5AA6', accentSoft:'#EAE3F5', accentDeep:'#5A3F80', label:'ม่วง'     },
+    orange: { accent:'#D2662E', accentSoft:'#FCE6D8', accentDeep:'#A8501F', label:'ส้ม'     }
+  };
+
+  const OPTIONS = [
+    { key:'showBudgetBar',   icon:'📊', title:'แถบงบประมาณคงเหลือ', sub:'โชว์ยอดใช้ไป/งบที่ตั้งไว้ของหมวดนั้น' },
+    { key:'showAuthorName',  icon:'🙋', title:'ชื่อผู้จด',           sub:'โชว์ว่าใครในกลุ่มเป็นคนจดรายการนี้', groupOnly:true },
+    { key:'showEditButton',  icon:'✏️', title:'ปุ่มแก้ไข',           sub:'ปุ่มเปิดหน้าเว็บเพื่อแก้ไขรายการ' },
+    { key:'showDeleteButton',icon:'🗑️', title:'ปุ่มลบ',             sub:'ปุ่มลบรายการนี้ทันทีจากในแชท' }
+  ];
+
+  let state = { showBudgetBar:true, showAuthorName:true, showEditButton:true, showDeleteButton:true, theme:'pink' };
+  let saved = { ...state };
+  let isGroup = false;
+  let allowedFlag = false;
+  let premiumFlag = false;
+
+  const SAMPLE_TX = { description:'กาแฟ', amount:65, category:'อาหาร', type:'expense', authorName:'พลอย' };
+  const SAMPLE_BUDGET = { limit:1500, spent:1180 };
+
+  function dirty(){ return JSON.stringify(state) !== JSON.stringify(saved); }
+
+  function renderBubble(){
+    const th = THEMES[state.theme];
+    const overBudget = state.showBudgetBar && SAMPLE_BUDGET.spent > SAMPLE_BUDGET.limit;
+    const ratio = Math.min(SAMPLE_BUDGET.spent / SAMPLE_BUDGET.limit, 1) * 100;
+    const budgetHtml = state.showBudgetBar ? `
+      <div class="bubble-sep"></div>
+      <div style="margin-top:10px">
+        <div class="bubble-budget-label"><span>งบ${esc(SAMPLE_TX.category)}เดือนนี้</span><span style="color:${overBudget?th.accentDeep:'#9B94A0'}">${money(SAMPLE_BUDGET.spent)} / ${money(SAMPLE_BUDGET.limit)} บาท</span></div>
+        <div class="bubble-budget-track"><div class="bubble-budget-fill" style="width:${ratio}%;background:${overBudget?th.accentDeep:th.accent}"></div></div>
+        ${overBudget ? `<div class="bubble-over" style="color:${th.accentDeep}">เกินงบที่ตั้งไว้แล้วนะ</div>` : ''}
+      </div>` : '';
+    const footerBtns = [];
+    if (state.showEditButton) footerBtns.push(`<div class="bubble-btn" style="background:#F1E7DC;color:#3A3540">แก้ไข</div>`);
+    if (state.showDeleteButton) footerBtns.push(`<div class="bubble-btn" style="background:${th.accentSoft};color:${th.accent}">ลบ</div>`);
+    const footerHtml = footerBtns.length ? `<div class="bubble-footer" style="background:${th.accent === '#D23283' ? '#FBF3EC' : '#FBF3EC'}">${footerBtns.join('')}</div>` : '';
+
+    return `
+      <div class="bubble">
+        <div class="bubble-body" style="background:#FBF3EC">
+          <p class="bubble-title">จดสำเร็จ ✅</p>
+          <div class="tagrow">
+            <span class="tag" style="background:${th.accent}">รายจ่าย</span>
+            <span class="tag soft" style="--tag-accent:${th.accent};--tag-accent-soft:${th.accentSoft}">${esc(SAMPLE_TX.category)}</span>
+          </div>
+          <p class="bubble-desc">${esc(SAMPLE_TX.description)}</p>
+          ${(isGroup && state.showAuthorName) ? `<p class="bubble-author">ผู้จด: ${esc(SAMPLE_TX.authorName)}</p>` : ''}
+          <div class="bubble-sep"></div>
+          <p class="bubble-amt-label">จำนวนเงิน</p>
+          <p class="bubble-amt" style="color:${th.accent}">-${money(SAMPLE_TX.amount)} บาท</p>
+          ${budgetHtml}
+        </div>
+        ${footerHtml}
+      </div>`;
+  }
+
+  function renderSwatches(){
+    return Object.entries(THEMES).map(([id, th]) => `
+      <div class="swatch ${state.theme===id?'checked':''}" style="--swatch-color:${th.accent}" data-theme="${id}">
+        <div class="swatch-dot" style="background:${th.accent}"></div>
+        <span>${th.label}</span>
+      </div>`).join('');
+  }
+
+  function renderOptions(){
+    return OPTIONS.filter(o => !o.groupOnly || isGroup).map(o => `
+      <div class="opt">
+        <div class="opt-text"><strong>${o.icon} ${esc(o.title)}</strong><span>${esc(o.sub)}</span></div>
+        <button class="toggle ${state[o.key]?'on':''}" data-key="${o.key}" role="switch" aria-checked="${!!state[o.key]}" aria-label="${esc(o.title)}"></button>
+      </div>`).join('');
+  }
+
+  function renderRoot(){
+    if (!allowedFlag) {
+      document.getElementById('root').innerHTML = `<div class="notice error">เข้าถึงหน้านี้ไม่ได้ ลิงก์อาจหมดอายุ กรุณาเปิดใหม่จากเมนู "เว็บ" หรือหน้าตั้งค่าในแชท</div>`;
+      return;
+    }
+    if (!premiumFlag) {
+      document.getElementById('root').innerHTML = `<div class="notice">ปรับแต่งการ์ด "จดสำเร็จ" เป็นฟีเจอร์ของสมาชิก Premium นะ สมัครได้จากเมนู "สมัครพรีเมียม" ในแชท 1:1 กับยายจันทร์</div>`;
+      return;
+    }
+
+    document.getElementById('root').innerHTML = `
+      <div class="stage">
+        <div class="stage-label">ตัวอย่างการ์ด</div>
+        <div class="phone"><div class="phone-screen" id="bubbleSlot">${renderBubble()}</div></div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">ธีมสี</div>
+        <div class="panel"><div class="swatches" id="swatchGrid">${renderSwatches()}</div></div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">แสดงในการ์ด</div>
+        <div class="panel" id="optList">${renderOptions()}</div>
+      </div>
+
+      <div class="savebar">
+        <button class="save-btn" id="saveBtn" disabled>บันทึกการเปลี่ยนแปลง</button>
+      </div>
+    `;
+    bindRoot();
+  }
+
+  function bindRoot(){
+    document.querySelectorAll('[data-theme]').forEach(el => el.onclick = () => {
+      state.theme = el.dataset.theme;
+      updateBubble();
+      document.querySelectorAll('[data-theme]').forEach(s => s.classList.toggle('checked', s.dataset.theme === state.theme));
+      updateSaveBtn();
+    });
+    document.querySelectorAll('[data-key]').forEach(btn => btn.onclick = () => {
+      const key = btn.dataset.key;
+      state[key] = !state[key];
+      btn.classList.toggle('on', state[key]);
+      btn.setAttribute('aria-checked', String(state[key]));
+      updateBubble();
+      updateSaveBtn();
+    });
+    document.getElementById('saveBtn').onclick = onSave;
+    updateSaveBtn();
+  }
+
+  function updateBubble(){
+    const slot = document.getElementById('bubbleSlot');
+    if (slot) slot.innerHTML = renderBubble();
+  }
+
+  function updateSaveBtn(){
+    const btn = document.getElementById('saveBtn');
+    if (!btn) return;
+    btn.disabled = !dirty();
+    btn.textContent = 'บันทึกการเปลี่ยนแปลง';
+    btn.classList.remove('saved');
+  }
+
+  function toast(msg){
+    const el = document.getElementById('toast');
+    el.textContent = msg; el.classList.add('show');
+    clearTimeout(toast._t); toast._t = setTimeout(() => el.classList.remove('show'), 2200);
+  }
+
+  async function api(url, opt){
+    const r = await fetch(url + (url.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(token || '') + '&u=' + encodeURIComponent(uid || ''), opt);
+    if (!r.ok) { const body = await r.json().catch(() => ({})); throw new Error(body.error || 'ทำรายการไม่สำเร็จ'); }
+    return r.json();
+  }
+
+  async function onSave(){
+    const btn = document.getElementById('saveBtn');
+    btn.disabled = true; btn.textContent = 'กำลังบันทึก…';
+    try {
+      await api('/api/confirm-message-prefs', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(state)
+      });
+      saved = { ...state };
+      btn.textContent = 'บันทึกแล้ว ✓';
+      btn.classList.add('saved');
+      toast('บันทึกการตั้งค่าแล้ว');
+      setTimeout(updateSaveBtn, 1400);
+    } catch (e) {
+      btn.disabled = false;
+      btn.textContent = 'บันทึกการเปลี่ยนแปลง';
+      toast(e.message || 'บันทึกไม่สำเร็จ ลองใหม่อีกครั้ง');
+    }
+  }
+
+  document.getElementById('backBtn').onclick = () => {
+    if (dirty() && !confirm('ยังไม่ได้บันทึกการเปลี่ยนแปลง ออกจากหน้านี้เลยไหม?')) return;
+    if (document.referrer) history.back();
+    else location.href = '/dashboard' + query;
+  };
+
+  async function load(){
+    try {
+      const [prefsRes, subRes] = await Promise.all([
+        api('/api/confirm-message-prefs'),
+        api('/api/subscription').catch(() => ({ active: false }))
+      ]);
+      allowedFlag = true;
+      isGroup = Boolean(prefsRes.isGroup);
+      premiumFlag = Boolean(subRes.active);
+      state = {
+        showBudgetBar: Boolean(prefsRes.showBudgetBar),
+        showAuthorName: Boolean(prefsRes.showAuthorName),
+        showEditButton: Boolean(prefsRes.showEditButton),
+        showDeleteButton: Boolean(prefsRes.showDeleteButton),
+        theme: prefsRes.theme in THEMES ? prefsRes.theme : 'pink'
+      };
+      saved = { ...state };
+    } catch (e) {
+      allowedFlag = false;
+    }
+    renderRoot();
+  }
+
+  load();
+</script>
+</body>
+</html>
+
