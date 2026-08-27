@@ -8,6 +8,7 @@
     "dev": "node --watch src/index.js",
     "check": "node --check src/index.js",
     "create-admin": "node scripts/create-admin.js",
+    "test-pdf-font": "node scripts/test-pdf-font.js",
     "test": "node --test test/**/*.test.js"
   },
   "dependencies": {
@@ -18,6 +19,7 @@
     "firebase-admin": "^14.2.0",
     "node-cron": "^3.0.3",
     "openai": "^4.80.1",
+    "pdfkit": "^0.15.1",
     "qrcode": "^1.5.4"
   }
 }
