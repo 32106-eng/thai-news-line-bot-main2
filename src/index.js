@@ -1,1464 +1,736 @@
-import "dotenv/config";
-import crypto from "node:crypto";
-import fs from "node:fs/promises";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import express from "express";
-import QRCode from "qrcode";
-import OpenAI from "openai";
-import sharp from "sharp";
-import cron from "node-cron";
-import { initializeApp, cert } from "firebase-admin/app";
-import { getFirestore, FieldValue } from "firebase-admin/firestore";
-
-import { buildSubscriptionCollections } from "./subscription/db.js";
-import { createAuditLogger } from "./subscription/auditLog.js";
-import { createSubscriptionService, PLAN } from "./subscription/subscriptions.js";
-import { createPaymentSessionService } from "./subscription/paymentSessions.js";
-import { createUploadSessionService } from "./subscription/uploadSessions.js";
-import { createPaymentTransactionService, TX_STATUS } from "./subscription/paymentTransactions.js";
-import { getPaymentProvider } from "./subscription/paymentProvider.js";
-import { createQrService } from "./subscription/qr.js";
-import { generateReportPdf } from "./reports/pdfReport.js";
-import { readSlip } from "./subscription/ocr.js";
-import { createRichMenuService } from "./subscription/richMenu.js";
-import { createSubscriptionLineHandlers } from "./subscription/lineHandlers.js";
-import { createGroupLinkService, CONFIRM_WINDOW_MINUTES } from "./subscription/groupLinks.js";
-import { createAdminAuth } from "./admin/auth.js";
-import { createAdminRouter } from "./admin/routes.js";
-
-for (const name of ["LINE_CHANNEL_SECRET", "LINE_CHANNEL_ACCESS_TOKEN", "FIREBASE_SERVICE_ACCOUNT", "ADMIN_SESSION_SECRET"]) {
-  if (!process.env[name]) throw new Error(`Missing ${name}. Add it to .env.`);
-}
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const app = express();
-// data now lives in Firestore instead of a local file, so it survives every redeploy
-const firebaseApp = initializeApp({ credential: cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)) });
-const usersCol = getFirestore(firebaseApp).collection("panuan_users");
-const aiKey = process.env.OPENAI_API_KEY ?? process.env.NVIDIA_API_KEY ?? process.env.OPENROUTER_API_KEY;
-const aiBaseURL = process.env.OPENAI_API_KEY
-  ? undefined
-  : process.env.NVIDIA_API_KEY
-    ? "https://integrate.api.nvidia.com/v1"
-    : process.env.OPENROUTER_API_KEY
-      ? "https://openrouter.ai/api/v1"
-      : undefined;
-// ลำดับความสำคัญ: OPENAI_API_KEY > NVIDIA_API_KEY > OPENROUTER_API_KEY — ตั้งค่าคีย์ตัวไหนไว้
-// ระบบจะใช้ตัวนั้นเป็นหลักโดยอัตโนมัติ (ไม่ต้องลบคีย์ตัวเก่าออกก็ได้ แค่ตัวที่ priority สูงกว่าจะชนะ)
-const ai = aiKey ? new OpenAI({ apiKey: aiKey, ...(aiBaseURL ? { baseURL: aiBaseURL } : {}) }) : null;
-// Vision-capable model for reading receipt/slip photos. Not every free/cheap model can read images —
-// a text-only model will just fail (e.g. "openai/gpt-oss-120b" on OpenRouter is TEXT-ONLY, no image
-// input — do not point OPENAI_VISION_MODEL at it). Working vision options (Aug 2026):
-//   OpenRouter (free, tighter rate limits): "google/gemma-4-31b-it:free"
-//   NVIDIA NIM (free, higher rate limits ~40 RPM, no ":free" suffix on model IDs): "google/gemma-4-31b-it"
-//   OpenAI direct (paid): "gpt-4o-mini" / "gpt-4.1-mini"
-// Falls back to OPENAI_MODEL if no separate vision model is set.
-const visionModel = process.env.OPENAI_VISION_MODEL ?? process.env.OPENAI_MODEL;
-
-// ---------------------------------------------------------------------------
-// Premium subscription + payment system (see docs/ARCHITECTURE.md)
-// ---------------------------------------------------------------------------
-const subCollections = buildSubscriptionCollections(firebaseApp);
-const auditLog = createAuditLogger(subCollections);
-const subscriptionService = createSubscriptionService(subCollections, auditLog);
-const paymentSessionService = createPaymentSessionService(subCollections, auditLog);
-const uploadSessionService = createUploadSessionService(subCollections);
-const paymentTransactionService = createPaymentTransactionService(subCollections, {
-  auditLog,
-  paymentProvider: getPaymentProvider(),
-  subscriptionService
-});
-const qrService = createQrService();
-const richMenuService = createRichMenuService();
-function buildQrImageUrl(sessionId) {
-  const base = process.env.PUBLIC_BASE_URL?.replace(/\/$/, "");
-  return base ? `${base}/qr/${sessionId}.png` : null;
-}
-const subLineHandlers = createSubscriptionLineHandlers({
-  subscriptionService,
-  paymentSessionService,
-  uploadSessionService,
-  paymentTransactionService,
-  richMenuService,
-  qrService,
-  auditLog,
-  ai,
-  visionModel,
-  buildQrImageUrl
-});
-const adminAuth = createAdminAuth(subCollections);
-app.use("/admin", createAdminRouter({ collections: subCollections, adminAuth, subscriptionService, paymentTransactionService }));
-
-// ---------------------------------------------------------------------------
-// กลุ่มจดบัญชี (group ledger): บอทเข้ากลุ่มได้เฉพาะที่มีคนยืนยันว่าเป็นเจ้าของ Premium เท่านั้น
-// ทุกคำสั่ง/ข้อความในกลุ่ม-ห้อง ต้องขึ้นต้นด้วย "/บอท" เสมอ ไม่งั้นบอทจะไม่ตอบ (ดู docs/ARCHITECTURE.md)
-// ---------------------------------------------------------------------------
-const groupLinkService = createGroupLinkService(subCollections, auditLog, subscriptionService);
-const BOT_PREFIX = "/บอท";
-function stripBotPrefix(text) {
-  if (!text.startsWith(BOT_PREFIX)) return null;
-  return text.slice(BOT_PREFIX.length).trim();
-}
-
-// housekeeping: mark expired subscriptions daily (NOT the source of truth for access control —
-// isPremium() always re-checks expires_at live against server time, see spec §13)
-cron.schedule("15 0 * * *", async () => {
-  try { const count = await subscriptionService.sweepExpired(); if (count) console.log(`Expired ${count} subscription(s)`); }
-  catch (error) { console.error("Subscription expiry sweep failed:", error.message); }
-}, { timezone: "Asia/Bangkok" });
-
-// housekeeping: กลุ่มที่ยังไม่มีใครยืนยันเป็นเจ้าของภายในเวลาที่กำหนด (CONFIRM_WINDOW_MINUTES) ให้บอทออกจากกลุ่มเอง
-// รันถี่กว่า sweep ปกติเพราะ deadline สั้นแค่ไม่กี่นาที (ตรวจทุก 2 นาทีพอ ไม่ต้องเรียลไทม์เป๊ะ)
-cron.schedule("*/2 * * * *", async () => {
-  try {
-    const expiredGroupIds = await groupLinkService.findExpiredPending();
-    for (const groupId of expiredGroupIds) {
-      try {
-        await leaveGroup(groupId);
-        await groupLinkService.markLeft(groupId);
-        console.log(`Left group ${groupId}: no owner confirmation within ${CONFIRM_WINDOW_MINUTES} min`);
-      } catch (error) { console.error(`Leaving group ${groupId} failed:`, error.message); }
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>ยายจันทร์ — สมุดบัญชี</title>
+  <style>
+    @font-face{font-family:"Noto Sans Thai";font-display:swap}
+    :root{
+      --paper:#f6f3ee;--card:#fffdfa;--ink:#231f1a;--ink-soft:#6b6258;--line:#e4ddd2;--line-soft:#eee8de;
+      --wine:#7a2b3d;--wine-deep:#5c1f2d;--wine-soft:#f3e5e6;
+      --sage:#4b6a58;--sage-soft:#e7efe8;
+      --gold:#a6772e;--gold-soft:#f5ecd9;
+      --shadow:0 1px 2px rgba(35,31,26,.04),0 8px 24px -12px rgba(35,31,26,.12);
+      --radius:16px;--radius-sm:10px;
     }
-  } catch (error) { console.error("Group pending sweep failed:", error.message); }
-}, { timezone: "Asia/Bangkok" });
+    *{box-sizing:border-box}
+    ::selection{background:var(--wine-soft);color:var(--wine-deep)}
+    body{margin:0;background:var(--paper);color:var(--ink);font-family:"Noto Sans Thai",system-ui,-apple-system,sans-serif;-webkit-font-smoothing:antialiased}
+    .num{font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+    .app{max-width:560px;min-height:100vh;margin:auto;background:var(--paper);padding:0 0 108px;position:relative}
 
-const CATEGORIES = {
-  "อาหาร": ["กาแฟ", "ข้าว", "อาหาร", "กิน", "ร้าน", "น้ำ", "ชา"],
-  "เดินทาง": ["รถ", "น้ำมัน", "แท็กซี่", "bts", "mrt", "grab", "ที่จอด"],
-  "บิล": ["ค่าไฟ", "ค่าน้ำ", "เน็ต", "โทรศัพท์", "บิล", "ประกัน"],
-  "สุขภาพ": ["ยา", "หมอ", "โรงพยาบาล", "ฟิตเนส"],
-  "บันเทิง": ["เกม", "หนัง", "เที่ยว", "คอนเสิร์ต", "spotify", "netflix"],
-  "ช้อปปิ้ง": ["ช้อป", "ซื้อ", "ของใช้", "เสื้อ", "รองเท้า"],
-  "อื่น ๆ": []
-};
-const INCOME_WORDS = ["เงินเดือน", "รายรับ", "รายได้", "โบนัส", "ขาย", "ได้เงิน", "คืนเงิน", "ดอกเบี้ย", "กำไร", "ค่าจ้าง", "จดรับ", "บันทึกรับ", "รับเงิน", "เงินเข้า", "โอนเข้า"];
-// คำนำหน้าสั้น ๆ ที่หมายถึง "นี่คือรายรับ" เช่น "รับ 30", "+30", "จดรับ30"
-const INCOME_PREFIX = /^(?:\+|รับ)\s*(?=[0-9])|^จดรับ\s*(?=[0-9]|\s)/;
+    .top{position:sticky;top:0;z-index:5;background:var(--paper);padding:22px 20px 14px;display:flex;justify-content:space-between;align-items:flex-start;border-bottom:1px solid transparent;transition:border-color .25s,box-shadow .25s}
+    .top.scrolled{border-color:var(--line);box-shadow:0 4px 14px -10px rgba(35,31,26,.35)}
+    .brandmark{display:flex;align-items:center;gap:11px}
+    .seal{width:38px;height:38px;border-radius:50%;background:var(--wine);color:#fff;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:700;flex:none;box-shadow:inset 0 -2px 0 rgba(0,0,0,.15);transition:transform .5s cubic-bezier(.22,1,.36,1)}
+    .seal.spin{transform:rotate(360deg)}
+    .brand{font-size:19px;font-weight:800;letter-spacing:-.01em;line-height:1.1}
+    .sub{font-size:12px;color:var(--ink-soft);margin-top:2px}
+    .status{font-size:11px;color:var(--sage);display:flex;align-items:center;gap:5px;font-weight:600;padding-top:9px}
+    .status .dot{width:6px;height:6px;border-radius:50%;background:var(--sage);box-shadow:0 0 0 3px var(--sage-soft)}
 
-// confirmMessagePrefs: ปรับแต่งการ์ด "จดสำเร็จ" (txFlexMessage) — ฟีเจอร์ Premium ใช้ได้ทั้งกลุ่มและแชทส่วนตัว 1:1 (ดู /api/confirm-message-prefs)
-// ค่า default ทุกตัว = พฤติกรรมเดิมของการ์ด (เปิดหมด, ธีมชมพู) เพื่อไม่กระทบผู้ใช้เก่าที่ยังไม่เคยตั้งค่า
-function defaultConfirmMessagePrefs() { return { showBudgetBar: true, showAuthorName: true, showEditButton: true, showDeleteButton: true, theme: "pink" }; }
-function emptyUser() { return { transactions: [], recurring: [], budgets: {}, dailyReminder: false, reminderTime: "20:00", confirmMessagePrefs: defaultConfirmMessagePrefs() }; }
-async function getUser(uid) {
-  const snap = await usersCol.doc(String(uid)).get();
-  return snap.exists ? { ...emptyUser(), ...snap.data() } : emptyUser();
-}
-async function saveUser(uid, user) { await usersCol.doc(String(uid)).set(user); }
-function perUserToken(uid) { return crypto.createHmac("sha256", process.env.DASHBOARD_TOKEN ?? "").update(String(uid)).digest("hex").slice(0, 32); }
-function money(value) { return new Intl.NumberFormat("th-TH", { maximumFractionDigits: 2 }).format(value); }
-function parts(date = new Date()) {
-  const value = date instanceof Date ? date : new Date(date);
-  if (Number.isNaN(value.getTime())) return null;
-  return Object.fromEntries(new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Bangkok", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(value).map(({ type, value }) => [type, value]));
-}
-function sameDay(date) { const a = parts(date), b = parts(); return Boolean(a && b && a.year === b.year && a.month === b.month && a.day === b.day); }
-function sameMonth(date, year = parts().year, month = parts().month) { const p = parts(date); return Boolean(p && p.year === year && p.month === month); }
-function totals(list) { return list.reduce((x, tx) => ({ income: x.income + (tx.type === "income" ? tx.amount : 0), expense: x.expense + (tx.type === "expense" ? tx.amount : 0) }), { income: 0, expense: 0 }); }
-function categoryFor(text) { const lower = text.toLowerCase(); return Object.entries(CATEGORIES).find(([, words]) => words.some((word) => lower.includes(word)))?.[0] ?? "อื่น ๆ"; }
-// คำที่ส่งสัญญาณว่าเป็น "คำถาม/ขอคำปรึกษา" ไม่ใช่การจดรายการ แม้จะไม่มีเครื่องหมาย ? หรือคำถามชัด ๆ
-const QUESTION_HINTS = /[?？]|ไหม|หรือเปล่า|หรือไม่|หรือยัง|ทำไม|ยังไง|อย่างไร|เท่าไหร่|เท่าไร|มั้ย|รึเปล่า|หรือป่าว|ช่วย|หน่อย|แนะนำ|วางแผน|ควร(?:จะ)?|คิดว่า|ดีไหม|ดีมั้ย|ยังไงดี|ทำยังไง|อยากรู้|อยากถาม|บ้าง(?:คะ|ครับ)?$|มีอะไรบ้าง/;
-function looksLikeQuestion(text) {
-  if (QUESTION_HINTS.test(text)) return true;
-  // ประโยคยาว (เกิน 4 คำ) ที่ไม่มีสกุลเงินกำกับชัดเจน (฿/บาท ติดกับตัวเลข) มีแนวโน้มเป็นประโยคคุย/คำถามมากกว่ารายการจด
-  // (รายการจดจริง ๆ มักสั้น เช่น "กาแฟ 60" ไม่ใช่ประโยคยาวหลายคำ)
-  const trimmed = text.trim();
-  const hasExplicitCurrency = /(?:฿|บาท)\s*[0-9]|[0-9][0-9,]*(?:\.\d{1,2})?\s*(?:฿|บาท)/.test(trimmed);
-  if (!hasExplicitCurrency && trimmed.split(/\s+/).length > 4) return true;
-  return false;
-}
-function parse(text) {
-  const trimmed = text.trim();
-  if (looksLikeQuestion(trimmed)) return null;
-  // require an explicit currency marker (฿ / บาท) next to the number ...
-  let hit = trimmed.match(/(?:฿|บาท)\s*([0-9][0-9,]*(?:\.\d{1,2})?)/) ?? trimmed.match(/([0-9][0-9,]*(?:\.\d{1,2})?)\s*(?:฿|บาท)/);
-  // ...or fall back to a short "item amount" style entry only (e.g. "กาแฟ 60"), never a long sentence
-  if (!hit && trimmed.split(/\s+/).length <= 4) hit = trimmed.match(/([0-9][0-9,]*(?:\.\d{1,2})?)/);
-  if (!hit) return null;
-  const amount = Number(hit[1].replaceAll(",", ""));
-  if (!Number.isFinite(amount) || amount <= 0 || amount > 10_000_000) return null;
-  const matchedIncomeSignal = INCOME_PREFIX.test(trimmed) || INCOME_WORDS.some((word) => trimmed.toLowerCase().includes(word));
-  const income = matchedIncomeSignal;
-  const description = trimmed.replace(hit[0], "").replace(/^(รายรับ|รายจ่าย|จดรับ|จดจ่าย|รับ|\+)\s*/i, "").trim() || (income ? "รายรับ" : "รายจ่าย");
-  // ambiguous = no explicit income/expense keyword or prefix matched, so we fell back to the "expense by default" guess
-  const typeAmbiguous = !matchedIncomeSignal;
-  return { id: crypto.randomUUID(), type: income ? "income" : "expense", category: income ? "รายรับ" : categoryFor(trimmed), description, amount, createdAt: new Date().toISOString(), _typeAmbiguous: typeAmbiguous };
-}
-// รวม "จำแนกรายรับ/รายจ่าย" (เมื่อกำกวม) และ "จำแนกหมวดหมู่" (เมื่อยังเป็น "อื่น ๆ") ให้เป็น AI call เดียว
-// เดิมยิง 2 ครั้งติดกัน (sequential) ทำให้แชท 1:1 ตอบช้าลงเท่าตัวในเคสที่ทั้งกำกวมและหมวดไม่ชัด
-async function enrichWithAi(tx, source, typeWasAmbiguous) {
-  const needType = typeWasAmbiguous;
-  const needCategory = tx.type === "expense" && tx.category === "อื่น ๆ";
-  if (!ai || !process.env.OPENAI_MODEL || (!needType && !needCategory)) return tx;
-  try {
-    const instructions = [];
-    if (needType) instructions.push('"type": ตัดสินว่าข้อความนี้เป็น "income" (เงินเข้า/รายรับ) หรือ "expense" (เงินออก/รายจ่าย)');
-    // เดิมบังคับเลือกจาก 7 หมวดคงที่เท่านั้น (Object.hasOwn(CATEGORIES, ...) กรองทิ้งถ้าไม่ตรง) ทำให้รายจ่ายที่ไม่เข้าหมวดไหนเลย
-    // ถูกจัดเป็น "อื่น ๆ" เสมอ แม้ผู้ใช้จะพิมพ์ชัดเจนแค่ไหนก็ตาม (เช่น "ค่าเลี้ยงลูก", "ค่าเทอม", "ทำบุญ") ตอนนี้ให้ AI ตั้งชื่อหมวดใหม่ได้เอง
-    // ถ้าเข้ากับหมวดเดิม (อาหาร/เดินทาง/บิล/สุขภาพ/บันเทิง/ช้อปปิ้ง) ให้ใช้หมวดเดิมต่อ (กันหมวดเดียวกันแตกเป็นหลายชื่อโดยไม่จำเป็น
-    // เช่น "อาหาร" กับ "ค่ากิน" ควรเป็นหมวดเดียวกัน) ใช้เฉพาะตอนไม่เข้าหมวดไหนจริง ๆ เท่านั้นถึงตั้งชื่อหมวดใหม่สั้น ๆ ให้
-    if (needCategory) instructions.push(`"category": จัดหมวดรายจ่ายนี้ (ใส่เฉพาะกรณีเป็นรายจ่ายเท่านั้น) — ถ้าเข้ากับหมวดใดหมวดหนึ่งใน ${Object.keys(CATEGORIES).filter((c) => c !== "อื่น ๆ").join(", ")} ให้ใช้ชื่อหมวดเดิมนั้นเป๊ะ ๆ แต่ถ้าไม่เข้าหมวดไหนเลยจริง ๆ ให้ตั้งชื่อหมวดใหม่สั้น ๆ ภาษาไทยเอง (1-3 คำ ไม่ต้องมีคำว่า "ค่า" นำหน้าถ้าไม่จำเป็น เช่น "เลี้ยงลูก" "การศึกษา" "ทำบุญ") ห้ามใช้ "อื่น ๆ" ถ้าพอเดาความหมายของรายการได้`);
-    const fields = [needType ? '"type":"income"|"expense"' : null, needCategory ? '"category":"..."' : null].filter(Boolean).join(", ");
-    const completion = await ai.chat.completions.create({
-      model: process.env.OPENAI_MODEL,
-      temperature: 0,
-      max_tokens: 40, // เอาต์พุตเป็น JSON เล็ก ๆ แค่ {"type":"...","category":"..."} เท่านั้น ไม่ต้องเผื่อพื้นที่มาก
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: `ข้อความนี้เป็นการจดบันทึกทางการเงินสั้น ๆ ภาษาไทย ให้ตอบ JSON เท่านั้นตามฟิลด์ที่ร้องขอ:\n${instructions.join("\n")}\nรูปแบบ: {${fields}}` },
-        { role: "user", content: source }
-      ]
-    });
-    const parsed = JSON.parse(completion.choices[0]?.message?.content ?? "{}");
-    let next = tx;
-    if (needType && (parsed.type === "income" || parsed.type === "expense") && parsed.type !== next.type) {
-      next = { ...next, type: parsed.type, category: parsed.type === "income" ? "รายรับ" : categoryFor(source) };
-    }
-    // รับชื่อหมวดจาก AI ได้ทั้งหมวดเดิม (Object.hasOwn) และหมวดใหม่ที่ AI ตั้งเอง — validate ขั้นต่ำกันขยะ/พัง:
-    // ต้องเป็น string, ไม่ว่างหลัง trim, ไม่ยาวเกินไป (กัน AI หลุดตอบเป็นประโยคยาวแทนชื่อหมวด), ไม่ใช่ "อื่น ๆ" ซ้ำ (ไม่มีประโยชน์)
-    if (needCategory && next.type === "expense" && typeof parsed.category === "string") {
-      const proposedCategory = parsed.category.trim().slice(0, 20);
-      if (proposedCategory && proposedCategory !== "อื่น ๆ") next = { ...next, category: proposedCategory };
-    }
-    return next;
-  } catch (error) { console.warn("AI enrichment skipped:", error.message); return tx; }
-}
-function advice(monthTransactions) {
-  const expenses = monthTransactions.filter((tx) => tx.type === "expense");
-  if (expenses.length < 3) return "คำแนะนำ: บันทึกรายการต่อเนื่องอีกนิด ยายจันทร์จะช่วยดูพฤติกรรมการใช้เงินให้";
-  const groups = expenses.reduce((out, tx) => ({ ...out, [tx.category]: (out[tx.category] ?? 0) + tx.amount }), {});
-  const [category, value] = Object.entries(groups).sort((a, b) => b[1] - a[1])[0];
-  return `คำแนะนำ: เดือนนี้ใช้หมวด${category}มากสุด ${money(value)} บาท ลองตั้งวงเงินหมวดนี้ไว้ดูนะ`;
-}
-function summary(list, title) { const t = totals(list); return `📊 สรุป${title}\nรายรับ: ${money(t.income)} บาท\nรายจ่าย: ${money(t.expense)} บาท\nคงเหลือ: ${money(t.income - t.expense)} บาท\nจำนวนรายการ: ${list.length}`; }
-function signatureValid(raw, signature) { const expected = crypto.createHmac("sha256", process.env.LINE_CHANNEL_SECRET).update(raw).digest("base64"); return Boolean(signature) && crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected)); }
-async function line(endpoint, body) { const r = await fetch(`https://api.line.me/v2/bot/message/${endpoint}`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}` }, body: JSON.stringify(body) }); if (!r.ok) { const detail = await r.text().catch(() => ""); throw new Error(`LINE ${endpoint}: ${r.status} ${detail}`); } }
-// แสดง "..." กำลังพิมพ์ในแชท ระหว่างรอ AI อ่านสลิป — ใช้ได้เฉพาะแชท 1:1 เท่านั้น (LINE ไม่รองรับในกลุ่ม/ห้อง)
-// จะหายไปเองตอนบอทตอบกลับ (reply) หรือหมดเวลาตาม loadingSeconds แล้วแต่ว่าอันไหนถึงก่อน จึงไม่ต้องมีฟังก์ชันหยุดแยก
-// ยิงแบบ fire-and-forget เสมอ (ไม่ await ตรง call site) เพราะแค่พลาดแล้วไม่มี loading โชว์ ไม่ควรทำให้ทั้ง flow ล้ม
-async function startLoadingAnimation(chatId, loadingSeconds = 20) {
-  try {
-    const r = await fetch("https://api.line.me/v2/bot/chat/loading/start", {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}` },
-      body: JSON.stringify({ chatId, loadingSeconds }),
-    });
-    if (!r.ok) console.warn(`LINE loading animation failed: ${r.status}`);
-  } catch (error) { console.warn("LINE loading animation failed:", error.message); }
-}
-async function replyMessages(token, messages) { return line("reply", { replyToken: token, messages }); }
-async function reply(token, text) { return replyMessages(token, [{ type: "text", text: text.slice(0, 4900) }]); }
-async function push(to, message) { const messages = typeof message === "string" ? [{ type: "text", text: message.slice(0, 4900) }] : [message]; return line("push", { to, messages }); }
-function qrImageMessage(url) { return { type: "image", originalContentUrl: url, previewImageUrl: url }; }
+    section#view{padding:4px 20px 0}
+    .view-title{font-size:25px;margin:14px 0 3px;font-weight:800;letter-spacing:-.015em}
+    .lead{margin:0 0 18px;color:var(--ink-soft);font-size:13.5px}
 
-// ชุดธีมสีของการ์ด "จดสำเร็จ" — ปรับได้จากหน้าตั้งค่า (ดู /api/confirm-message-prefs), ค่า default คือ "pink" (สีเดิมของการ์ดก่อนมีฟีเจอร์นี้)
-// accent = สีหลัก (แท็กประเภท/ตัวเลขเงิน/แถบงบ), accentSoft = พื้นหลังแท็กหมวดหมู่, accentDeep = สีแถบงบตอนเกินงบ, cream = พื้นหลังการ์ด
-const CONFIRM_MESSAGE_THEMES = {
-  pink: { accent: "#D23283", accentSoft: "#FCE4EF", accentDeep: "#B0225F", cream: "#FBF3EC" },
-  green: { accent: "#4B6A58", accentSoft: "#E7EFE8", accentDeep: "#33493C", cream: "#F3F7F1" },
-  brown: { accent: "#8A5A3B", accentSoft: "#F1E4D8", accentDeep: "#623F29", cream: "#FBF4EC" },
-  gold: { accent: "#A6772E", accentSoft: "#F5ECD9", accentDeep: "#7A5820", cream: "#FBF6EA" },
-  purple: { accent: "#7B5AA6", accentSoft: "#EAE3F5", accentDeep: "#5A3F80", cream: "#F6F3FB" },
-  orange: { accent: "#D2662E", accentSoft: "#FCE6D8", accentDeep: "#A8501F", cream: "#FDF3EC" }
-};
-function confirmMessageTheme(name) { return CONFIRM_MESSAGE_THEMES[name] ?? CONFIRM_MESSAGE_THEMES.pink; }
+    .ptr{display:flex;align-items:center;justify-content:center;height:0;overflow:hidden;color:var(--ink-soft);font-size:12px;gap:7px;transition:height .18s ease}
+    .ptr.show{height:40px}
+    .ptr .spinner{width:14px;height:14px;border-radius:50%;border:2px solid var(--line);border-top-color:var(--wine);animation:spin .7s linear infinite}
+    @keyframes spin{to{transform:rotate(360deg)}}
 
-// การ์ด Flex Message แสดงผลตอนจดรายการสำเร็จ (แทนข้อความ text ธรรมดา)
-// tx: รายการที่เพิ่งบันทึก, opts.budget: { limit, spent } หมวดนี้ในเดือนนี้ (ถ้ามีตั้งงบไว้), opts.dashboardUrl: ลิงก์แก้ไขผ่านเว็บ, opts.userId: เจ้าของบัญชี (ใช้ผูกปุ่มลบ)
-// opts.prefs: confirmMessagePrefs ของ user (ดู defaultConfirmMessagePrefs) — คุมว่าจะโชว์แถบงบ/ชื่อผู้จด/ปุ่มแก้ไข/ปุ่มลบ และธีมสีไหน
-// ไม่ส่ง opts.prefs มา = fallback เป็นค่า default ทั้งหมด (พฤติกรรมเดิมก่อนมีฟีเจอร์นี้ ไม่กระทบ user เก่า)
-function txFlexMessage(tx, opts = {}) {
-  const isIncome = tx.type === "income";
-  const typeLabel = isIncome ? "รายรับ" : "รายจ่าย";
-  const prefs = { ...defaultConfirmMessagePrefs(), ...(opts.prefs ?? {}) };
-  const { accent: pink, accentSoft: pinkSoft, accentDeep: pinkDeep, cream } = confirmMessageTheme(prefs.theme);
-  const { budget, dashboardUrl, userId } = opts;
+    .ledger{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden;margin-bottom:16px}
+    .ledger-row{display:flex;align-items:center;justify-content:space-between;padding:15px 18px;position:relative}
+    .ledger-row+.ledger-row{border-top:1px dashed var(--line-soft)}
+    .ledger-row .k{font-size:13px;color:var(--ink-soft);display:flex;align-items:center;gap:8px}
+    .ledger-row .k i{width:7px;height:7px;border-radius:2px;display:inline-block}
+    .ledger-row .v{font-size:19px;font-weight:800}
+    .ledger-row.balance{background:var(--wine);color:#fff}
+    .ledger-row.balance .k{color:#f3d8de}
+    .ledger-row.balance .v{font-size:23px}
+    .income .v{color:var(--sage)}
+    .expense .v{color:var(--wine)}
 
-  const bodyContents = [
-    // แถวแท็ก: ประเภท + หมวดหมู่ (พื้นชมพู ตัวอักษรขาว) — กล่องสีพื้นหลังต้องอยู่บน box ไม่ใช่ text โดยตรง
-    {
-      type: "box",
-      layout: "horizontal",
-      spacing: "sm",
-      contents: [
-        {
-          type: "box",
-          layout: "vertical",
-          backgroundColor: pink,
-          cornerRadius: "12px",
-          paddingAll: "6px",
-          paddingStart: "10px",
-          paddingEnd: "10px",
-          flex: 0,
-          contents: [
-            { type: "text", text: typeLabel, size: "xs", weight: "bold", color: "#FFFFFF", align: "center", gravity: "center" }
-          ]
-        },
-        {
-          type: "box",
-          layout: "vertical",
-          backgroundColor: pinkSoft,
-          cornerRadius: "12px",
-          paddingAll: "6px",
-          paddingStart: "10px",
-          paddingEnd: "10px",
-          flex: 0,
-          contents: [
-            { type: "text", text: tx.category, size: "xs", weight: "bold", color: pink, align: "center", gravity: "center" }
-          ]
-        },
-        { type: "filler" }
-      ]
-    },
-    // ชื่อรายการ
-    { type: "text", text: tx.description || typeLabel, size: "md", weight: "bold", color: "#3A3540", margin: "md", wrap: true },
-    (prefs.showAuthorName && tx.authorName) ? { type: "text", text: `ผู้จด: ${tx.authorName}`, size: "xs", color: "#9B94A0", margin: "xs" } : null,
-    { type: "separator", margin: "lg", color: "#EFE3D8" },
-    // จำนวนเงินตัวใหญ่สีชมพู
-    {
-      type: "box",
-      layout: "vertical",
-      margin: "lg",
-      contents: [
-        { type: "text", text: "จำนวนเงิน", size: "xs", color: "#9B94A0" },
-        { type: "text", text: `${isIncome ? "+" : "-"}${money(tx.amount)} บาท`, size: "xxl", weight: "bold", color: pink, margin: "xs" }
-      ]
-    }
-  ].filter(Boolean);
+    .cards{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;margin-bottom:18px}
+    .card{border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--card);padding:12px 11px;box-shadow:var(--shadow);transition:transform .15s}
+    .card:active{transform:scale(.96)}
+    .card small{display:block;color:var(--ink-soft);font-size:11px;font-weight:600}
+    .card strong{display:block;margin-top:6px;font-size:15px}
 
-  // แถบ progress bar เทียบยอดรวม (หมวดนี้/เดือนนี้) กับงบที่ตั้งไว้ — แสดงเฉพาะรายจ่ายที่มีการตั้งงบหมวดนี้ และเปิด showBudgetBar ไว้
-  if (prefs.showBudgetBar && !isIncome && budget && budget.limit > 0) {
-    const ratio = Math.min(budget.spent / budget.limit, 1);
-    const overBudget = budget.spent > budget.limit;
-    bodyContents.push(
-      { type: "separator", margin: "lg", color: "#EFE3D8" },
-      {
-        type: "box",
-        layout: "vertical",
-        margin: "lg",
-        spacing: "xs",
-        contents: [
-          {
-            type: "box",
-            layout: "horizontal",
-            contents: [
-              { type: "text", text: `งบ${tx.category}เดือนนี้`, size: "xs", color: "#9B94A0", flex: 1 },
-              { type: "text", text: `${money(budget.spent)} / ${money(budget.limit)} บาท`, size: "xs", color: overBudget ? pink : "#9B94A0", align: "end" }
-            ]
-          },
-          {
-            type: "box",
-            layout: "horizontal",
-            height: "8px",
-            cornerRadius: "4px",
-            contents: [
-              { type: "box", layout: "vertical", flex: Math.max(Math.round(ratio * 100), 4), backgroundColor: overBudget ? pinkDeep : pink, contents: [] },
-              { type: "box", layout: "vertical", flex: Math.max(100 - Math.round(ratio * 100), 0), backgroundColor: "#F1E7DC", contents: [] }
-            ]
-          },
-          overBudget ? { type: "text", text: "เกินงบที่ตั้งไว้แล้วนะ", size: "xxs", color: pinkDeep, margin: "xs" } : null
-        ].filter(Boolean)
-      }
-    );
-  }
+    .panel{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:17px;margin-top:14px;box-shadow:var(--shadow)}
+    .panel h2{font-size:14px;margin:0 0 13px;font-weight:800;letter-spacing:.01em;text-transform:uppercase;color:var(--ink-soft);display:flex;align-items:center;justify-content:space-between}
 
-  const footerButtons = [];
-  if (prefs.showEditButton && dashboardUrl) {
-    footerButtons.push({ type: "button", style: "secondary", height: "sm", color: "#F1E7DC", action: { type: "uri", label: "แก้ไข", uri: dashboardUrl } });
-  }
-  // ปุ่ม "ลบ": ยิง postback กลับมาให้บอทลบรายการนี้ทันที (ไม่เปิดเว็บ, ไม่ถามยืนยันซ้ำ)
-  if (prefs.showDeleteButton && userId && tx.id) {
-    // displayText เว้นว่างไว้ตั้งใจ: กันไม่ให้มีข้อความ "ลบรายการนี้" เด้งขึ้นฝั่งเราเองตอนกด (จะรกแชท)
-    footerButtons.push({ type: "button", style: "secondary", height: "sm", color: pinkSoft, action: { type: "postback", label: "ลบ", data: `delete_tx=${tx.id}&u=${encodeURIComponent(userId)}`, displayText: "\u200b" } });
-  }
+    .chart-row,.row{display:flex;align-items:center;justify-content:space-between;gap:12px}
+    .chart-row{margin:11px 0;font-size:13px}
+    .bar{height:7px;border-radius:99px;background:var(--line-soft);overflow:hidden;flex:1}
+    .bar>i{display:block;height:100%;border-radius:99px;background:var(--wine);transform-origin:left;animation:grow .7s cubic-bezier(.22,1,.36,1) both}
+    @keyframes grow{from{transform:scaleX(0)}}
 
-  return {
-    type: "flex",
-    altText: `จดสำเร็จ: ${tx.description || typeLabel} ${money(tx.amount)} บาท`,
-    contents: {
-      type: "bubble",
-      size: "kilo",
-      body: {
-        type: "box",
-        layout: "vertical",
-        backgroundColor: cream,
-        paddingAll: "20px",
-        contents: [
-          { type: "text", text: "จดสำเร็จ ✅", size: "lg", weight: "bold", color: "#3A3540" },
-          { type: "box", layout: "vertical", margin: "md", spacing: "sm", contents: bodyContents }
-        ]
+    .row{padding:13px 4px;margin:0;cursor:pointer;border-radius:10px;transition:background .15s,transform .1s;border-bottom:1px solid var(--line-soft)}
+    .row:last-child{border-bottom:0}
+    .row:active{background:var(--wine-soft);transform:scale(.985)}
+    @media(hover:hover){.row:hover{background:#faf6f0}}
+    .row strong{font-size:14.5px;font-weight:700}
+    .meta{font-size:11.5px;color:var(--ink-soft);margin-top:3px}
+    .amount{white-space:nowrap;font-weight:800;font-size:14.5px}
+    .amount.income{color:var(--sage)}
+    .amount.expense{color:var(--wine)}
+    .empty{padding:32px 10px;text-align:center;color:var(--ink-soft);font-size:13.5px}
+    .empty .emoji{font-size:26px;display:block;margin-bottom:8px}
+
+    .row-wrap{position:relative;overflow:hidden;border-radius:10px}
+    .row-wrap .row-del{position:absolute;inset:0;right:0;width:76px;left:auto;background:var(--wine);color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;border-radius:0 10px 10px 0}
+    .row-wrap .row{position:relative;background:var(--paper);transition:transform .22s cubic-bezier(.22,1,.36,1)}
+    .row-wrap.swiped .row{transform:translateX(-76px)}
+
+    button{font:inherit;cursor:pointer;-webkit-tap-highlight-color:transparent}
+    .primary,.secondary,.danger{border:0;border-radius:var(--radius-sm);padding:12px 14px;font-weight:700;transition:transform .12s,opacity .12s}
+    .primary{color:#fff;background:var(--wine)}
+    .primary:active{transform:scale(.97)}
+    .secondary{color:var(--ink);background:var(--line-soft)}
+    .secondary:active{transform:scale(.97)}
+    .danger{color:#8a2a2a;background:#fbeceb}
+    .danger:active{transform:scale(.97)}
+
+    .toolbar{display:flex;gap:7px;flex-wrap:wrap;margin:0 0 15px}
+    .toolbar button{border:1px solid var(--line);padding:8px 12px;border-radius:99px;background:var(--card);font-size:12.5px;font-weight:600;color:var(--ink-soft);transition:background .15s,color .15s,border-color .15s,transform .1s}
+    .toolbar button.active{background:var(--wine);border-color:var(--wine);color:#fff}
+    .toolbar button:active{transform:scale(.94)}
+
+    .budget{display:grid;grid-template-columns:1fr 100px auto;gap:8px;align-items:center;margin:10px 0}
+    .budget input,.field input,.field select{width:100%;border:1px solid var(--line);border-radius:var(--radius-sm);padding:10px 11px;font:inherit;background:var(--card);color:var(--ink)}
+    .budget input:focus,.field input:focus,.field select:focus{outline:2px solid var(--wine);outline-offset:1px}
+    .budget-bar{height:5px;border-radius:99px;background:var(--line-soft);margin-top:6px;overflow:hidden}
+    .budget-bar>i{display:block;height:100%;border-radius:99px;background:var(--sage);transition:width .5s cubic-bezier(.22,1,.36,1)}
+    .budget-bar.over>i{background:var(--wine)}
+
+    .nav{position:fixed;left:50%;bottom:0;transform:translateX(-50%);display:flex;justify-content:space-around;width:min(560px,100%);padding:7px max(8px,calc((100vw - 560px)/2 + 8px)) calc(7px + env(safe-area-inset-bottom));background:var(--card);border-top:1px solid var(--line);z-index:4}
+    .nav button{border:0;background:transparent;color:#a39a8d;font-size:10.5px;padding:6px 4px;min-width:54px;border-radius:10px;transition:color .15s}
+    .nav i{display:block;font-style:normal;font-size:20px;line-height:23px;transition:transform .15s}
+    .nav button.active{color:var(--wine);font-weight:800}
+    .nav button.active i{transform:translateY(-1px)}
+    .nav button:active i{transform:scale(.85)}
+
+    .fab{position:fixed;right:max(18px,calc((100vw - 560px)/2 + 18px));bottom:calc(83px + env(safe-area-inset-bottom));width:56px;height:56px;border:0;border-radius:50%;font-size:30px;line-height:1;color:#fff;background:var(--wine);box-shadow:0 8px 20px -4px rgba(122,43,61,.55);z-index:3;transition:transform .15s}
+    .fab:active{transform:scale(.92) rotate(90deg)}
+
+    .modal{position:fixed;inset:0;display:none;align-items:end;background:rgba(35,31,26,.45);z-index:10;backdrop-filter:blur(2px)}
+    .modal.open{display:flex}
+    .modal.open .sheet{animation:sheet-in .28s cubic-bezier(.22,1,.36,1) both}
+    .modal.closing .sheet{animation:sheet-out .18s cubic-bezier(.4,0,1,1) both}
+    @keyframes sheet-in{from{transform:translateY(24px);opacity:0}}
+    @keyframes sheet-out{to{transform:translateY(24px);opacity:0}}
+    .sheet{width:min(560px,100%);border-radius:22px 22px 0 0;background:var(--card);padding:10px 20px calc(20px + env(safe-area-inset-bottom));max-height:88vh;overflow-y:auto}
+    .sheet-grip{width:36px;height:4px;border-radius:99px;background:var(--line);margin:0 auto 14px}
+    .sheet h2{margin:0 0 14px;font-size:18px;font-weight:800}
+    .field{margin:12px 0}
+    .field label{display:block;font-size:12.5px;margin-bottom:6px;color:var(--ink-soft);font-weight:600}
+    .actions{display:flex;gap:8px;margin-top:19px}
+    .actions button{flex:1}
+    .notice{padding:12px 14px;background:var(--wine-soft);color:var(--wine-deep);border-radius:var(--radius-sm);font-size:13px;line-height:1.5}
+    .hidden{display:none!important}
+    .toast{position:fixed;left:50%;bottom:100px;transform:translateX(-50%) translateY(12px);background:var(--ink);color:#fff;padding:11px 18px;border-radius:99px;font-size:13px;font-weight:600;box-shadow:0 8px 20px -6px rgba(0,0,0,.4);opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;z-index:20}
+    .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+    @media(max-width:380px){.cards{gap:6px}.card{padding:10px}.card strong{font-size:13px}.budget{grid-template-columns:1fr 84px auto}}
+    @media(prefers-reduced-motion:reduce){*{animation-duration:.001ms!important;transition-duration:.001ms!important}}
+
+    .chart-wrap{display:flex;gap:20px;align-items:center;flex-wrap:wrap}
+    .chart-wrap svg{flex:none}
+    .legend{flex:1;min-width:150px;display:flex;flex-direction:column;gap:8px}
+    .legend-item{display:flex;align-items:center;gap:9px;font-size:12.5px;border-radius:8px;padding:4px 6px;margin:0 -6px;transition:background .15s}
+    .legend-item:active{background:var(--line-soft)}
+    .legend-item .dot{width:9px;height:9px;border-radius:2px;flex:none}
+    .legend-item .amt{margin-left:auto;color:var(--ink-soft);font-size:11.5px}
+    .bar-chart{width:100%;height:auto}
+    .chart-legend{display:flex;gap:16px;margin:0 0 14px;font-size:11.5px;color:var(--ink-soft);font-weight:600}
+    .chart-legend span{display:inline-flex;align-items:center;gap:6px}
+    .chart-legend .dot{width:8px;height:8px;border-radius:2px}
+    .page-enter{animation:page-in .32s cubic-bezier(.22,1,.36,1) both}
+    @keyframes page-in{from{opacity:0;transform:translateY(6px)}}
+    .stagger{animation:row-in .32s cubic-bezier(.22,1,.36,1) both}
+    @keyframes row-in{from{opacity:0;transform:translateY(5px)}}
+
+    .skel{background:linear-gradient(100deg,var(--line-soft) 30%,#faf6ef 50%,var(--line-soft) 70%);background-size:200% 100%;animation:shimmer 1.3s ease infinite;border-radius:8px}
+    @keyframes shimmer{to{background-position:-200% 0}}
+    .skel-ledger .ledger-row{padding:15px 18px}
+    .skel-ledger .skel{height:16px;width:70px}
+    .skel-ledger .ledger-row .skel.v{width:90px;height:19px}
+    .skel-card .skel{height:11px;width:60%;margin-bottom:8px}
+    .skel-card .skel:last-child{height:15px;width:40%;margin-bottom:0}
+    .skel-row{display:flex;justify-content:space-between;align-items:center;padding:13px 4px;gap:12px}
+    .skel-row .skel.t1{height:14px;width:55%}
+    .skel-row .skel.t2{height:10px;width:35%;margin-top:6px}
+    .skel-row .skel.amt{height:14px;width:60px;flex:none}
+    .skel-hero{display:flex;justify-content:center;padding:18px 0 6px}
+    .skel-illustration .skel-book{animation:skel-book-breathe 2.6s ease-in-out infinite}
+    .skel-illustration .skel-coin{animation:skel-coin-float 2.2s ease-in-out infinite}
+    .skel-illustration .coin2{animation-delay:.4s}
+    @keyframes skel-book-breathe{0%,100%{transform:translateY(0)}50%{transform:translateY(-2px)}}
+    @keyframes skel-coin-float{0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}
+
+    .settings-list{display:flex;flex-direction:column}
+    .setting-item{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:13px 2px;border-bottom:1px solid var(--line-soft);cursor:pointer;transition:background .15s}
+    .setting-item:last-child{border-bottom:0}
+    .setting-item:active{background:var(--wine-soft);margin:0 -10px;padding:13px 12px;border-radius:10px}
+    .setting-item .si-main{display:flex;align-items:center;gap:11px}
+    .setting-item .si-icon{width:32px;height:32px;border-radius:9px;background:var(--wine-soft);color:var(--wine);display:flex;align-items:center;justify-content:center;font-size:15px;flex:none}
+    .setting-item .si-text strong{display:block;font-size:14px;font-weight:700}
+    .setting-item .si-text span{font-size:11.5px;color:var(--ink-soft)}
+    .setting-item .si-right{display:flex;align-items:center;gap:6px;color:var(--ink-soft);font-size:12.5px;font-weight:600}
+    .chev{font-size:15px;color:#c9beac}
+
+    .toggle{width:42px;height:24px;border-radius:99px;background:var(--line);position:relative;flex:none;transition:background .2s;border:0;padding:0}
+    .toggle::after{content:"";position:absolute;top:2px;left:2px;width:20px;height:20px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.25);transition:transform .2s cubic-bezier(.4,0,.2,1)}
+    .toggle.on{background:var(--sage)}
+    .toggle.on::after{transform:translateX(18px)}
+
+    .pro-banner{background:linear-gradient(120deg,var(--wine) 0%,var(--wine-deep) 100%);border-radius:var(--radius);padding:18px;color:#fff;position:relative;overflow:hidden;box-shadow:var(--shadow)}
+    .pro-banner::before{content:"";position:absolute;top:-30px;right:-30px;width:120px;height:120px;border-radius:50%;background:rgba(255,255,255,.08)}
+    .pro-banner .tag{display:inline-flex;align-items:center;gap:5px;background:var(--gold);color:#3a2c0f;font-size:10.5px;font-weight:800;padding:3px 9px;border-radius:99px;letter-spacing:.03em;text-transform:uppercase}
+    .pro-banner h3{margin:10px 0 4px;font-size:17px;font-weight:800}
+    .pro-banner p{margin:0 0 14px;font-size:12.5px;color:#f3d8de;line-height:1.5}
+    .pro-banner button{background:#fff;color:var(--wine-deep);border:0;padding:10px 16px;border-radius:var(--radius-sm);font-weight:800;font-size:13px}
+    .pro-banner button:active{transform:scale(.96)}
+
+    .pill{font-size:10px;font-weight:800;padding:2px 8px;border-radius:99px;letter-spacing:.02em}
+    .pill.pro{background:var(--gold-soft);color:#7a5c1c}
+    .pill.free{background:var(--line-soft);color:var(--ink-soft)}
+
+    .section-label{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-soft);margin:22px 4px 8px}
+    .section-label:first-child{margin-top:2px}
+
+    .radio-list{display:flex;flex-direction:column;gap:2px}
+    .radio-item{display:flex;align-items:center;justify-content:space-between;padding:12px 4px;border-radius:10px;transition:background .15s}
+    .radio-item:active{background:var(--line-soft)}
+    .radio-item span{font-size:13.5px;font-weight:600}
+    .radio-dot{width:19px;height:19px;border-radius:50%;border:2px solid var(--line);position:relative;flex:none}
+    .radio-dot.checked{border-color:var(--wine)}
+    .radio-dot.checked::after{content:"";position:absolute;inset:3px;border-radius:50%;background:var(--wine)}
+    .checkout-qr{display:flex;justify-content:center;padding:6px 0}
+    .checkout-qr img{border-radius:12px;border:1px solid var(--line);background:#fff;padding:8px}
+    #slipInput{margin-top:2px}
+  </style>
+</head>
+<body>
+  <main class="app">
+    <header class="top" id="topbar">
+      <div class="brandmark">
+        <div class="seal" id="seal">จ</div>
+        <div><div class="brand" id="brandName">ยายจันทร์</div><div class="sub" id="brandSub">สมุดบัญชีที่เชื่อมกับ LINE</div></div>
+      </div>
+      <span class="status" id="statusPill"><i class="dot"></i><span id="statusText">เชื่อมข้อมูลแล้ว</span></span>
+    </header>
+    <div class="ptr" id="ptr"><span class="spinner"></span><span id="ptrText">กำลังรีเฟรช…</span></div>
+    <section id="view"></section>
+  </main>
+  <button class="fab" id="addButton" aria-label="เพิ่มรายการ">+</button>
+  <nav class="nav" aria-label="เมนูหลัก" id="mainNav">
+    <button data-page="summary"><i>⌂</i><span data-nav-label>สรุป</span></button><button data-page="analysis"><i>▥</i><span data-nav-label>วิเคราะห์</span></button><button data-page="budgets"><i>◴</i><span data-nav-label>งบ</span></button><button data-page="transactions"><i>☷</i><span data-nav-label>รายการ</span></button><button data-page="settings"><i>⚙</i><span data-nav-label>ตั้งค่า</span></button>
+  </nav>
+  <div class="modal" id="modal"><form class="sheet" id="transactionForm"><div class="sheet-grip"></div><h2 id="formTitle">เพิ่มรายการ</h2><div class="field"><label for="type" id="formTypeLabel">ประเภท</label><select id="type"><option value="expense" id="formExpenseOpt">รายจ่าย</option><option value="income" id="formIncomeOpt">รายรับ</option></select></div><div class="field"><label for="description" id="formDescLabel">ชื่อรายการ</label><input id="description" required placeholder="เช่น ค่าอาหาร"></div><div class="field"><label for="amount" id="formAmountLabel">จำนวนเงิน (บาท)</label><input id="amount" required type="number" min="0.01" step="0.01"></div><div class="field"><label for="category" id="formCategoryLabel">หมวดหมู่</label><input id="category" required placeholder="เช่น อาหาร" list="catList"><datalist id="catList"></datalist></div><div class="field"><label for="createdAt" id="formDateLabel">วันที่และเวลา</label><input id="createdAt" required type="datetime-local"></div><input id="transactionId" type="hidden"><div class="actions"><button class="danger hidden" id="deleteButton" type="button">ลบ</button><button class="secondary" id="cancelButton" type="button">ยกเลิก</button><button class="primary" type="submit" id="submitButton">บันทึก</button></div></form></div>
+  <div class="modal" id="settingsModal"><div class="sheet" id="settingsSheet"></div></div>
+  <div class="toast" id="toast"></div>
+  <script>
+    const token=new URLSearchParams(location.search).get('token');const uid=new URLSearchParams(location.search).get('u');const query='?token='+encodeURIComponent(token||'')+'&u='+encodeURIComponent(uid||'');const view=document.getElementById('view');const fmt=n=>new Intl.NumberFormat('th-TH',{style:'currency',currency:'THB',maximumFractionDigits:2}).format(Number(n)||0);const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    let page='summary',filter='all',transactions=[],dashboard=null,budgets={},recurring=[],loaded=false;
+    const PALETTE=['#7a2b3d','#4b6a58','#a6772e','#5c7a9e','#8a5a3f','#6b5490','#a15a6e','#557a6a'];
+    const PREFS_KEY='panuan-prefs';
+    const prefs=Object.assign({categoryMemory:true,dailyReminder:false,reminderTime:'20:00',language:'ไทย',currency:'บาท (฿)',timezone:'Bangkok (GMT+7)'},JSON.parse(localStorage.getItem(PREFS_KEY)||'{}'));
+    function savePrefs(){localStorage.setItem(PREFS_KEY,JSON.stringify(prefs))}
+    let subscription={plan:'FREE',active:false,expiresAt:null,lineOaLink:null,isGroup:false};
+
+    // ── i18n: หน้าตั้งค่าเท่านั้นที่มีสองภาษาตอนนี้ ─────────────────────────
+    const I18N={
+      'ไทย':{
+        settingsTitle:'ตั้งค่า',settingsLead:'จัดการรายการประจำ และปรับแต่งการใช้งาน',
+        proTag:'✦ Pro',proTitle:'ปลดล็อกทุกลูกเล่น',proDesc:'ไม่มีโฆษณาก่อนเข้าแดชบอร์ด จัดหมวดด้วย AI และแจ้งเตือนไม่จำกัด',proTitleActive:'คุณเป็นสมาชิก Pro อยู่แล้ว',proDescActive:'ขอบคุณที่อุดหนุนยายจันทร์นะคะ ✦',upgradeBtn:'อัปเกรดเป็น Pro',manageBtn:'จัดการสมาชิก',
+        sectionCategory:'หมวดและงบ',categoryMemoryTitle:'จัดหมวดด้วยความจำ',categoryMemoryOn:'จำหมวดจากชื่อรายการที่เคยพิมพ์',categoryMemoryOff:'ปิดอยู่ — พิมพ์หมวดเองทุกครั้ง',
+        recurringTitle:'จดประจำ',recurringCount:n=>n+' รายการที่ตั้งไว้',recurringEmpty:'ยังไม่มีรายการประจำ',
+        sectionNotify:'การแจ้งเตือน',dailyReminderTitle:'เตือนจดประจำวัน',dailyReminderOn:time=>'แจ้งเตือนทุกวัน '+time+' น.',dailyReminderOff:'ปิดอยู่',reminderTimeRow:'เวลาแจ้งเตือน',reminderSheetTitle:'ตั้งเวลาแจ้งเตือน',reminderSheetLead:'ยายจันทร์จะทักในแชท LINE ตามเวลานี้ทุกวัน ถ้าวันนั้นยังไม่ได้จดอะไรเลย',reminderSave:'บันทึกเวลา',toastReminderSaved:'บันทึกเวลาแจ้งเตือนแล้ว',
+        sectionConfirmMsg:'ข้อความยืนยัน',confirmMsgLead:'ปรับแต่งการ์ด “จดสำเร็จ” ที่ยายจันทร์ส่งให้ทุกครั้งที่มีคนจดรายการ',
+        confirmMsgRowTitle:'ตั้งค่าการ์ดจดสำเร็จ',confirmMsgRowSub:'ธีมสี ปุ่ม และแถบงบประมาณ',
+        sectionMember:'สมาชิก',planTitle:'แพ็กเกจของฉัน',planSub:'ดูสิทธิ์และวันหมดอายุ',billingTitle:'ประวัติการชำระเงิน',billingSub:'ดูใบเสร็จย้อนหลัง',
+        sectionGeneral:'ทั่วไป',languageTitle:'ภาษา',currencyTitle:'สกุลเงิน',timezoneTitle:'โซนเวลา',
+        sectionLine:'ใช้ใน LINE',lineNotice:'พิมพ์ “ค่าอาหาร 80”, “เงินเดือน 15000”, “สรุปเดือนนี้” หรือ “เว็บ” ในแชตกับยายจันทร์ได้ ข้อมูลจะอัปเดตที่หน้านี้',
+        pillFree:'ฟรี',pillPro:'PRO',pillPremium:'Premium',
+        planFreeBody:'ตอนนี้ใช้แพ็กเกจฟรีอยู่ — มีโฆษณาก่อนเข้าแดชบอร์ด และจำกัดรายการประจำ อัปเกรดเป็น Pro เพื่อปลดล็อกทุกลูกเล่น',
+        planPremiumBody:expiresAt=>'คุณเป็นสมาชิก Premium อยู่แล้ว'+(expiresAt?'<br>ใช้งานได้ถึง '+expiresAt:''),
+        planHeaderTitle:'แพ็กเกจของฉัน',billingHeaderTitle:'ประวัติการชำระเงิน',billingEmpty:'ยังไม่มีประวัติการชำระเงิน',
+        upgradeHowTitle:'วิธีสมัคร Premium',upgradeHowBody:'การสมัครและชำระเงินต้องทำผ่านแชท LINE กับยายจันทร์เท่านั้น (แชทส่วนตัว 1:1) พิมพ์ “สมัครพรีเมียม” แล้วทำตามขั้นตอนได้เลย',
+        openLineChat:'เปิดแชท LINE',langSheetTitle:'ภาษา',currencySheetTitle:'สกุลเงิน',tzSheetTitle:'โซนเวลา',
+        toastOn:'เปิดใช้งานแล้ว',toastOff:'ปิดใช้งานแล้ว',toastLangChanged:'เปลี่ยนภาษาแล้ว',toastCurrencyChanged:'เปลี่ยนสกุลเงินแล้ว',toastTzChanged:'เปลี่ยนโซนเวลาแล้ว',
+        checkoutTitle:'สแกนจ่ายเพื่อสมัคร Premium',checkoutLoading:'กำลังสร้างรายการชำระเงิน…',checkoutError:'เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง',
+        checkoutAmount:'จำนวนเงิน:',checkoutRef:'เลขอ้างอิง:',checkoutExpiry:'หมดอายุ:',
+        checkoutUploadLabel:'อัปโหลดรูปสลิปหลังชำระเงินแล้ว',checkoutSubmit:'ส่งสลิปเพื่อตรวจสอบ',checkoutSubmitting:'กำลังส่ง…',
+        appName:'ยายจันทร์',appTitle:'ยายจันทร์ — สมุดบัญชี',appSub:'สมุดบัญชีที่เชื่อมกับ LINE',statusConnected:'เชื่อมข้อมูลแล้ว',refreshing:'กำลังรีเฟรช…',dataRefreshed:'อัปเดตข้อมูลแล้ว',
+        addEntry:'เพิ่มรายการ',editEntry:'แก้ไขรายการ',navSummary:'สรุป',navAnalysis:'วิเคราะห์',navBudgets:'งบ',navTransactions:'รายการ',navSettings:'ตั้งค่า',
+        formType:'ประเภท',formExpense:'รายจ่าย',formIncome:'รายรับ',formDescription:'ชื่อรายการ',formDescPlaceholder:'เช่น ค่าอาหาร',formAmount:'จำนวนเงิน (บาท)',formCategory:'หมวดหมู่',formCategoryPlaceholder:'เช่น อาหาร',formDate:'วันที่และเวลา',
+        deleteBtn:'ลบ',cancelBtn:'ยกเลิก',saveBtn:'บันทึก',
+        loading:'กำลังโหลด…',income:'รายรับ',expense:'รายจ่าย',balance:'คงเหลือสุทธิ',byCategory:'ใช้จ่ายตามหมวด',recentEntries:'รายการล่าสุด',noExpenseThisMonth:'ยังไม่มีรายจ่ายในเดือนนี้',totalLabel:'รวม',categoryPieAria:'สัดส่วนรายจ่ายตามหมวด',
+        analysisTitle:'วิเคราะห์',analysisLead:'ดูแนวโน้มรายรับและรายจ่าย 6 เดือนล่าสุด',monthlyTrend:'แนวโน้มรายเดือน',noHistory:'ยังไม่มีข้อมูลย้อนหลัง',trendAria:'เทียบรายรับรายจ่ายย้อนหลัง',observation:'ข้อสังเกต',observationBody:'ข้อมูลจากหน้าเว็บและข้อความที่ส่งให้ LINE ยายจันทร์ จะถูกเก็บในบัญชีเดียวกันทันที',
+        budgetsTitle:'หมวดและงบ',budgetsLead:'กำหนดวงเงินรายเดือนแยกตามหมวด',budgetPanelTitle:'งบประมาณ',budgetSpent:'ใช้แล้ว',budgetOf:'จาก',budgetSave:'บันทึก',budgetEmpty:'เพิ่มรายจ่ายก่อน แล้วหมวดจะปรากฏที่นี่',budgetSaved:n=>'บันทึกงบ'+n+'แล้ว',
+        transTitle:'รายการ',transLead:'ปัดซ้ายเพื่อลบ หรือแตะเพื่อแก้ไข',filterAll:'ทั้งหมด',filterExpense:'รายจ่าย',filterIncome:'รายรับ',exportCsv:'⇩ ส่งออก CSV',exportingCsv:'กำลังส่งออก CSV',exportPdf:'📄 รายงาน PDF',exportingPdf:'กำลังสร้างรายงาน PDF...',pdfPremiumRequired:'รายงาน PDF เป็นฟีเจอร์ Premium',pdfMonthLabel:'รายเดือน',pdfYearLabel:'รายปี',pdfSheetTitle:'ส่งออกรายงาน PDF',pdfSheetLead:'เลือกช่วงเวลาที่ต้องการสรุป รายงานจะมีกราฟและตารางรายการครบพร้อมเก็บไว้ยื่นภาษีหรือส่งให้นักบัญชีได้เลย',noEntries:'ยังไม่มีรายการ กด + เพื่อเริ่มบันทึก',noEntriesShort:'ยังไม่มีรายการ',
+        deleteEntryConfirm:'ลบรายการนี้?',entryDeleted:'ลบรายการแล้ว',entrySaved:'บันทึกรายการแล้ว',entryUpdated:'แก้ไขรายการแล้ว',
+        recurringSheetTitle:'จดประจำ',recurringEvery:'ทุกวันที่',addRecurringBtn:'+ เพิ่มรายการประจำ',recurringDeleteConfirm:'ลบรายการประจำ?',recurringDeleted:'ลบรายการประจำแล้ว',recurringAdded:'ตั้งรายการประจำแล้ว',recurringEmptySheet:'ยังไม่มีรายการประจำ',
+        promptRecurringDesc:'ชื่อรายการประจำ เช่น ค่าเช่า',promptRecurringAmount:'จำนวนเงิน (บาท)',promptRecurringCategory:'หมวดหมู่',promptRecurringCategoryDefault:'อื่น ๆ',promptRecurringDay:'บันทึกทุกวันที่ (1-31)',promptRecurringType:'กด OK = รายรับ, Cancel = รายจ่าย',invalidData:'ข้อมูลไม่ถูกต้อง',
+        loadError:n=>'เปิดข้อมูลไม่ได้: '+n,genericError:'ทำรายการไม่สำเร็จ',summaryTitle:'สรุปเดือนนี้',navAriaLabel:'เมนูหลัก',
+        monthJan:'มกราคม',monthFeb:'กุมภาพันธ์',monthMar:'มีนาคม',monthApr:'เมษายน',monthMay:'พฤษภาคม',monthJun:'มิถุนายน',monthJul:'กรกฎาคม',monthAug:'สิงหาคม',monthSep:'กันยายน',monthOct:'ตุลาคม',monthNov:'พฤศจิกายน',monthDec:'ธันวาคม'
       },
-      footer: footerButtons.length
-        ? { type: "box", layout: "horizontal", spacing: "sm", paddingAll: "12px", backgroundColor: cream, contents: footerButtons }
-        : undefined
+      'English':{
+        settingsTitle:'Settings',settingsLead:'Manage recurring entries and customize your experience',
+        proTag:'✦ Pro',proTitle:'Unlock everything',proDesc:'No ads before the dashboard, AI category matching, and unlimited reminders',proTitleActive:'You already have Pro',proDescActive:'Thank you for supporting ยายจันทร์ ✦',upgradeBtn:'Upgrade to Pro',manageBtn:'Manage membership',
+        sectionCategory:'Categories & Budgets',categoryMemoryTitle:'Smart category memory',categoryMemoryOn:'Remembers categories from past entries',categoryMemoryOff:'Off — you\u2019ll type the category every time',
+        recurringTitle:'Recurring entries',recurringCount:n=>n+' entries set',recurringEmpty:'No recurring entries yet',
+        sectionNotify:'Notifications',dailyReminderTitle:'Daily logging reminder',dailyReminderOn:time=>'Reminds you every day at '+time,dailyReminderOff:'Off',reminderTimeRow:'Reminder time',reminderSheetTitle:'Set reminder time',reminderSheetLead:'ยายจันทร์ will message you on LINE at this time each day if you haven\u2019t logged anything yet',reminderSave:'Save time',toastReminderSaved:'Reminder time saved',
+        sectionConfirmMsg:'Confirmation message',confirmMsgLead:'Customize the \u201cSaved\u201d card ยายจันทร์ sends every time you log an entry',
+        confirmMsgRowTitle:'Customize confirmation card',confirmMsgRowSub:'Theme, buttons, and budget bar',
+        sectionMember:'Membership',planTitle:'My plan',planSub:'View benefits and expiry date',billingTitle:'Payment history',billingSub:'View past receipts',
+        sectionGeneral:'General',languageTitle:'Language',currencyTitle:'Currency',timezoneTitle:'Timezone',
+        sectionLine:'Using LINE',lineNotice:'You can type "food 80", "salary 15000", "summary this month", or "web" to ยายจันทร์ in chat. This page will update automatically.',
+        pillFree:'Free',pillPro:'PRO',pillPremium:'Premium',
+        planFreeBody:'You\u2019re currently on the Free plan — ads show before the dashboard and recurring entries are limited. Upgrade to Pro to unlock everything.',
+        planPremiumBody:expiresAt=>'You already have Premium'+(expiresAt?'<br>Valid until '+expiresAt:''),
+        planHeaderTitle:'My plan',billingHeaderTitle:'Payment history',billingEmpty:'No payment history yet',
+        upgradeHowTitle:'How to subscribe to Premium',upgradeHowBody:'Subscribing and payment can only be done through a 1:1 LINE chat with ยายจันทร์. Type "สมัครพรีเมียม" there and follow the steps.',
+        openLineChat:'Open LINE chat',langSheetTitle:'Language',currencySheetTitle:'Currency',tzSheetTitle:'Timezone',
+        toastOn:'Turned on',toastOff:'Turned off',toastLangChanged:'Language changed',toastCurrencyChanged:'Currency changed',toastTzChanged:'Timezone changed',
+        checkoutTitle:'Scan to pay for Premium',checkoutLoading:'Creating payment request…',checkoutError:'Something went wrong, please try again',
+        checkoutAmount:'Amount:',checkoutRef:'Reference:',checkoutExpiry:'Expires:',
+        checkoutUploadLabel:'Upload the slip after paying',checkoutSubmit:'Submit slip for review',checkoutSubmitting:'Submitting…',
+        appName:'Yai Chan',appTitle:'Yai Chan — Ledger',appSub:'A ledger connected to LINE',statusConnected:'Data connected',refreshing:'Refreshing…',dataRefreshed:'Data updated',
+        addEntry:'Add entry',editEntry:'Edit entry',navSummary:'Summary',navAnalysis:'Analysis',navBudgets:'Budgets',navTransactions:'Entries',navSettings:'Settings',
+        formType:'Type',formExpense:'Expense',formIncome:'Income',formDescription:'Description',formDescPlaceholder:'e.g. Lunch',formAmount:'Amount (THB)',formCategory:'Category',formCategoryPlaceholder:'e.g. Food',formDate:'Date & time',
+        deleteBtn:'Delete',cancelBtn:'Cancel',saveBtn:'Save',
+        loading:'Loading…',income:'Income',expense:'Expense',balance:'Net balance',byCategory:'Spending by category',recentEntries:'Recent entries',noExpenseThisMonth:'No expenses this month yet',totalLabel:'Total',categoryPieAria:'Spending share by category',
+        analysisTitle:'Analysis',analysisLead:'View income and expense trends for the last 6 months',monthlyTrend:'Monthly trend',noHistory:'No historical data yet',trendAria:'Income vs expense over time',observation:'Notes',observationBody:'Data from the website and messages sent to ยายจันทร์ on LINE are saved to the same account instantly',
+        budgetsTitle:'Categories & Budgets',budgetsLead:'Set a monthly limit for each category',budgetPanelTitle:'Budget',budgetSpent:'Spent',budgetOf:'of',budgetSave:'Save',budgetEmpty:'Add an expense first, and categories will appear here',budgetSaved:n=>'Saved budget for '+n,
+        transTitle:'Entries',transLead:'Swipe left to delete, or tap to edit',filterAll:'All',filterExpense:'Expense',filterIncome:'Income',exportCsv:'⇩ Export CSV',exportingCsv:'Exporting CSV',exportPdf:'📄 PDF report',exportingPdf:'Generating PDF report...',pdfPremiumRequired:'PDF reports are a Premium feature',pdfMonthLabel:'Monthly',pdfYearLabel:'Yearly',pdfSheetTitle:'Export PDF report',pdfSheetLead:'Choose a period to summarize. The report includes charts and a full transaction table — ready to keep for tax filing or send to your accountant.',noEntries:'No entries yet — tap + to start logging',noEntriesShort:'No entries yet',
+        deleteEntryConfirm:'Delete this entry?',entryDeleted:'Entry deleted',entrySaved:'Entry saved',entryUpdated:'Entry updated',
+        recurringSheetTitle:'Recurring entries',recurringEvery:'Every day',addRecurringBtn:'+ Add recurring entry',recurringDeleteConfirm:'Delete this recurring entry?',recurringDeleted:'Recurring entry deleted',recurringAdded:'Recurring entry set',recurringEmptySheet:'No recurring entries yet',
+        promptRecurringDesc:'Recurring entry name, e.g. Rent',promptRecurringAmount:'Amount (THB)',promptRecurringCategory:'Category',promptRecurringCategoryDefault:'Other',promptRecurringDay:'Log on which day each month (1-31)',promptRecurringType:'Click OK = Income, Cancel = Expense',invalidData:'Invalid data',
+        loadError:n=>'Could not load data: '+n,genericError:'Action failed',summaryTitle:'This month',navAriaLabel:'Main menu',
+        monthJan:'January',monthFeb:'February',monthMar:'March',monthApr:'April',monthMay:'May',monthJun:'June',monthJul:'July',monthAug:'August',monthSep:'September',monthOct:'October',monthNov:'November',monthDec:'December'
+      }
+    };
+    function t(key){const dict=I18N[prefs.language]||I18N['ไทย'];return dict[key]}
+    function applyStaticI18n(){
+      document.documentElement.lang=prefs.language==='English'?'en':'th';
+      document.title=t('appTitle');
+      document.getElementById('brandName').textContent=t('appName');
+      document.getElementById('brandSub').textContent=t('appSub');
+      document.getElementById('statusText').textContent=t('statusConnected');
+      document.getElementById('ptrText').textContent=t('refreshing');
+      document.getElementById('addButton').setAttribute('aria-label',t('addEntry'));
+      document.getElementById('mainNav').setAttribute('aria-label',t('navAriaLabel'));
+      const navLabels=[t('navSummary'),t('navAnalysis'),t('navBudgets'),t('navTransactions'),t('navSettings')];
+      document.querySelectorAll('#mainNav [data-nav-label]').forEach((el,i)=>el.textContent=navLabels[i]);
+      document.getElementById('formTypeLabel').textContent=t('formType');
+      document.getElementById('formExpenseOpt').textContent=t('formExpense');
+      document.getElementById('formIncomeOpt').textContent=t('formIncome');
+      document.getElementById('formDescLabel').textContent=t('formDescription');
+      document.getElementById('description').setAttribute('placeholder',t('formDescPlaceholder'));
+      document.getElementById('formAmountLabel').textContent=t('formAmount');
+      document.getElementById('formCategoryLabel').textContent=t('formCategory');
+      document.getElementById('category').setAttribute('placeholder',t('formCategoryPlaceholder'));
+      document.getElementById('formDateLabel').textContent=t('formDate');
+      document.getElementById('deleteButton').textContent=t('deleteBtn');
+      document.getElementById('cancelButton').textContent=t('cancelBtn');
+      document.getElementById('submitButton').textContent=t('saveBtn');
+      const isEdit=!!document.getElementById('transactionId').value;
+      document.getElementById('formTitle').textContent=isEdit?t('editEntry'):t('addEntry');
     }
-  };
-}
-// การ์ด Flex Message ถามยืนยันประเภท "รายรับ/รายจ่าย" หลังอ่านสลิปเสร็จ — ยังไม่บันทึกจริงจนกว่าจะกดปุ่ม
-// receipt: { merchant, amount } จาก readReceipt, meta: { authorId } (มีเฉพาะในกลุ่ม)
-// ข้อมูลที่ต้องใช้ต่อถูกเข้ารหัสไว้ใน postback data ตรง ๆ (ไม่ผ่าน session ฝั่งเซิร์ฟเวอร์) เพราะเป็นข้อมูลเล็กและอายุสั้น
-function receiptConfirmFlexMessage(receipt, meta = {}) {
-  const pink = "#D23283";
-  const cream = "#FBF3EC";
-  const merchant = String(receipt.merchant ?? "อื่น ๆ").slice(0, 60); // ใช้ตัวเต็มแค่ตอนแสดงผลในการ์ด
-  // LINE postback data จำกัดไม่เกิน 300 ตัวอักษร ภาษาไทย 1 ตัวอักษร URL-encode แล้วกินพื้นที่ ~9 ไบต์
-  // ตัด merchant เหลือ 15 ตัวในพารามิเตอร์ m (คนละตัวกับ merchant ด้านบนที่ใช้แสดงผล) กันเกิน limit ตอนรวมกับ slip_step/aid/c (เพิ่มมาใหม่)
-  const payloadMerchant = merchant.slice(0, 15);
-  // "รายจ่าย" ไม่บันทึกทันทีอีกต่อไป -> ไปที่ slip_step=category ก่อน (ดู categoryPickerFlexMessage) ให้เลือกหมวดก่อนค่อยบันทึกจริง
-  // "รายรับ" ยังบันทึกทันทีเหมือนเดิม เพราะรายรับไม่มีแนวคิดเรื่องหมวดหมู่ในระบบนี้ (category ถูกตั้งเป็น "รายรับ" คงที่เสมอ)
-  const payload = (step, type) => `slip_step=${step}&slip_type=${type}&m=${encodeURIComponent(payloadMerchant)}&a=${receipt.amount}${meta.authorId ? `&aid=${meta.authorId}` : ""}`;
-  return {
-    type: "flex",
-    altText: `อ่านสลิปได้ ${money(receipt.amount)} บาท — เป็นรายรับหรือรายจ่าย?`,
-    contents: {
-      type: "bubble",
-      size: "kilo",
-      body: {
-        type: "box",
-        layout: "vertical",
-        backgroundColor: cream,
-        paddingAll: "20px",
-        contents: [
-          { type: "text", text: "อ่านสลิปสำเร็จ 🧾", size: "lg", weight: "bold", color: "#3A3540" },
-          { type: "text", text: merchant, size: "md", weight: "bold", color: "#3A3540", margin: "md", wrap: true },
-          { type: "text", text: `${money(receipt.amount)} บาท`, size: "xxl", weight: "bold", color: pink, margin: "xs" },
-          { type: "separator", margin: "lg", color: "#EFE3D8" },
-          { type: "text", text: "รายการนี้เป็นรายรับหรือรายจ่าย?", size: "sm", color: "#9B94A0", margin: "lg" }
-        ]
-      },
-      footer: {
-        type: "box",
-        layout: "horizontal",
-        spacing: "sm",
-        paddingAll: "12px",
-        backgroundColor: cream,
-        contents: [
-          { type: "button", style: "primary", height: "sm", color: pink, action: { type: "postback", label: "รายจ่าย", data: payload("category", "expense"), displayText: "รายจ่าย" } },
-          { type: "button", style: "secondary", height: "sm", color: "#F1E7DC", action: { type: "postback", label: "รายรับ", data: payload("save", "income"), displayText: "รายรับ" } }
-        ]
+    applyStaticI18n();
+
+    function animateNumber(el,to){
+      const from=0,dur=650,start=performance.now(),isMoney=el.dataset.money==='1';
+      const step=now=>{const p=Math.min(1,(now-start)/dur),eased=1-Math.pow(1-p,3);const val=from+(to-from)*eased;el.textContent=isMoney?fmt(val):Math.round(val);if(p<1)requestAnimationFrame(step)};
+      requestAnimationFrame(step);
+    }
+    function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');clearTimeout(toast._t);toast._t=setTimeout(()=>t.classList.remove('show'),2200)}
+
+    function pieChart(categories){
+      const total=categories.reduce((s,x)=>s+x.amount,0);
+      if(!total)return '<div class="empty"><span class="emoji">🌾</span>'+esc(t('noExpenseThisMonth'))+'</div>';
+      const r=64,c=2*Math.PI*r;let offset=0;
+      const segs=categories.map((x,i)=>{const frac=x.amount/total,dash=Math.max(frac*c,total?0.001:0),seg='<circle class="seg" cx="90" cy="90" r="'+r+'" fill="none" stroke="'+PALETTE[i%PALETTE.length]+'" stroke-width="28" stroke-dasharray="'+dash+' '+(c-dash)+'" stroke-dashoffset="'+(-offset)+'" transform="rotate(-90 90 90)" style="stroke-dasharray:0 '+c+';transition:stroke-dasharray .8s cubic-bezier(.22,1,.36,1) '+(i*70)+'ms" data-final="'+dash+' '+(c-dash)+'"></circle>';offset+=dash;return seg}).join('');
+      const svg='<svg viewBox="0 0 180 180" width="146" height="146" role="img" aria-label="'+esc(t('categoryPieAria'))+'">'+segs+'<circle cx="90" cy="90" r="44" fill="var(--card)"></circle><text x="90" y="86" text-anchor="middle" font-size="10" fill="var(--ink-soft)" font-weight="600">'+esc(t('totalLabel'))+'</text><text x="90" y="102" text-anchor="middle" font-size="13" fill="var(--ink)" font-weight="800">'+fmt(total).replace('฿','').trim()+'</text></svg>';
+      const legend='<div class="legend">'+categories.map((x,i)=>'<div class="legend-item"><span class="dot" style="background:'+PALETTE[i%PALETTE.length]+'"></span><span>'+esc(x.category)+'</span><span class="amt">'+Math.round(x.amount/total*100)+'% · '+fmt(x.amount)+'</span></div>').join('')+'</div>';
+      setTimeout(()=>document.querySelectorAll('.seg').forEach(s=>{s.style.strokeDasharray=s.dataset.final}),30);
+      return '<div class="chart-wrap">'+svg+legend+'</div>';
+    }
+    function barChart(history){
+      if(!history||!history.length)return '<div class="empty">'+esc(t('noHistory'))+'</div>';
+      const w=320,h=150,pad=18,max=Math.max(...history.flatMap(x=>[x.income,x.expense]),1),groupW=w/history.length;
+      const bars=history.map((x,i)=>{
+        const gx=i*groupW,bw=(groupW-10)/2,ih=x.income/max*(h-pad),eh=x.expense/max*(h-pad),delay=i*55;
+        return '<g>'+
+          '<rect x="'+(gx+3).toFixed(1)+'" y="'+(h-pad).toFixed(1)+'" width="'+bw.toFixed(1)+'" height="0" rx="3" fill="#4b6a58"><animate attributeName="y" from="'+(h-pad).toFixed(1)+'" to="'+(h-pad-ih).toFixed(1)+'" dur=".6s" begin="'+delay+'ms" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1"/><animate attributeName="height" from="0" to="'+ih.toFixed(1)+'" dur=".6s" begin="'+delay+'ms" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1"/></rect>'+
+          '<rect x="'+(gx+3+bw+4).toFixed(1)+'" y="'+(h-pad).toFixed(1)+'" width="'+bw.toFixed(1)+'" height="0" rx="3" fill="#7a2b3d"><animate attributeName="y" from="'+(h-pad).toFixed(1)+'" to="'+(h-pad-eh).toFixed(1)+'" dur=".6s" begin="'+(delay+80)+'ms" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1"/><animate attributeName="height" from="0" to="'+eh.toFixed(1)+'" dur=".6s" begin="'+(delay+80)+'ms" fill="freeze" calcMode="spline" keySplines="0.22 1 0.36 1"/></rect>'+
+          '<text x="'+(gx+groupW/2).toFixed(1)+'" y="'+(h-2)+'" font-size="10" text-anchor="middle" fill="var(--ink-soft)">'+esc(x.label)+'</text>'+
+        '</g>';
+      }).join('');
+      return '<svg class="bar-chart" viewBox="0 0 '+w+' '+h+'" role="img" aria-label="'+esc(t('trendAria'))+'">'+bars+'</svg>';
+    }
+    async function api(url,opt){const r=await fetch(url+(url.includes('?')?'&':'?')+'token='+encodeURIComponent(token||'')+'&u='+encodeURIComponent(uid||''),opt);if(!r.ok){const body=await r.json().catch(()=>({}));throw new Error(body.error||t('genericError'))}return r.headers.get('content-type')?.includes('application/json')?r.json():r}
+    function local(dt){const d=new Date(dt||Date.now()),z=n=>String(n).padStart(2,'0');return d.getFullYear()+'-'+z(d.getMonth()+1)+'-'+z(d.getDate())+'T'+z(d.getHours())+':'+z(d.getMinutes())}
+    function setPage(next){page=next;document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.page===page));document.getElementById('addButton').classList.toggle('hidden',page==='settings'||page==='budgets');render()}
+
+    function skeletonSummary(){
+      return '<div class="skel-hero" aria-hidden="true">'+skeletonIllustration()+'</div>'
+        +'<h1 class="view-title">'+esc(t('summaryTitle'))+'</h1><p class="lead">'+esc(t('loading'))+'</p>'
+        +'<div class="ledger skel-ledger">'+[t('income'),t('expense'),t('balance')].map(()=>'<div class="ledger-row"><span class="skel k"></span><span class="skel v"></span></div>').join('')+'</div>'
+        +'<div class="cards">'+Array.from({length:3}).map(()=>'<div class="card skel-card"><span class="skel"></span><span class="skel"></span></div>').join('')+'</div>'
+        +'<section class="panel"><h2>'+esc(t('byCategory'))+'</h2><div style="display:flex;justify-content:center;padding:14px 0"><div class="skel" style="width:146px;height:146px;border-radius:50%"></div></div></section>'
+        +'<section class="panel"><h2>'+esc(t('recentEntries'))+'</h2>'+skeletonRows(4)+'</section>';
+    }
+    // ภาพประกอบตอนโหลดครั้งแรก — สมุดบัญชีเปิดอยู่พร้อมเหรียญเด้งเบา ๆ (ธีมเดียวกับ "ยายจันทร์" สมุดบัญชี) วาดด้วย inline SVG ล้วน
+    // ไม่พึ่งไฟล์ภาพภายนอก/CDN เพราะโหลดครั้งแรกยิ่งเร็วยิ่งดี ไม่อยากเพิ่ม network request ระหว่างที่กำลังรอข้อมูลจริงอยู่แล้ว
+    function skeletonIllustration(){
+      return '<svg viewBox="0 0 120 90" width="108" height="81" class="skel-illustration">'
+        +'<ellipse cx="60" cy="78" rx="42" ry="6" fill="var(--line-soft)"/>'
+        +'<g class="skel-book">'
+          +'<path d="M60 24 L18 32 V70 L60 62 Z" fill="var(--card)" stroke="var(--line)" stroke-width="2"/>'
+          +'<path d="M60 24 L102 32 V70 L60 62 Z" fill="var(--card)" stroke="var(--line)" stroke-width="2"/>'
+          +'<line x1="26" y1="42" x2="52" y2="38" stroke="var(--line)" stroke-width="2" stroke-linecap="round"/>'
+          +'<line x1="26" y1="52" x2="52" y2="48" stroke="var(--line)" stroke-width="2" stroke-linecap="round"/>'
+          +'<line x1="26" y1="62" x2="52" y2="58" stroke="var(--line)" stroke-width="2" stroke-linecap="round"/>'
+          +'<line x1="68" y1="38" x2="94" y2="42" stroke="var(--line)" stroke-width="2" stroke-linecap="round"/>'
+          +'<line x1="68" y1="48" x2="94" y2="52" stroke="var(--line)" stroke-width="2" stroke-linecap="round"/>'
+        +'</g>'
+        +'<circle class="skel-coin coin1" cx="38" cy="18" r="9" fill="var(--wine)"/>'
+        +'<text class="skel-coin coin1" x="38" y="22" font-size="10" text-anchor="middle" fill="#fff" font-weight="700">฿</text>'
+        +'<circle class="skel-coin coin2" cx="82" cy="14" r="7" fill="var(--sage,#8AA07A)"/>'
+        +'<text class="skel-coin coin2" x="82" y="17.5" font-size="8" text-anchor="middle" fill="#fff" font-weight="700">฿</text>'
+      +'</svg>';
+    }
+    function skeletonRows(n){return Array.from({length:n}).map(()=>'<div class="skel-row"><div><span class="skel t1"></span><span class="skel t2"></span></div><span class="skel amt"></span></div>').join('')}
+
+    function summaryPage(){
+      const d=dashboard||{income:0,expense:0,balance:0,categories:[],history:[]};
+      return '<h1 class="view-title">'+esc(t('summaryTitle'))+'</h1><p class="lead">'+esc(d.label||t('loading'))+'</p>'
+        +'<div class="ledger">'
+          +'<div class="ledger-row income"><span class="k"><i style="background:var(--sage)"></i>'+esc(t('income'))+'</span><span class="v num" data-money="1" data-target="'+d.income+'">฿0</span></div>'
+          +'<div class="ledger-row expense"><span class="k"><i style="background:var(--wine)"></i>'+esc(t('expense'))+'</span><span class="v num" data-money="1" data-target="'+d.expense+'">฿0</span></div>'
+          +'<div class="ledger-row balance"><span class="k">'+esc(t('balance'))+'</span><span class="v num" data-money="1" data-target="'+d.balance+'">฿0</span></div>'
+        +'</div>'
+        +'<section class="panel"><h2>'+esc(t('byCategory'))+'</h2>'+pieChart(d.categories)+'</section>'
+        +'<section class="panel"><h2>'+esc(t('recentEntries'))+'</h2>'+recentRows(5)+'</section>';
+    }
+    function analysisPage(){const d=dashboard||{history:[],categories:[]};return '<h1 class="view-title">'+esc(t('analysisTitle'))+'</h1><p class="lead">'+esc(t('analysisLead'))+'</p><section class="panel"><h2>'+esc(t('monthlyTrend'))+'</h2><div class="chart-legend"><span><i class="dot" style="background:#4b6a58"></i>'+esc(t('income'))+'</span><span><i class="dot" style="background:#7a2b3d"></i>'+esc(t('expense'))+'</span></div>'+barChart(d.history)+(d.history||[]).map((x,i)=>'<div class="chart-row stagger" style="animation-delay:'+(i*40)+'ms"><span>'+esc(x.label)+'</span><strong class="income num">+'+fmt(x.income)+'</strong><strong class="expense num">-'+fmt(x.expense)+'</strong></div>').join('')+'</section><section class="panel"><h2>'+esc(t('observation'))+'</h2><div class="notice">'+esc(t('observationBody'))+'</div></section>';}
+    function budgetsPage(){const thisMonth=new Date().toISOString().slice(0,7);const cats=[...new Set(transactions.filter(x=>x.type==='expense').map(x=>x.category).concat(Object.keys(budgets)))].sort();return '<h1 class="view-title">'+esc(t('budgetsTitle'))+'</h1><p class="lead">'+esc(t('budgetsLead'))+'</p><section class="panel"><h2>'+esc(t('budgetPanelTitle'))+'</h2>'+(cats.length?cats.map((c,i)=>{const spent=transactions.filter(x=>x.type==='expense'&&x.category===c&&x.createdAt.slice(0,7)===thisMonth).reduce((s,x)=>s+x.amount,0),limit=budgets[c]||0,pct=limit?Math.min(100,spent/limit*100):0,over=limit>0&&spent>limit;return '<div class="stagger" style="animation-delay:'+(i*35)+'ms"><div class="budget"><div><strong>'+esc(c)+'</strong><div class="meta">'+esc(t('budgetSpent'))+' '+fmt(spent)+(limit?' '+esc(t('budgetOf'))+' '+fmt(limit):'')+'</div></div><input aria-label="'+esc(t('budgetPanelTitle'))+' '+esc(c)+'" data-budget="'+esc(c)+'" type="number" min="0" value="'+limit+'"><button class="primary save-budget" data-category="'+esc(c)+'">'+esc(t('budgetSave'))+'</button></div>'+(limit?'<div class="budget-bar'+(over?' over':'')+'"><i style="width:'+pct+'%"></i></div>':'')+'</div>'}).join(''):'<div class="empty"><span class="emoji">🗂️</span>'+esc(t('budgetEmpty'))+'</div>')+'</section>';}
+    function transactionPage(){const list=transactions.filter(x=>filter==='all'||x.type===filter);return '<h1 class="view-title">'+esc(t('transTitle'))+'</h1><p class="lead">'+esc(t('transLead'))+'</p><div class="toolbar"><button class="'+(filter==='all'?'active':'')+'" data-filter="all">'+esc(t('filterAll'))+'</button><button class="'+(filter==='expense'?'active':'')+'" data-filter="expense">'+esc(t('filterExpense'))+'</button><button class="'+(filter==='income'?'active':'')+'" data-filter="income">'+esc(t('filterIncome'))+'</button><button id="download">'+esc(t('exportCsv'))+'</button><button id="downloadPdf">'+esc(t('exportPdf'))+(subscription.active?'':' 🔒')+'</button></div><section class="panel">'+(list.length?list.map(row).join(''):'<div class="empty"><span class="emoji">📒</span>'+esc(t('noEntries'))+'</div>')+'</section>';}
+    function recentRows(n){return transactions.length?transactions.slice(0,n).map(row).join(''):'<div class="empty"><span class="emoji">📒</span>'+esc(t('noEntriesShort'))+'</div>'}
+    function row(x,i){return '<div class="row-wrap" data-wrap-id="'+x.id+'"><div class="row-del" data-del="'+x.id+'">'+esc(t('deleteBtn'))+'</div><article class="row stagger" style="animation-delay:'+((i||0)*30)+'ms" data-id="'+x.id+'"><div><strong>'+esc(x.description)+'</strong><div class="meta">'+new Date(x.createdAt).toLocaleString(prefs.language==='English'?'en-GB':'th-TH',{dateStyle:'short',timeStyle:'short'})+' · '+esc(x.category)+'</div></div><span class="amount num '+x.type+'">'+(x.type==='income'?'+':'-')+fmt(x.amount)+'</span></article></div>'}
+
+    function fmtExpiry(iso){if(!iso)return null;try{return new Date(iso).toLocaleDateString(prefs.language==='English'?'en-GB':'th-TH',{day:'numeric',month:'long',year:'numeric'})}catch{return null}}
+    function settingsPage(){
+      const isPremium=subscription.active;
+      const banner=isPremium
+        ? '<div class="pro-banner"><span class="tag">'+esc(t('pillPremium'))+'</span><h3>'+esc(t('proTitleActive'))+'</h3><p>'+esc(t('proDescActive'))+'</p><button id="upgradeBtn">'+esc(t('manageBtn'))+'</button></div>'
+        : '<div class="pro-banner"><span class="tag">'+esc(t('proTag'))+'</span><h3>'+esc(t('proTitle'))+'</h3><p>'+esc(t('proDesc'))+'</p><button id="upgradeBtn">'+esc(t('upgradeBtn'))+'</button></div>';
+      return '<h1 class="view-title">'+esc(t('settingsTitle'))+'</h1><p class="lead">'+esc(t('settingsLead'))+'</p>'
+      +banner
+      +'<div class="section-label">'+esc(t('sectionCategory'))+'</div>'
+      +'<section class="panel" style="padding:6px 17px">'
+        +settingRow({icon:'✨',title:t('categoryMemoryTitle'),sub:prefs.categoryMemory?t('categoryMemoryOn'):t('categoryMemoryOff'),right:'toggle',id:'categoryMemory',pro:true})
+        +settingRow({icon:'⟳',title:t('recurringTitle'),sub:(recurring&&recurring.length?t('recurringCount')(recurring.length):t('recurringEmpty')),right:'chevron',id:'recurring'})
+      +'</section>'
+      +'<div class="section-label">'+esc(t('sectionNotify'))+'</div>'
+      +'<section class="panel" style="padding:6px 17px">'
+        +settingRow({icon:'🔔',title:t('dailyReminderTitle'),sub:prefs.dailyReminder?t('dailyReminderOn')(prefs.reminderTime):t('dailyReminderOff'),right:'toggle',id:'dailyReminder',pro:true})
+        +(prefs.dailyReminder&&subscription.active?settingRow({icon:'⏰',title:t('reminderTimeRow'),sub:'',right:'value',id:'reminderTime',value:prefs.reminderTime}):'')
+      +'</section>'
+      // เมนู "ข้อความยืนยัน" ใช้ได้ทั้งแชทกลุ่มและแชทส่วนตัว 1:1 (ฟีเจอร์ Premium) — เปิดเป็นหน้าเว็บแยกต่างหากที่มีตัวอย่างการ์ดจริงให้ดูสด ๆ (ดู /confirm-message)
+      +'<div class="section-label">'+esc(t('sectionConfirmMsg'))+'</div>'
+      +'<p class="lead" style="margin-top:-4px">'+esc(t('confirmMsgLead'))+'</p>'
+      +'<section class="panel" style="padding:6px 17px">'
+        +settingRow({icon:'💬',title:t('confirmMsgRowTitle'),sub:t('confirmMsgRowSub'),right:'chevron',id:'confirmMessagePage',pro:true})
+      +'</section>'
+      +'<div class="section-label">'+esc(t('sectionMember'))+'</div>'
+      +'<section class="panel" style="padding:6px 17px">'
+        +settingRow({icon:'👑',title:t('planTitle'),sub:t('planSub'),right:'pill',id:'plan',pillState:isPremium?'premium':'free'})
+        +settingRow({icon:'🧾',title:t('billingTitle'),sub:t('billingSub'),right:'chevron',id:'billing'})
+      +'</section>'
+      +'<div class="section-label">'+esc(t('sectionGeneral'))+'</div>'
+      +'<section class="panel" style="padding:6px 17px">'
+        +settingRow({icon:'🌐',title:t('languageTitle'),sub:'',right:'value',id:'language',value:prefs.language})
+        +settingRow({icon:'฿',title:t('currencyTitle'),sub:'',right:'value',id:'currency',value:prefs.currency})
+        +settingRow({icon:'🕐',title:t('timezoneTitle'),sub:'',right:'value',id:'timezone',value:prefs.timezone})
+      +'</section>'
+      +'<div class="section-label">'+esc(t('sectionLine'))+'</div>'
+      +'<section class="panel"><div class="notice">'+esc(t('lineNotice'))+'</div></section>';
+    }
+    function settingRow(o){
+      const icon=o.icon,title=o.title,sub=o.sub,right=o.right,id=o.id,value=o.value,pro=o.pro;
+      const rightHtml = right==='toggle' ? '<button class="toggle '+(prefs[id]?'on':'')+'" data-toggle="'+id+'" role="switch" aria-checked="'+!!prefs[id]+'" aria-label="'+esc(title)+'"></button>'
+        : right==='chevron' ? '<span class="chev">›</span>'
+        : right==='pill' ? '<span class="pill '+(o.pillState==='premium'?'pro':'free')+'">'+esc(o.pillState==='premium'?t('pillPremium'):t('pillFree'))+'</span><span class="chev">›</span>'
+        : '<span class="si-right">'+esc(value)+'<span class="chev">›</span></span>';
+      return '<div class="setting-item" data-setting="'+id+'"><div class="si-main"><span class="si-icon">'+icon+'</span><div class="si-text"><strong>'+esc(title)+(pro?' <span class="pill pro">'+esc(t('pillPro'))+'</span>':'')+'</strong>'+(sub?'<span>'+esc(sub)+'</span>':'')+'</div></div>'+rightHtml+'</div>';
+    }
+    function openSettingsSheet(html,title){
+      const sheet=document.getElementById('settingsSheet');
+      sheet.innerHTML='<div class="sheet-grip"></div><h2>'+esc(title)+'</h2>'+html;
+      document.getElementById('settingsModal').classList.add('open');
+      return true;
+    }
+    function closeSettingsSheet(){
+      const m=document.getElementById('settingsModal');m.classList.add('closing');
+      setTimeout(()=>{m.classList.remove('open','closing')},170);
+    }
+    function radioSheet(title,options,current,onPick){
+      const html='<div class="radio-list">'+options.map(o=>'<div class="radio-item" data-pick="'+esc(o)+'"><span>'+esc(o)+'</span><span class="radio-dot'+(o===current?' checked':'')+'"></span></div>').join('')+'</div>';
+      openSettingsSheet(html,title);
+      document.querySelectorAll('[data-pick]').forEach(el=>el.onclick=()=>{onPick(el.dataset.pick);closeSettingsSheet()});
+    }
+    // เปิดหน้าสมัคร Premium ในเว็บ: สร้าง payment session + โชว์ QR PromptPay ให้จ่าย แล้วอัปโหลดสลิปตรวจสอบ
+    // ใช้ backend endpoint เดียวกับที่ฝั่ง LINE ใช้ (/api/premium/checkout, /api/premium/slip)
+    // สลิปทุกใบต้องผ่านการตรวจสอบ/รอแอดมินอนุมัติเสมอ — เว็บไม่ได้ auto-approve เอง (ดู ARCHITECTURE.md)
+    let checkoutSession=null;
+    async function goToLineUpgrade(){
+      openSettingsSheet('<div class="notice">'+esc(t('checkoutLoading'))+'</div>',t('upgradeHowTitle'));
+      try{
+        const res=await api('/api/premium/checkout',{method:'POST'});
+        if(res.alreadyPremium){
+          openSettingsSheet('<div class="notice">'+t('planPremiumBody')(fmtExpiry(res.expiresAt))+'</div>',t('planHeaderTitle'));
+          await loadData();
+          return;
+        }
+        checkoutSession=res;
+        renderCheckoutSheet();
+      }catch(e){
+        const lineFallback=subscription.lineOaLink?'<div class="actions"><button class="secondary" style="flex:1" id="lineFallbackBtn">'+esc(t('openLineChat'))+'</button></div>':'';
+        openSettingsSheet('<div class="notice">'+esc(e.message||t('checkoutError'))+'</div>'+lineFallback,t('upgradeHowTitle'));
+        const fb=document.getElementById('lineFallbackBtn');if(fb)fb.onclick=()=>window.open(subscription.lineOaLink,'_blank');
       }
     }
-  };
-}
-// การ์ดเลือกหมวดหมู่ — โผล่หลังกดปุ่ม "รายจ่าย" บนการ์ดยืนยันสลิป (ก่อนหน้านี้กดปุ่ม "รายจ่าย" แล้วบันทึกเลย
-// ให้ categoryFor()/enrichWithAi ตัดสินหมวดเอาเองทั้งหมด ตอนนี้เปิดให้ผู้ใช้เลือกเองก่อนได้ ลดโอกาสตกไปเป็น "อื่น ๆ" ผิด ๆ)
-// เลือก "ให้ยายเลือกให้" ได้ ถ้าไม่อยากเลือกเอง -> ทำงานเหมือนพฤติกรรมเดิมทุกอย่าง (keyword match + AI ช่วยตัดสินตอน "อื่น ๆ")
-function categoryPickerFlexMessage(merchant, amount, meta = {}) {
-  const pink = "#D23283";
-  const cream = "#FBF3EC";
-  const displayMerchant = String(merchant ?? "อื่น ๆ").slice(0, 60); // ใช้ตัวเต็มแค่ตอนแสดงผลในการ์ด
-  // ตัด merchant ให้สั้นลงเหลือ 15 ตัวอักษรตอนใส่ใน postback data เท่านั้น (คนละตัวกับ displayMerchant ด้านบน, เท่ากับ limit ที่ใช้ใน receiptConfirmFlexMessage)
-  // เพราะภาษาไทย 1 ตัวอักษร URL-encode แล้วกินพื้นที่ ~9 ไบต์ ถ้าปล่อยยาวเกินไปรวมกับ slip_step/c/aid จะเกิน 300 ตัวอักษรที่ LINE postback data รับได้
-  const payloadMerchant = String(merchant ?? "อื่น ๆ").slice(0, 15);
-  const payload = (category) => `slip_step=save&slip_type=expense&m=${encodeURIComponent(payloadMerchant)}&a=${amount}&c=${encodeURIComponent(category)}${meta.authorId ? `&aid=${meta.authorId}` : ""}`;
-  const categoryLabels = Object.keys(CATEGORIES).filter((c) => c !== "อื่น ๆ"); // "อื่น ๆ" ไม่ต้องมีปุ่มเฉพาะ ใช้ปุ่ม "ให้ยายเลือกให้" แทน (ครอบคลุมเคสนี้อยู่แล้ว)
-  const categoryButtons = categoryLabels.map((label) => ({
-    type: "button", style: "secondary", height: "sm", color: "#F1E7DC",
-    action: { type: "postback", label, data: payload(label), displayText: label }
-  }));
-  return {
-    type: "flex",
-    altText: `${displayMerchant} ${money(amount)} บาท — เลือกหมวดหมู่รายจ่าย`,
-    contents: {
-      type: "bubble",
-      size: "kilo",
-      body: {
-        type: "box",
-        layout: "vertical",
-        backgroundColor: cream,
-        paddingAll: "20px",
-        contents: [
-          { type: "text", text: displayMerchant, size: "md", weight: "bold", color: "#3A3540", wrap: true },
-          { type: "text", text: `${money(amount)} บาท`, size: "xl", weight: "bold", color: pink, margin: "xs" },
-          { type: "separator", margin: "lg", color: "#EFE3D8" },
-          { type: "text", text: "รายจ่ายนี้เป็นหมวดไหน?", size: "sm", color: "#9B94A0", margin: "lg" },
-          {
-            type: "box", layout: "vertical", spacing: "sm", margin: "md",
-            contents: [
-              // จัดปุ่มเป็นแถวละ 2 ปุ่ม อ่านง่ายกว่าเรียงแนวตั้งยาว ๆ ทีละปุ่ม
-              ...Array.from({ length: Math.ceil(categoryButtons.length / 2) }, (_, i) => ({
-                type: "box", layout: "horizontal", spacing: "sm",
-                contents: categoryButtons.slice(i * 2, i * 2 + 2)
-              }))
-            ]
+    function renderCheckoutSheet(){
+      const s=checkoutSession;
+      const html=
+        '<div class="checkout-qr"><img src="'+esc(s.qrImageUrl+query)+'" alt="PromptPay QR" width="220" height="220"></div>'
+        +'<div class="notice" style="margin-top:12px">'+esc(t('checkoutAmount'))+' <strong class="num">'+fmt(s.amount)+'</strong><br>'+esc(t('checkoutRef'))+' '+esc(s.referenceId)+'<br>'+esc(t('checkoutExpiry'))+' '+esc(fmtExpiry(s.expiresAt)||'')+'</div>'
+        +'<div class="field"><label>'+esc(t('checkoutUploadLabel'))+'</label><input type="file" id="slipInput" accept="image/*"></div>'
+        +'<div id="slipStatus"></div>'
+        +'<div class="actions"><button class="primary" style="flex:1" id="slipSubmit" disabled>'+esc(t('checkoutSubmit'))+'</button></div>';
+      openSettingsSheet(html,t('checkoutTitle'));
+      const fileInput=document.getElementById('slipInput'),submitBtn=document.getElementById('slipSubmit'),statusEl=document.getElementById('slipStatus');
+      let picked=null;
+      fileInput.onchange=()=>{picked=fileInput.files[0]||null;submitBtn.disabled=!picked};
+      submitBtn.onclick=async()=>{
+        if(!picked)return;
+        submitBtn.disabled=true;submitBtn.textContent=t('checkoutSubmitting');statusEl.innerHTML='';
+        try{
+          const base64=await fileToBase64(picked);
+          const result=await api('/api/premium/slip',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sessionId:s.sessionId,mime:picked.type,base64})});
+          statusEl.innerHTML='<div class="notice">'+esc(result.message)+'</div>';
+          toast(result.message);
+          await loadData();
+          if(result.outcome==='VERIFIED'||result.outcome==='PENDING_REVIEW'){
+            checkoutSession=null;
+            setTimeout(()=>{closeSettingsSheet();render()},1400);
+          }else{
+            submitBtn.disabled=false;submitBtn.textContent=t('checkoutSubmit');
           }
-        ]
-      },
-      footer: {
-        type: "box", layout: "vertical", paddingAll: "12px", backgroundColor: cream,
-        contents: [
-          { type: "button", style: "primary", height: "sm", color: pink, action: { type: "postback", label: "ให้ยายเลือกให้ 👵", data: payload(""), displayText: "ให้ยายเลือกให้" } }
-        ]
-      }
+        }catch(e){
+          statusEl.innerHTML='<div class="notice">'+esc(e.message||t('checkoutError'))+'</div>';
+          submitBtn.disabled=false;submitBtn.textContent=t('checkoutSubmit');
+        }
+      };
     }
-  };
-}
-// สร้างและบันทึกรายการจากสลิปที่ยืนยันประเภทแล้ว (เรียกจาก postback handler)
-// merchant/amount มาจาก postback data ที่ผู้ใช้กดยืนยัน, type คือ "income" | "expense"
-// category: ถ้าผู้ใช้เลือกเองจาก categoryPickerFlexMessage จะส่งมาตรงนี้ ถ้าไม่ส่งมา (undefined/"") ให้ categoryFor()/enrichWithAi ตัดสินเองเหมือนเดิม
-async function saveConfirmedSlipTx({ userId, type, merchant, amount, category, authorId, isGroupChat }) {
-  const user = await getUser(userId);
-  const resolvedCategory = type === "income" ? "รายรับ" : (category || categoryFor(merchant));
-  let tx = { id: crypto.randomUUID(), type, category: resolvedCategory, description: merchant, amount, createdAt: new Date().toISOString() };
-  // ถ้าผู้ใช้เลือกหมวดเองแล้ว ไม่ต้องให้ AI มาเดาซ้ำทับ (เฉพาะตอนยังเป็น "อื่น ๆ" หรือไม่ได้เลือกมาเท่านั้นถึงให้ AI ช่วย)
-  if (type === "expense" && tx.category === "อื่น ๆ") tx = await enrichWithAi(tx, merchant);
-  if (isGroupChat) tx = { ...tx, authorId, authorName: await getGroupMemberName(userId, authorId) };
-  user.transactions.push(tx);
-  await saveUser(userId, user);
-  return { user, tx };
-}
-// การ์ด Flex Message สำหรับคำสั่ง "เว็บ" — สรุปยอดเดือนนี้แบบย่อ + ปุ่มใหญ่กดเข้าแดชบอร์ด
-// แทนที่ข้อความ text ธรรมดา + ลิงก์ยาว ๆ แบบเดิม ให้ธีมตรงกับ txFlexMessage/receiptConfirmFlexMessage
-function dashboardFlexMessage(user, { isGroupChat, dashboardUrl } = {}) {
-  const pink = "#D23283";
-  const cream = "#FBF3EC";
-  const gold = "#C79A46";
-  const month = user.transactions.filter((tx) => sameMonth(tx.createdAt));
-  const t = totals(month);
-  const balance = t.income - t.expense;
-  const ratio = t.income > 0 ? Math.min(t.expense / t.income, 1) : (t.expense > 0 ? 1 : 0);
-  const overspending = t.income > 0 && t.expense > t.income;
-  const scopeLabel = isGroupChat ? "กองกลางของกลุ่มนี้" : "ของคุณเดือนนี้";
-
-  return {
-    type: "flex",
-    altText: "เปิดแดชบอร์ด 📊 ดูสรุปบัญชีแบบเต็มรูปแบบได้ที่เว็บ",
-    contents: {
-      type: "bubble",
-      size: "kilo",
-      body: {
-        type: "box",
-        layout: "vertical",
-        backgroundColor: cream,
-        paddingAll: "20px",
-        contents: [
-          // หัวการ์ด: ไอคอนดวงตรา + ชื่อ
-          {
-            type: "box",
-            layout: "horizontal",
-            spacing: "sm",
-            contents: [
-              {
-                type: "box", layout: "vertical", width: "34px", height: "34px", cornerRadius: "17px",
-                backgroundColor: pink, justifyContent: "center", alignItems: "center",
-                contents: [{ type: "text", text: "จ", size: "sm", weight: "bold", color: "#FFFFFF", align: "center", gravity: "center" }]
-              },
-              {
-                type: "box", layout: "vertical", flex: 1, justifyContent: "center",
-                contents: [
-                  { type: "text", text: "แดชบอร์ด", size: "lg", weight: "bold", color: "#3A3540" },
-                  { type: "text", text: scopeLabel, size: "xxs", color: "#9B94A0" }
-                ]
-              }
-            ]
-          },
-          { type: "separator", margin: "lg", color: "#EFE3D8" },
-          // สรุปรายรับ/รายจ่าย/คงเหลือ แบบย่อ
-          {
-            type: "box",
-            layout: "horizontal",
-            margin: "lg",
-            contents: [
-              { type: "box", layout: "vertical", flex: 1, contents: [
-                { type: "text", text: "รายรับ", size: "xxs", color: "#9B94A0" },
-                { type: "text", text: money(t.income), size: "md", weight: "bold", color: "#4B7A63", margin: "xs" }
-              ] },
-              { type: "box", layout: "vertical", flex: 1, contents: [
-                { type: "text", text: "รายจ่าย", size: "xxs", color: "#9B94A0", align: "center" },
-                { type: "text", text: money(t.expense), size: "md", weight: "bold", color: pink, align: "center", margin: "xs" }
-              ] },
-              { type: "box", layout: "vertical", flex: 1, contents: [
-                { type: "text", text: "คงเหลือ", size: "xxs", color: "#9B94A0", align: "end" },
-                { type: "text", text: money(balance), size: "md", weight: "bold", color: "#3A3540", align: "end", margin: "xs" }
-              ] }
-            ]
-          },
-          // แถบสัดส่วนรายจ่ายเทียบรายรับเดือนนี้ (เส้นบาง ๆ โทนทอง)
-          {
-            type: "box", layout: "horizontal", height: "6px", cornerRadius: "3px", margin: "md",
-            contents: [
-              { type: "box", layout: "vertical", flex: Math.max(Math.round(ratio * 100), ratio > 0 ? 3 : 0), backgroundColor: overspending ? pink : gold, contents: [] },
-              { type: "box", layout: "vertical", flex: Math.max(100 - Math.round(ratio * 100), 0), backgroundColor: "#F1E7DC", contents: [] }
-            ]
-          },
-          { type: "text", text: overspending ? "เดือนนี้ใช้เกินรายรับแล้วนะ" : `ใช้ไป ${Math.round(ratio * 100)}% ของรายรับเดือนนี้`, size: "xxs", color: overspending ? pink : "#9B94A0", margin: "sm" },
-          { type: "separator", margin: "lg", color: "#EFE3D8" },
-          { type: "text", text: "เปิดเว็บดูกราฟ ประวัติย้อนหลัง และตั้งงบประมาณแบบเต็ม ๆ ได้เลย", size: "xs", color: "#9B94A0", margin: "lg", wrap: true }
-        ]
-      },
-      footer: dashboardUrl
-        ? {
-            type: "box", layout: "vertical", paddingAll: "12px", backgroundColor: cream,
-            contents: [
-              { type: "button", style: "primary", height: "sm", color: pink, action: { type: "uri", label: "เปิดแดชบอร์ด", uri: dashboardUrl } }
-            ]
-          }
-        : {
-            type: "box", layout: "vertical", paddingAll: "12px", backgroundColor: cream,
-            contents: [{ type: "text", text: "ยังไม่ได้ตั้งค่า PUBLIC_BASE_URL สำหรับแดชบอร์ด", size: "xs", color: "#9B94A0", wrap: true }]
-          }
-    }
-  };
-}
-// การ์ดต้อนรับตอนบอทถูกเชิญเข้ากลุ่ม/ห้อง (ใช้ธีมเดียวกับ dashboardFlexMessage — ครีม/ชมพู + ตรา "จ")
-// ต้องมีใครยืนยันเป็น "เจ้าของ" ภายใน CONFIRM_WINDOW_MINUTES ไม่งั้นบอทออกจากกลุ่มเอง (ดู housekeeping cron ด้านบน)
-// การ์ดต้อนรับตอนผู้ใช้แอดบอทเป็นเพื่อนใหม่ (1-1 chat) — คนละ flow กับ groupWelcomeFlexMessage ด้านล่าง (นั่นคือตอนถูกเชิญเข้ากลุ่ม)
-// ในแชทเดี่ยวไม่ต้องมี "/บอท" นำหน้าคำสั่ง (จำกัดเฉพาะในกลุ่มเท่านั้น ดู BOT_PREFIX ด้านบน) เลยตัวอย่างคำสั่งในการ์ดนี้จะพิมพ์สั้น ๆ ได้เลย
-function followWelcomeFlexMessage() {
-  const pink = "#D23283", cream = "#FBF3EC";
-  return {
-    type: "flex",
-    altText: `สวัสดีค่า ยายจันทร์มาแล้ว 👵 พิมพ์ "กาแฟ 60" เพื่อจดรายจ่ายแรกได้เลยนะ`,
-    contents: {
-      type: "bubble",
-      body: {
-        type: "box", layout: "vertical", paddingAll: "20px", backgroundColor: cream,
-        contents: [
-          {
-            type: "box", layout: "horizontal", alignItems: "center", spacing: "md",
-            contents: [
-              { type: "box", layout: "vertical", width: "44px", height: "44px", cornerRadius: "22px", backgroundColor: pink, justifyContent: "center", alignItems: "center",
-                contents: [{ type: "text", text: "จ", color: "#FFFFFF", weight: "bold", size: "lg", align: "center" }] },
-              { type: "box", layout: "vertical", contents: [
-                { type: "text", text: "สวัสดีค่า ยายจันทร์มาแล้ว 👵", weight: "bold", size: "md", color: "#2B2320", wrap: true },
-                { type: "text", text: "สมุดบัญชีที่จดง่ายในแชท", size: "xxs", color: "#9B94A0" }
-              ] }
-            ]
-          },
-          { type: "separator", margin: "lg", color: "#EFE3D8" },
-          { type: "text", text: "ยายช่วยจดรายรับ-รายจ่ายให้หลานได้เลย พิมพ์เป็นประโยคธรรมดา ยายเข้าใจเอง", size: "xs", color: "#5B5450", margin: "lg", wrap: true },
-          {
-            type: "box", layout: "vertical", margin: "lg", paddingAll: "12px", cornerRadius: "12px", backgroundColor: "#FFFFFF",
-            contents: [
-              { type: "text", text: "ลองพิมพ์ดูสิ", size: "xxs", color: "#9B94A0" },
-              { type: "text", text: "กาแฟ 60", weight: "bold", size: "sm", color: pink, margin: "xs" },
-              { type: "text", text: "เงินเดือน 15000", weight: "bold", size: "sm", color: pink, margin: "xs" }
-            ]
-          },
-          { type: "text", text: "ถามยายได้ด้วยนะ เช่น \"เดือนนี้ใช้จ่ายอะไรเยอะสุด\" ยายจะดึงรายการมาสรุปให้เลย", size: "xxs", color: "#9B94A0", margin: "md", wrap: true }
-        ]
-      }
-    }
-  };
-}
-
-function groupWelcomeFlexMessage() {
-  const pink = "#D23283", cream = "#FBF3EC";
-  return {
-    type: "flex",
-    altText: `สวัสดีค่า ยายจันทร์มาแล้ว 👵 พิมพ์ "/บอท ยืนยันเจ้าของ" ภายใน ${CONFIRM_WINDOW_MINUTES} นาที เพื่อเริ่มใช้งานในกลุ่มนี้`,
-    contents: {
-      type: "bubble",
-      body: {
-        type: "box", layout: "vertical", paddingAll: "20px", backgroundColor: cream,
-        contents: [
-          {
-            type: "box", layout: "horizontal", alignItems: "center", spacing: "md",
-            contents: [
-              { type: "box", layout: "vertical", width: "44px", height: "44px", cornerRadius: "22px", backgroundColor: pink, justifyContent: "center", alignItems: "center",
-                contents: [{ type: "text", text: "จ", color: "#FFFFFF", weight: "bold", size: "lg", align: "center" }] },
-              { type: "box", layout: "vertical", contents: [
-                { type: "text", text: "สวัสดีค่า ยายจันทร์มาแล้ว 👵", weight: "bold", size: "md", color: "#2B2320", wrap: true },
-                { type: "text", text: "สมุดบัญชีกลุ่มที่จดง่ายในแชท", size: "xxs", color: "#9B94A0" }
-              ] }
-            ]
-          },
-          { type: "separator", margin: "lg", color: "#EFE3D8" },
-          { type: "text", text: "ฟีเจอร์นี้ใช้ได้เฉพาะกลุ่มที่มีสมาชิก Premium เชิญเข้ามาเท่านั้นนะคะ", size: "xs", color: pink, weight: "bold", margin: "lg", wrap: true },
-          { type: "text", text: `ถ้าคุณเป็น Premium อยู่แล้ว ต้องมีคนพิมพ์ยืนยันก่อน ถึงจะเริ่มจดบัญชีในกลุ่มนี้ได้ (ภายใน ${CONFIRM_WINDOW_MINUTES} นาที ไม่งั้นยายจันทร์ขอตัวออกจากกลุ่มก่อนนะคะ)`, size: "xs", color: "#5B5450", margin: "sm", wrap: true },
-          {
-            type: "box", layout: "vertical", margin: "lg", paddingAll: "12px", cornerRadius: "12px", backgroundColor: "#FFFFFF",
-            contents: [
-              { type: "text", text: "พิมพ์ในกลุ่มนี้เลย", size: "xxs", color: "#9B94A0" },
-              { type: "text", text: "/บอท ยืนยันเจ้าของ", weight: "bold", size: "sm", color: pink, margin: "xs" }
-            ]
-          },
-          { type: "text", text: "หลังยืนยันแล้ว ทุกคำสั่งในกลุ่มต้องขึ้นต้นด้วย \"/บอท\" เสมอ เช่น /บอท กาแฟ 60", size: "xxs", color: "#9B94A0", margin: "md", wrap: true }
-        ]
-      }
-    }
-  };
-}
-// การ์ดแจ้งเตือนสั้น ๆ ทั่วไป (สำเร็จ/ผิดพลาด/แจ้งข้อมูล) แทนข้อความ text ล้วน — ใช้แทนที่ reply(token, "ข้อความยาว ๆ") เดิม
-// tone: 'success' | 'error' | 'info' — คุมสีแถบด้านซ้ายกับไอคอนหัวการ์ดเท่านั้น เนื้อหายังเป็นข้อความปกติ ใส่ \n ได้ตามเดิม
-function noticeFlexMessage(text, tone = "info") {
-  const theme = {
-    success: { icon: "✅", bar: "#4B6A58", altPrefix: "" },
-    error: { icon: "⚠️", bar: "#7A2B3D", altPrefix: "" },
-    info: { icon: "ℹ️", bar: "#D23283", altPrefix: "" },
-  }[tone] ?? { icon: "ℹ️", bar: "#D23283" };
-  return {
-    type: "flex",
-    altText: text.slice(0, 400),
-    contents: {
-      type: "bubble",
-      body: {
-        type: "box", layout: "horizontal", paddingAll: "16px", backgroundColor: "#FBF3EC",
-        contents: [
-          { type: "box", layout: "vertical", width: "4px", backgroundColor: theme.bar, cornerRadius: "2px", contents: [{ type: "filler" }] },
-          { type: "box", layout: "vertical", paddingStart: "12px", spacing: "xs", contents: [
-            { type: "text", text: theme.icon, size: "sm" },
-            { type: "text", text: text.slice(0, 900), size: "sm", color: "#2B2320", wrap: true, margin: "xs" }
-          ] }
-        ]
-      }
-    }
-  };
-}
-
-function budgetProgressFor(user, tx) {
-  if (tx.type !== "expense") return null;
-  const limit = user.budgets?.[tx.category];
-  if (!Number.isFinite(limit) || limit <= 0) return null;
-  const spent = user.transactions.filter((t) => t.type === "expense" && t.category === tx.category && sameMonth(t.createdAt)).reduce((sum, t) => sum + t.amount, 0);
-  return { limit, spent };
-}
-function dashboardEditUrl(userId) {
-  const base = process.env.PUBLIC_BASE_URL?.replace(/\/$/, "");
-  return base ? `${base}/dashboard-gate?token=${perUserToken(userId)}&u=${encodeURIComponent(userId)}` : null;
-}
-// ดึงชื่อสมาชิกกลุ่ม (ใช้แสดง "ใครจดอะไรบ้าง" ในกองกลาง) — ใช้ได้เฉพาะ userId ที่เคยส่งข้อความในกลุ่มนี้มาก่อน
-// (ข้อจำกัดของ LINE: ดึงรายชื่อสมาชิกกลุ่มทั้งหมดล่วงหน้าไม่ได้ ต้องรู้ userId ก่อนถึงจะสอบถามโปรไฟล์ได้)
-async function getGroupMemberName(groupId, userId) {
-  try {
-    const r = await fetch(`https://api.line.me/v2/bot/group/${groupId}/member/${userId}`, { headers: { authorization: `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}` } });
-    if (!r.ok) return null;
-    const profile = await r.json();
-    return profile.displayName ?? null;
-  } catch (error) { console.warn("Group member profile fetch failed:", error.message); return null; }
-}
-// เรียกตอนไม่มีใครยืนยันเป็นเจ้าของกลุ่มทันเวลา หรือคนที่ยืนยันไม่ใช่ Premium
-async function leaveGroup(groupId) {
-  const r = await fetch(`https://api.line.me/v2/bot/group/${groupId}/leave`, { method: "POST", headers: { authorization: `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}` } });
-  if (!r.ok) throw new Error(`LINE leaveGroup: ${r.status}`);
-}
-function allowed(req) {
-  const uid = req.query.u;
-  if (!process.env.DASHBOARD_TOKEN || !uid) return false;
-  const given = String(req.query.token ?? ""), expected = perUserToken(uid);
-  if (given.length !== expected.length) return false;
-  try { return crypto.timingSafeEqual(Buffer.from(given), Buffer.from(expected)); } catch { return false; }
-}
-async function askFinanceAi(user, question) {
-  if (!ai || !process.env.OPENAI_MODEL) return null;
-  try {
-    const month = user.transactions.filter((tx) => sameMonth(tx.createdAt));
-    const t = totals(month);
-    const top = Object.entries(month.filter((tx) => tx.type === "expense").reduce((o, tx) => ({ ...o, [tx.category]: (o[tx.category] ?? 0) + tx.amount }), {})).sort((a, b) => b[1] - a[1]).slice(0, 5);
-    const budgetLines = Object.entries(user.budgets ?? {}).map(([category, amount]) => `${category}: งบ ${money(amount)} บาท`).join("\n") || "ยังไม่ได้ตั้งงบ";
-    const context = `ข้อมูลบัญชีเดือนนี้ของผู้ใช้คนนี้เท่านั้น (ห้ามอ้างอิงคนอื่น):\nรายรับ: ${money(t.income)} บาท\nรายจ่าย: ${money(t.expense)} บาท\nคงเหลือ: ${money(t.income - t.expense)} บาท\nหมวดที่ใช้จ่ายมากสุด: ${top.map(([category, value]) => `${category} ${money(value)} บาท`).join(", ") || "ยังไม่มีข้อมูล"}\nงบประมาณที่ตั้งไว้:\n${budgetLines}`;
-    const completion = await ai.chat.completions.create({
-      model: process.env.OPENAI_MODEL,
-      temperature: 0.4,
-      max_tokens: 280, // เดิม 220 — เผื่อพื้นที่เพิ่มให้การขึ้นบรรทัดใหม่/bullet ตามกฎจัดรูปแบบใหม่ด้านล่าง ไม่ให้คำตอบถูกตัดกลางคัน
-      // เดิมตั้ง 400 ซึ่งกว้างเกินคำตอบจริงมาก โมเดลบางตัว (โดยเฉพาะที่มี reasoning/thinking ในตัว) จะยิ่งใช้เวลาคิดนานขึ้นตาม budget ที่เปิดให้ — ลดค่านี้ช่วยตัดเวลาตอบโดยไม่ตัดคุณภาพคำตอบ เพราะคำตอบจริงไม่เคยยาวถึง 400 อยู่แล้ว
-      messages: [
-        { role: "system", content: "คุณคือ \"ยายจันทร์\" คุณยายที่ช่วยหลานดูแลเรื่องเงิน พูดกับผู้ใช้เหมือนยายคุยกับหลานตัวเองตามธรรมชาติ ไม่ใช่พนักงานหรือบอทที่พูดจาเป็นทางการ ใช้น้ำเสียงเป็นกันเอง อบอุ่น ตรงไปตรงมาแบบผู้ใหญ่ใจดี ห้ามลงท้ายประโยคด้วยคำว่า \"ครับ\" หรือ \"ค่ะ\"/\"คะ\" เด็ดขาด ให้พูดห้วนแบบยายคุยกับหลานแทน (เช่น พูดจบประโยคเฉย ๆ หรือใช้คำลงท้ายกันเองแบบ \"นะ\" \"นะเนี่ย\" \"เอาไหม\" \"เห็นไหม\" ได้บ้างแต่ไม่ต้องทุกประโยค) หลีกเลี่ยงศัพท์ทางการหรือภาษาเขียนแข็ง ๆ ให้เน้นให้คำปรึกษาและตอบคำถามด้านการเงินส่วนบุคคล (การออม การใช้จ่าย การตั้งงบประมาณ หนี้สิน หลักการลงทุนเบื้องต้น) โดยใช้ข้อมูลบัญชีของผู้ใช้ที่ให้มาประกอบการตอบเมื่อเกี่ยวข้อง คุณตอบคำถามทั่วไปอื่น ๆ นอกเรื่องการเงินได้เช่นกันแบบสั้นและเป็นมิตร แต่เมื่อมีโอกาสให้โยงกลับมาช่วยเรื่องการเงินอย่างเป็นธรรมชาติ กระชับ ไม่เกิน 4 ประโยค เหมาะสำหรับส่งทางแชท ห้ามให้คำแนะนำการลงทุนเฉพาะเจาะจงที่มีความเสี่ยงสูงหรือรับประกันผลตอบแทน และห้ามให้คำแนะนำทางกฎหมายหรือภาษีแบบฟันธง ให้แนะนำปรึกษาผู้เชี่ยวชาญแทนในกรณีนั้น จัดรูปแบบคำตอบให้อ่านง่ายบนมือถือเสมอ: ห้ามตอบเป็นย่อหน้ายาวติดกัน ให้ขึ้นบรรทัดใหม่ (\\n) แยกแต่ละประเด็นหรือแต่ละตัวเลขออกจากกัน ถ้ามีหลายรายการ/หลายหมวดให้จัดเป็นบรรทัดละรายการโดยขึ้นต้นด้วย \"• \" แทนการเขียนเรียงในประโยคเดียว ถ้ามีตัวเลขเงินให้แยกบรรทัดให้เด่นด้วย" },
-        { role: "user", content: `${context}\n\nคำถามจากผู้ใช้: ${question}` }
-      ]
-    });
-    return completion.choices[0]?.message?.content?.trim() || null;
-  } catch (error) { console.warn("AI answer failed:", error.message); return null; }
-}
-async function downloadLineImage(messageId) {
-  const r = await fetch(`https://api-data.line.me/v2/bot/message/${messageId}/content`, { headers: { authorization: `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}` } });
-  if (!r.ok) throw new Error(`LINE content: ${r.status}`);
-  const buffer = Buffer.from(await r.arrayBuffer());
-  // สกรีนช็อตจากมือถือ (โดยเฉพาะแชทที่มีข้อความยาว ๆ ติดมาด้วย) มักมีความละเอียดสูงมาก (>1080x2400)
-  // ส่ง base64 ตรง ๆ แบบเดิมทำให้ payload ใหญ่เกินกว่าที่บาง VLM engine (เช่น self-hosted NVIDIA NIM) จะรับไหว
-  // ผลคือได้ 500 เปล่า ๆ แทนที่จะ reject อย่างสุภาพ — ย่อขนาดให้พอเหมาะกับงานอ่านตัวเลข/ตัวหนังสือก่อนเสมอ
-  const resized = await sharp(buffer)
-    .rotate() // เคารพ EXIF orientation ของภาพจากมือถือ
-    .resize({ width: 1600, height: 1600, fit: "inside", withoutEnlargement: true })
-    .jpeg({ quality: 82 })
-    .toBuffer();
-  return { mime: "image/jpeg", base64: resized.toString("base64") };
-}
-// คืนค่า { receipt } ถ้าอ่านสำเร็จ, { error: "system" } ถ้า provider/AI พัง (ไม่เกี่ยวกับภาพ), { error: "unreadable" } ถ้าอ่านได้แต่ไม่เจอยอดเงินที่สมเหตุสมผล
-// แยกสองเคสนี้ออกจากกัน เพราะข้อความที่ควรบอกผู้ใช้ต่างกันมาก — เดิมรวมเป็น null เดียวกันหมด ทำให้ปัญหาฝั่งระบบ (เช่น provider error 500)
-// ถูกเข้าใจผิดว่าเป็นปัญหาความชัดของภาพ ทั้งที่ภาพชัดแค่ไหนก็อ่านไม่ได้เพราะ request ไปไม่ถึงขั้นตอนอ่านภาพเลยด้วยซ้ำ
-async function readReceipt(mime, base64) {
-  if (!ai || !visionModel) return { error: "system" };
-  // ลองใหม่ได้ 1 ครั้งถ้าเจอ error 5xx (เช่น "EngineCore encountered an issue" จาก NVIDIA NIM) เพราะมักเป็นปัญหาชั่วคราวฝั่ง provider
-  // ไม่ใช่ปัญหาภาพหรือโค้ดเรา — ถ้าลองใหม่แล้วยังพังอีก ถึงจะถือว่าเป็น error ฝั่งระบบจริง ๆ (ดู error handling ท้ายฟังก์ชัน)
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const completion = await ai.chat.completions.create({
-        model: visionModel,
-        temperature: 0,
-        max_tokens: 80, // เอาต์พุตเป็น JSON เล็ก ๆ แค่ {"merchant":"...","amount":number} เท่านั้น
-        // ไม่ใส่ response_format: json_object เพราะ NVIDIA NIM VLM บางตัว (เช่น nemotron-nano-12b-v2-vl)
-        // ตอบ 500 "EngineCore encountered an issue" เมื่อถูกบังคับ structured output แบบนี้ — คุม JSON ผ่าน prompt แทน
-        messages: [
-          { role: "system", content: "You read Thai/English receipt or bank-transfer slip photos. Reply with ONLY a raw JSON object, no markdown code fences, no explanation, in this exact shape: {\"merchant\":\"...\",\"amount\":number}. \"amount\" is the final total paid or transferred (บาท), as a plain number with no currency symbol or commas. If you cannot read a merchant/payee name, use \"อื่น ๆ\". If you cannot find a clear total amount, set amount to 0." },
-          { role: "user", content: [
-            { type: "text", text: "อ่านยอดรวมและชื่อร้านค้าจากใบเสร็จนี้" },
-            { type: "image_url", image_url: { url: `data:${mime};base64,${base64}` } }
-          ] }
-        ]
+    function fileToBase64(file){
+      return new Promise((resolve,reject)=>{
+        const reader=new FileReader();
+        reader.onload=()=>resolve(String(reader.result).split(',')[1]||'');
+        reader.onerror=()=>reject(new Error(t('checkoutError')));
+        reader.readAsDataURL(file);
       });
-      const raw = completion.choices[0]?.message?.content ?? "{}";
-      // บางโมเดล (โดยเฉพาะเมื่อไม่ได้บังคับ response_format) ยังห่อคำตอบด้วย ```json ... ``` ทั้งที่สั่งห้ามแล้ว — ตัดออกกันพังก่อน parse
-      const cleaned = raw.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
-      const parsed = JSON.parse(cleaned || "{}");
-      const amount = Number(parsed.amount);
-      if (!Number.isFinite(amount) || amount <= 0 || amount > 10_000_000) return { error: "unreadable" }; // โมเดลตอบสำเร็จ แต่ไม่เจอยอดเงินที่สมเหตุสมผลในภาพจริง ๆ
-      const merchant = String(parsed.merchant ?? "อื่น ๆ").trim().slice(0, 120) || "อื่น ๆ";
-      return { receipt: { merchant, amount } };
-    } catch (error) {
-      const status = error?.status ?? error?.response?.status;
-      const isServerError = typeof status === "number" && status >= 500;
-      console.warn(`Receipt AI read failed (attempt ${attempt + 1}/2, status=${status ?? "n/a"}):`, error.message);
-      if (attempt === 0 && isServerError) continue; // ลองใหม่อีกครั้งเฉพาะ error 5xx (ฝั่ง provider พัง) ไม่ retry error อื่น เช่น 400 (รูปแบบ request ผิดเอง ลองใหม่ก็พังเหมือนเดิม)
-      return { error: "system" }; // ทั้ง 5xx ที่ retry แล้วไม่หาย และ error อื่น ๆ (network, parse ผิดปกติ ฯลฯ) ถือเป็นปัญหาฝั่งระบบทั้งหมด ไม่ใช่ความผิดภาพ
     }
-  }
-}
-function inLastDays(date, days) { const value = date instanceof Date ? date : new Date(date); return !Number.isNaN(value.getTime()) && Date.now() - value.getTime() <= days * 86_400_000; }
-async function pushWeeklySummaries() {
-  const snap = await usersCol.get();
-  for (const doc of snap.docs) {
-    const uid = doc.id, user = { ...emptyUser(), ...doc.data() };
-    if (applyRecurring(user)) await saveUser(uid, user);
-    const week = (user.transactions ?? []).filter((tx) => inLastDays(tx.createdAt, 7));
-    if (!week.length) continue; // don't nag users with nothing to report
-    try { await push(uid, `${summary(week, "สัปดาห์นี้")}\n\n${advice(week)}\n\nพิมพ์ “สรุปเดือนนี้” หรือ “เว็บ” เพื่อดูรายละเอียดเพิ่มเติมได้เลยนะ`); }
-    catch (error) { console.warn(`Weekly push failed for ${uid}:`, error.message); }
-  }
-}
-// Every Sunday at 20:00 (Asia/Bangkok). Change the cron expression or set WEEKLY_SUMMARY_CRON in .env to adjust.
-cron.schedule(process.env.WEEKLY_SUMMARY_CRON ?? "0 20 * * 0", () => { pushWeeklySummaries().catch((error) => console.error("Weekly summary job failed:", error.message)); }, { timezone: "Asia/Bangkok" });
-
-// เตือนจดประจำวัน — ผู้ใช้ตั้งเวลาเองต่อคน (user.reminderTime, HH:mm ตามเวลาไทย) จากหน้าตั้งค่าเว็บ
-// รันทุกนาทีแล้วเทียบ "นาฬิกาไทยตอนนี้" กับเวลาที่แต่ละคนตั้งไว้ ไม่ใช่ cron ตายตัวแบบสรุปรายสัปดาห์
-// เพราะผู้ใช้แต่ละคนเลือกเวลาต่างกันได้ — ตรวจ dailyReminder===true เท่านั้น และข้ามคนที่จดรายการวันนี้ไปแล้ว (ไม่กวนซ้ำ)
-// หมายเหตุ: ถ้าเซิร์ฟเวอร์ sleep อยู่พอดีในนาทีนั้น (เช่น host แบบ free-tier ที่ sleep เมื่อไม่มี traffic)
-// การเตือนของนาทีนั้นจะไม่ยิง และจะไม่ยิงย้อนหลังให้เมื่อเซิร์ฟเวอร์ตื่นขึ้นมาอีกครั้ง
-function bangkokHHMM(date = new Date()) {
-  return new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Bangkok", hour: "2-digit", minute: "2-digit", hour12: false }).format(date);
-}
-async function pushDailyReminders() {
-  const nowHHMM = bangkokHHMM();
-  const snap = await usersCol.get(); // กรองในหน่วยความจำแทน compound where ฝั่ง Firestore เพื่อไม่ต้องสร้าง composite index เพิ่ม (เข้าคู่กับ pushWeeklySummaries)
-  for (const doc of snap.docs) {
-    const uid = doc.id, user = { ...emptyUser(), ...doc.data() };
-    if (!user.dailyReminder || (user.reminderTime ?? "20:00") !== nowHHMM) continue;
-    if ((user.transactions ?? []).some((tx) => sameDay(tx.createdAt))) continue; // จดวันนี้ไปแล้ว ไม่ต้องเตือนซ้ำ
-    const premium = await subscriptionService.isPremium(uid).catch(() => false);
-    if (!premium) continue; // เตือนจดประจำวันเป็นฟีเจอร์ Premium — เผื่อสมัครหมดอายุไปแล้วแต่ค่ายังเปิดค้างอยู่ในโปรไฟล์
-    try { await push(uid, "🔔 อย่าลืมจดรายรับรายจ่ายวันนี้นะคะ พิมพ์ เช่น “ค่าอาหาร 80” หรือ “เงินเดือน 15000” ได้เลย"); }
-    catch (error) { console.warn(`Daily reminder push failed for ${uid}:`, error.message); }
-  }
-}
-cron.schedule("* * * * *", () => { pushDailyReminders().catch((error) => console.error("Daily reminder job failed:", error.message)); }, { timezone: "Asia/Bangkok" });
-
-const dashboard = await fs.readFile(path.join(__dirname, "dashboard.html"), "utf8");
-const confirmMessagePage = await fs.readFile(path.join(__dirname, "confirm-message.html"), "utf8");
-
-app.get("/health", (_req, res) => res.json({ ok: true, app: "pa-nuan" }));
-
-// หน้าคั่นก่อนเข้าแดชบอร์ด (interstitial) — ผู้ใช้ทั่วไปต้อง "ดูโฆษณา" ก่อนเข้าทุกครั้ง
-// Premium ข้ามไปที่ /dashboard ตรงเลย ไม่ต้องผ่านหน้านี้
-// หมายเหตุ: ช่อง #ad-slot เป็น placeholder เท่านั้น — ยังไม่ได้ต่อ ad network จริง (เช่น AdSense/Adsterra)
-// ให้ใส่สคริปต์ของ network ที่เลือกไว้ในคอมเมนต์ที่ระบุไว้ด้านล่างทีหลัง
-function adInterstitial({ nextUrl, waitSeconds }) {
-  return String.raw`<!doctype html>
-<html lang="th"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>กำลังเข้าสู่แดชบอร์ด | ยายจันทร์</title>
-<style>
-*{box-sizing:border-box}body{margin:0;background:#0f0e12;color:#fff;font-family:system-ui,-apple-system,"Noto Sans Thai",sans-serif;min-height:100vh;display:flex;flex-direction:column}
-.wrap{max-width:440px;margin:0 auto;width:100%;min-height:100vh;display:flex;flex-direction:column}
-.top{padding:16px 20px;display:flex;justify-content:space-between;align-items:center;color:#a09aa8;font-size:13px}
-.ad-slot{flex:1;margin:0 16px;border-radius:16px;background:linear-gradient(135deg,#25202c,#1a1720);border:1px dashed #43394f;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:8px;min-height:320px}
-.ad-slot b{font-size:15px;color:#c9a0d8}.ad-slot span{font-size:12px;color:#6f6878}
-.timer{text-align:center;padding:18px 20px 8px;font-size:13px;color:#a09aa8}
-.actions{padding:16px 20px 28px;display:flex;flex-direction:column;gap:10px}
-button{border:0;border-radius:12px;padding:14px;font:inherit;font-weight:700;font-size:15px}
-.skip{background:#2a2531;color:#5f5769}.skip.ready{background:#3a3244;color:#fff}
-.premium{background:linear-gradient(135deg,#D23283,#C79A46);color:#fff}
-</style><body><div class="wrap">
-<div class="top"><span>ยายจันทร์ 📒</span><span>โฆษณา</span></div>
-<div class="ad-slot" id="adSlot"><b>พื้นที่โฆษณา</b><span>ตรงนี้จะแสดงโฆษณาจริงเมื่อเปิดใช้งาน</span></div>
-<!-- TODO: ใส่สคริปต์ ad network จริงตรงนี้ (เช่น Google AdSense/Adsterra rewarded unit) แล้วยิง event ตอนดูจบไปแทนที่ setTimeout ด้านล่าง -->
-<div class="timer" id="timer">รอ ${waitSeconds} วินาที เพื่อข้ามโฆษณา…</div>
-<div class="actions">
-<button class="skip" id="skipBtn" disabled>ข้ามโฆษณา</button>
-<button class="premium" id="premiumBtn">สมัคร Premium เพื่อข้ามโฆษณาตลอดไป</button>
-</div>
-</div>
-<script>
-let remaining = ${waitSeconds};
-const timerEl = document.getElementById('timer'), skipBtn = document.getElementById('skipBtn');
-const tick = () => {
-  remaining -= 1;
-  if (remaining <= 0) {
-    timerEl.textContent = 'ข้ามได้แล้ว';
-    skipBtn.disabled = false; skipBtn.classList.add('ready');
-    clearInterval(interval);
-  } else {
-    timerEl.textContent = 'รอ ' + remaining + ' วินาที เพื่อข้ามโฆษณา…';
-  }
-};
-const interval = setInterval(tick, 1000);
-skipBtn.onclick = () => { if (!skipBtn.disabled) location.href = ${JSON.stringify(nextUrl)}; };
-document.getElementById('premiumBtn').onclick = () => { window.close(); };
-</script>
-</body></html>`;
-}
-app.get("/dashboard-gate", async (req, res) => {
-  if (!allowed(req)) return res.sendStatus(401);
-  const uid = req.query.u;
-  const query = `?token=${encodeURIComponent(req.query.token)}&u=${encodeURIComponent(uid)}`;
-  // uid อาจเป็นบัญชีส่วนตัว (userId) หรือกลุ่ม/ห้อง (groupId/roomId) — isPremium เช็คได้เฉพาะบัญชีส่วนตัว
-  // ถ้าไม่ใช่ Premium ส่วนตัว ต้องเช็คต่อว่าเป็นกลุ่มที่ปลดล็อก Premium ไว้แล้วหรือเปล่า (เจ้าของกลุ่มเป็น Premium + ยืนยันแล้ว)
-  // ไม่งั้นสมาชิกกลุ่ม Premium ทุกคนจะโดนโฆษณาอยู่ดีทั้งที่กลุ่มปลดล็อกแล้ว
-  const premium = (await subscriptionService.isPremium(uid).catch(() => false)) || (await groupLinkService.isPremiumGroup(uid).catch(() => false));
-  if (premium) return res.redirect(`/dashboard${query}`);
-  const waitSeconds = Number(process.env.DASHBOARD_AD_WAIT_SECONDS) || 25;
-  res.type("html").send(adInterstitial({ nextUrl: `/dashboard${query}`, waitSeconds }));
-});
-app.get("/dashboard", (req, res) => allowed(req) ? res.type("html").send(dashboard) : res.sendStatus(401));
-app.get("/confirm-message", (req, res) => allowed(req) ? res.type("html").send(confirmMessagePage) : res.sendStatus(401));
-function transactionInput(body) {
-  const type = body?.type === "income" ? "income" : body?.type === "expense" ? "expense" : null;
-  const description = String(body?.description ?? "").trim().slice(0, 120);
-  const category = String(body?.category ?? "").trim().slice(0, 60);
-  const amount = Number(body?.amount);
-  const date = new Date(body?.createdAt);
-  if (!type || !description || !category || !Number.isFinite(amount) || amount <= 0 || amount > 10_000_000 || Number.isNaN(date.getTime())) return null;
-  return { type, description, category, amount, createdAt: date.toISOString() };
-}
-function recurringInput(body) {
-  const type = body?.type === "income" ? "income" : body?.type === "expense" ? "expense" : null;
-  const description = String(body?.description ?? "").trim().slice(0, 120), category = String(body?.category ?? "").trim().slice(0, 60), amount = Number(body?.amount), day = Number(body?.day);
-  if (!type || !description || !category || !Number.isFinite(amount) || amount <= 0 || amount > 10_000_000 || !Number.isInteger(day) || day < 1 || day > 31) return null;
-  return { type, description, category, amount, day };
-}
-// HH:mm ตามเวลาไทย เช่น "20:00" — ผู้ใช้ตั้งเองในหน้าตั้งค่า
-function reminderInput(body) {
-  const enabled = Boolean(body?.enabled);
-  const time = String(body?.time ?? "20:00").trim();
-  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) return null;
-  return { dailyReminder: enabled, reminderTime: time };
-}
-// ตั้งค่าการ์ด "จดสำเร็จ" (ดู txFlexMessage/CONFIRM_MESSAGE_THEMES ด้านบน) — ฟีเจอร์ Premium เฉพาะแชทกลุ่ม
-function confirmMessagePrefsInput(body) {
-  if (typeof body?.theme !== "undefined" && !(body.theme in CONFIRM_MESSAGE_THEMES)) return null;
-  return {
-    showBudgetBar: Boolean(body?.showBudgetBar),
-    showAuthorName: Boolean(body?.showAuthorName),
-    showEditButton: Boolean(body?.showEditButton),
-    showDeleteButton: Boolean(body?.showDeleteButton),
-    theme: body?.theme in CONFIRM_MESSAGE_THEMES ? body.theme : "pink"
-  };
-}
-function applyRecurring(user) {
-  user.recurring ??= [];
-  const now = new Date(), key = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-  let changed = false;
-  for (const recurring of user.recurring) {
-    if (recurring.lastApplied === key) continue;
-    const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate(), date = new Date(now.getFullYear(), now.getMonth(), Math.min(recurring.day, lastDay), 12);
-    if (date > now) continue;
-    user.transactions.push({ id: crypto.randomUUID(), type: recurring.type, description: recurring.description, category: recurring.category, amount: recurring.amount, createdAt: date.toISOString(), recurringId: recurring.id });
-    recurring.lastApplied = key; changed = true;
-  }
-  return changed;
-}
-app.get("/api/transactions", async (req, res) => {
-  if (!allowed(req)) return res.sendStatus(401);
-  const uid = req.query.u, user = await getUser(uid), now = new Date();
-  if (applyRecurring(user)) await saveUser(uid, user);
-  res.json({ label: new Intl.DateTimeFormat("th-TH", { month: "long", year: "numeric", timeZone: "Asia/Bangkok" }).format(now), transactions: [...user.transactions].sort((a, b) => b.createdAt.localeCompare(a.createdAt)) });
-});
-app.get("/api/recurring", async (req, res) => {
-  if (!allowed(req)) return res.sendStatus(401);
-  const user = await getUser(req.query.u); res.json({ recurring: user.recurring ?? [] });
-});
-app.get("/api/budgets", async (req, res) => {
-  if (!allowed(req)) return res.sendStatus(401);
-  const user = await getUser(req.query.u); res.json({ budgets: user.budgets ?? {} });
-});
-app.put("/api/budgets/:category", express.json(), async (req, res) => {
-  if (!allowed(req)) return res.sendStatus(401);
-  const category = String(req.params.category ?? "").trim().slice(0, 60), amount = Number(req.body?.amount);
-  if (!category || !Number.isFinite(amount) || amount < 0 || amount > 10_000_000) return res.status(400).json({ error: "ข้อมูลงบประมาณไม่ถูกต้อง" });
-  const uid = req.query.u, user = await getUser(uid); user.budgets ??= {}; user.budgets[category] = amount;
-  await saveUser(uid, user); res.json({ category, amount });
-});
-// เตือนจดประจำวัน: ผู้ใช้ตั้งเปิด/ปิด และเวลาที่ต้องการเอง (HH:mm ตามเวลาไทย) — cron ทุกนาทีจะเช็คและ push ให้ (ดู pushDailyReminders)
-app.get("/api/reminder", async (req, res) => {
-  if (!allowed(req)) return res.sendStatus(401);
-  const user = await getUser(req.query.u);
-  res.json({ dailyReminder: Boolean(user.dailyReminder), reminderTime: user.reminderTime ?? "20:00" });
-});
-app.put("/api/reminder", express.json(), async (req, res) => {
-  if (!allowed(req)) return res.sendStatus(401);
-  const input = reminderInput(req.body); if (!input) return res.status(400).json({ error: "เวลาที่ตั้งไม่ถูกต้อง" });
-  const uid = req.query.u, user = await getUser(uid);
-  // ฟีเจอร์ Premium: ผู้ใช้ฟรีเปิดใช้งานไม่ได้ (แต่ปิดได้เสมอ เผื่อเคยเปิดไว้ตอนยังเป็น Premium แล้วหมดอายุ)
-  if (input.dailyReminder) {
-    const premium = await subscriptionService.isPremium(uid).catch(() => false);
-    if (!premium) return res.status(403).json({ error: "เตือนจดประจำวันเป็นฟีเจอร์ของสมาชิก Premium" });
-  }
-  user.dailyReminder = input.dailyReminder; user.reminderTime = input.reminderTime;
-  await saveUser(uid, user); res.json(input);
-});
-// ปรับแต่งการ์ด "จดสำเร็จ" (แถบงบ/ชื่อผู้จด/ปุ่มแก้ไข/ปุ่มลบ/ธีมสี) — ฟีเจอร์ Premium ใช้ได้ทั้งแชทกลุ่มและแชทส่วนตัว 1:1
-// (เดิมจำกัดแค่กลุ่มเพราะคิดว่าแชทส่วนตัวมีแค่เจ้าของคนเดียวเห็นการ์ด เลยไม่มีประโยชน์ — แต่ผู้ใช้ 1:1 ก็อยากปรับธีม/ซ่อนปุ่มเองได้เหมือนกัน
-// ส่วน "ชื่อผู้จด" (showAuthorName) ไม่มีความหมายใน 1:1 เพราะมีคนจดคนเดียวอยู่แล้ว — คุมที่ฝั่ง UI (confirm-message.html) ไม่ต้องคุมที่ backend)
-// isGroup ในผลลัพธ์ยังส่งกลับไปเผื่อ UI อยากรู้ (เช่น จะซ่อนตัวเลือก "ชื่อผู้จด" ถ้าไม่ใช่กลุ่ม)
-async function resolveConfirmMessageAuth(uid) {
-  const groupLink = await groupLinkService.getRaw(uid).catch(() => null);
-  if (groupLink) {
-    // Premium ผูกกับ ownerId ของกลุ่ม ไม่ใช่ groupId เอง (เหมือน /api/subscription และ /dashboard-gate ด้านบน)
-    const premium = await groupLinkService.isPremiumGroup(uid).catch(() => false);
-    return { isGroup: true, premium };
-  }
-  const premium = await subscriptionService.isPremium(uid).catch(() => false);
-  return { isGroup: false, premium };
-}
-app.get("/api/confirm-message-prefs", async (req, res) => {
-  if (!allowed(req)) return res.sendStatus(401);
-  const uid = req.query.u;
-  const { isGroup } = await resolveConfirmMessageAuth(uid);
-  const user = await getUser(uid);
-  res.json({ ...defaultConfirmMessagePrefs(), ...(user.confirmMessagePrefs ?? {}), isGroup });
-});
-app.put("/api/confirm-message-prefs", express.json(), async (req, res) => {
-  if (!allowed(req)) return res.sendStatus(401);
-  const uid = req.query.u;
-  const { isGroup, premium } = await resolveConfirmMessageAuth(uid);
-  if (!premium) return res.status(403).json({ error: "ตั้งค่าข้อความยืนยันเป็นฟีเจอร์ของสมาชิก Premium" });
-  const input = confirmMessagePrefsInput(req.body); if (!input) return res.status(400).json({ error: "ข้อมูลไม่ถูกต้อง" });
-  const user = await getUser(uid); user.confirmMessagePrefs = input;
-  await saveUser(uid, user); res.json({ ...input, isGroup });
-});
-app.post("/api/recurring", express.json(), async (req, res) => {
-  if (!allowed(req)) return res.sendStatus(401);
-  const input = recurringInput(req.body); if (!input) return res.status(400).json({ error: "ข้อมูลรายการประจำไม่ถูกต้อง" });
-  const uid = req.query.u, user = await getUser(uid), recurring = { id: crypto.randomUUID(), ...input }; user.recurring ??= []; user.recurring.push(recurring); await saveUser(uid, user); res.status(201).json({ recurring });
-});
-app.delete("/api/recurring/:id", async (req, res) => {
-  if (!allowed(req)) return res.sendStatus(401);
-  const uid = req.query.u, user = await getUser(uid); user.recurring ??= []; const index = user.recurring.findIndex((item) => item.id === req.params.id);
-  if (index < 0) return res.sendStatus(404);
-  const [recurring] = user.recurring.splice(index, 1); await saveUser(uid, user); res.json({ recurring });
-});
-app.post("/api/transactions", express.json(), async (req, res) => {
-  if (!allowed(req)) return res.sendStatus(401);
-  const input = transactionInput(req.body);
-  if (!input) return res.status(400).json({ error: "ข้อมูลรายการไม่ถูกต้อง" });
-  const uid = req.query.u, user = await getUser(uid), transaction = { id: crypto.randomUUID(), ...input };
-  user.transactions.push(transaction); await saveUser(uid, user); res.status(201).json({ transaction });
-});
-app.put("/api/transactions/:id", express.json(), async (req, res) => {
-  if (!allowed(req)) return res.sendStatus(401);
-  const input = transactionInput(req.body), uid = req.query.u, user = await getUser(uid), index = user.transactions.findIndex((tx) => tx.id === req.params.id);
-  if (!input) return res.status(400).json({ error: "ข้อมูลรายการไม่ถูกต้อง" });
-  if (index < 0) return res.sendStatus(404);
-  const transaction = { ...user.transactions[index], ...input }; user.transactions[index] = transaction;
-  await saveUser(uid, user); res.json({ transaction });
-});
-app.delete("/api/transactions/:id", async (req, res) => {
-  if (!allowed(req)) return res.sendStatus(401);
-  const uid = req.query.u, user = await getUser(uid), index = user.transactions.findIndex((tx) => tx.id === req.params.id);
-  if (index < 0) return res.sendStatus(404);
-  const [transaction] = user.transactions.splice(index, 1); await saveUser(uid, user); res.json({ transaction });
-});
-app.get("/api/transactions/export", async (req, res) => {
-  if (!allowed(req)) return res.sendStatus(401);
-  const user = await getUser(req.query.u), quote = (value) => `"${String(value).replaceAll('"', '""')}"`;
-  const csv = ["วันที่,ประเภท,รายการ,หมวดหมู่,จำนวนเงิน", ...user.transactions.map((tx) => [new Date(tx.createdAt).toLocaleString("th-TH", { timeZone: "Asia/Bangkok" }), tx.type === "income" ? "รายรับ" : "รายจ่าย", tx.description, tx.category, tx.amount].map(quote).join(","))].join("\n");
-  res.set({ "content-type": "text/csv; charset=utf-8", "content-disposition": "attachment; filename=pa-nuan-transactions.csv" }).send(`\uFEFF${csv}`);
-});
-// รายงาน PDF สรุปรายเดือน/รายปี — ฟีเจอร์ Premium เท่านั้น (ต่างจาก CSV export ด้านบนที่ใช้ได้ทุกคน)
-// ต้องเช็คสิทธิ์ Premium แบบเดียวกับ /api/subscription ด้านล่าง (รองรับทั้ง userId เดี่ยวและ groupId ที่ผูกกับ ownerId)
-// query params: period=month|year (default month), year=YYYY (default ปีปัจจุบัน), month=1-12 (จำเป็นถ้า period=month, default เดือนปัจจุบัน)
-app.get("/api/reports/pdf", async (req, res) => {
-  if (!allowed(req)) return res.sendStatus(401);
-  const uid = req.query.u;
-  const groupLink = await groupLinkService.getRaw(uid).catch(() => null);
-  const statusUid = groupLink?.ownerId ?? uid;
-  const isPremium = await subscriptionService.isPremium(statusUid).catch(() => false);
-  if (!isPremium) return res.status(403).json({ error: "premium_required", message: "รายงาน PDF เป็นฟีเจอร์ Premium" });
-
-  const period = req.query.period === "year" ? "year" : "month";
-  const now = new Date();
-  const year = Number(req.query.year) || now.getFullYear();
-  const month = period === "month" ? (Number(req.query.month) || now.getMonth() + 1) : undefined;
-  if (!Number.isInteger(year) || year < 2000 || year > 2100) return res.status(400).json({ error: "invalid_year" });
-  if (period === "month" && (!Number.isInteger(month) || month < 1 || month > 12)) return res.status(400).json({ error: "invalid_month" });
-
-  const user = await getUser(uid);
-  const inRange = (tx) => {
-    const d = new Date(tx.createdAt);
-    if (Number.isNaN(d.getTime())) return false;
-    return period === "year" ? d.getFullYear() === year : (d.getFullYear() === year && d.getMonth() + 1 === month);
-  };
-  const transactions = (user.transactions ?? []).filter(inRange);
-  const isGroupChat = Boolean(groupLink);
-  const ownerLabel = isGroupChat ? "กองกลางของกลุ่ม" : null; // ไม่ดึงชื่อผู้ใช้จริงมาโชว์ในรายงาน กันข้อมูลส่วนตัวรั่วถ้าไฟล์ถูกส่งต่อ
-
-  try {
-    const pdfBuffer = await generateReportPdf({ period, year, month, transactions, budgets: user.budgets ?? {}, ownerLabel });
-    const filename = period === "year" ? `pa-nuan-report-${year}.pdf` : `pa-nuan-report-${year}-${String(month).padStart(2, "0")}.pdf`;
-    res.set({ "content-type": "application/pdf", "content-disposition": `attachment; filename=${filename}` }).send(pdfBuffer);
-  } catch (error) {
-    console.error("PDF report generation failed:", error.message);
-    // ข้อความ error นี้อาจมาจาก assertFontsReady() (ยังไม่ได้วางไฟล์ฟอนต์) หรือ pdfkit ล้มเหลวด้วยเหตุอื่น — log เต็มไว้ฝั่งเซิร์ฟเวอร์
-    // แต่ตอบกลับ client แบบสั้น ๆ พอ ไม่ควรโชว์ path ไฟล์ภายในเซิร์ฟเวอร์ให้ client เห็นตรง ๆ
-    res.status(500).json({ error: "pdf_generation_failed", message: "สร้างรายงาน PDF ไม่สำเร็จ กรุณาลองใหม่อีกครั้ง" });
-  }
-});
-// สถานะสมาชิก Premium จริงจาก DB (ไม่เชื่อ client) — ใช้แสดงในหน้าตั้งค่าของ dashboard.html
-app.get("/api/subscription", async (req, res) => {
-  if (!allowed(req)) return res.sendStatus(401);
-  const uid = req.query.u;
-  // เดิมเช็คแค่ subscriptionService.getStatusView(uid) ทางเดียว ถ้า uid เป็น groupId (ไม่ใช่ userId ของคนจ่ายเงิน)
-  // จะหา subscription doc ด้วย groupId ซึ่งไม่มีทางเจอ (Premium ผูกกับ ownerId ของกลุ่ม ไม่ใช่ groupId เอง)
-  // -> fallback เป็น FREE เสมอ แม้เจ้าของกลุ่มจะเป็น Premium จริงก็ตาม (จุดเดียวกับที่ /dashboard บรรทัด ~822 เช็คถูกอยู่แล้ว
-  // ผ่าน groupLinkService.isPremiumGroup แต่ endpoint นี้ลืมเช็คทางกลุ่มไปจุดเดียว ทำให้เข้าหน้าเว็บได้แต่ปุ่ม Premium กดไม่ติด)
-  const groupLink = await groupLinkService.getRaw(uid).catch(() => null);
-  const statusUid = groupLink?.ownerId ?? uid;
-  const status = await subscriptionService.getStatusView(statusUid).catch(() => ({ plan: PLAN.FREE, active: false }));
-  const lineOaLink = process.env.LINE_OA_BASIC_ID ? `https://line.me/R/ti/p/${encodeURIComponent(process.env.LINE_OA_BASIC_ID)}` : null;
-  // isGroup: ให้หน้าเว็บรู้ว่า u นี้คือแชทกลุ่มไหม เพื่อโชว์/ซ่อนเมนู "ข้อความยืนยัน" (ฟีเจอร์เฉพาะกลุ่ม ดู /api/confirm-message-prefs)
-  res.json({ ...status, lineOaLink, isGroup: Boolean(groupLink) });
-});
-// สมัคร/ต่ออายุ Premium จากหน้าเว็บ — ใช้ paymentSessionService + qrService ตัวเดียวกับที่ฝั่ง LINE ใช้
-// (ดู lineHandlers.js handleSubscribeCommand) เพื่อให้ session/QR ผูกกับ user เดียวกันไม่ว่าจะสมัครทางไหน
-app.post("/api/premium/checkout", async (req, res) => {
-  if (!allowed(req)) return res.sendStatus(401);
-  const uid = req.query.u;
-  const status = await subscriptionService.getStatusView(uid).catch(() => ({ plan: PLAN.FREE, active: false }));
-  if (status.active) return res.json({ alreadyPremium: true, expiresAt: status.expiresAt });
-  const { session } = await paymentSessionService.createOrReuse(uid);
-  const qr = qrService.generateForSession(session);
-  if (!qr.available) return res.status(503).json({ error: "ยังไม่พร้อมรับชำระเงิน กรุณาติดต่อผู้ดูแลระบบ", note: qr.note });
-  res.json({
-    sessionId: session.id,
-    referenceId: session.referenceId,
-    amount: session.amount,
-    expiresAt: session.expiresAt,
-    qrImageUrl: `/qr/${session.id}.png`
-  });
-});
-// รับสลิป (base64) จากหน้าเว็บ แล้ววิ่งผ่าน OCR + verify path เดียวกับฝั่ง LINE (paymentTransactionService.submitAndVerify)
-// จำกัดขนาด body ไว้ที่ 8mb พอสำหรับรูปสลิปถ่ายจากมือถือ (ไม่ใช้ multer เพราะ client ส่งเป็น JSON base64 ตรงไปตรงมา)
-app.post("/api/premium/slip", express.json({ limit: "8mb" }), async (req, res) => {
-  if (!allowed(req)) return res.sendStatus(401);
-  const uid = req.query.u;
-  const { sessionId, mime, base64 } = req.body ?? {};
-  if (!sessionId || !mime || !base64) return res.status(400).json({ error: "ข้อมูลสลิปไม่ครบ" });
-  if (!/^image\/(png|jpe?g|webp)$/i.test(mime)) return res.status(400).json({ error: "รองรับเฉพาะไฟล์รูปภาพ (jpg/png/webp)" });
-
-  const validation = await paymentSessionService.validateForUpload(sessionId, uid);
-  if (!validation.ok) {
-    const reasonMsg = {
-      EXPIRED: "รายการชำระเงินหมดอายุแล้ว กรุณากดสมัครใหม่อีกครั้ง",
-      USER_MISMATCH: "ไม่พบรายการชำระเงินนี้สำหรับบัญชีของคุณ",
-      ALREADY_CONSUMED: "รายการนี้ถูกใช้ไปแล้ว กรุณากดสมัครใหม่หากต้องการสมัครอีกครั้ง",
-      NOT_FOUND: "ไม่พบรายการชำระเงิน กรุณากดสมัครใหม่อีกครั้ง"
-    }[validation.reason] ?? "ไม่พบรายการชำระเงิน กรุณากดสมัครใหม่อีกครั้ง";
-    return res.status(409).json({ error: reasonMsg, reason: validation.reason });
-  }
-
-  let ocrData = null;
-  try {
-    ocrData = await readSlip(ai, visionModel, mime, base64);
-  } catch (error) {
-    console.error("Web slip OCR failed:", error.message);
-    return res.status(502).json({ error: "ระบบประมวลผลภาพใช้เวลานานกว่าปกติ กรุณาลองใหม่อีกครั้ง" });
-  }
-  if (!ocrData) return res.status(422).json({ error: "อ่านข้อมูลจากสลิปนี้ไม่ได้ ลองถ่ายให้เห็นยอดเงินและเลขอ้างอิงชัด ๆ อีกครั้ง" });
-
-  const result = await paymentTransactionService.submitAndVerify({ userId: uid, paymentSession: validation.session, ocrData });
-  await paymentSessionService.consume(validation.session.id);
-  if (result.outcome === TX_STATUS.VERIFIED) await richMenuService.switchTo(uid, "PREMIUM").catch(() => {});
-
-  const messages = {
-    [TX_STATUS.VERIFIED]: "ชำระเงินสำเร็จ 🎉 ตอนนี้คุณเป็นสมาชิก Premium แล้ว",
-    [TX_STATUS.PENDING_REVIEW]: "ได้รับสลิปแล้ว ระบบกำลังตรวจสอบเพิ่มเติม เจ้าหน้าที่จะยืนยันให้เร็วที่สุด กรุณารอการแจ้งเตือนอีกครั้ง 🙏",
-    [TX_STATUS.REJECTED]: "ไม่สามารถยืนยันการชำระเงินได้ กรุณาตรวจสอบสลิปและลองใหม่อีกครั้ง",
-    [TX_STATUS.DUPLICATE]: "สลิปนี้ถูกใช้งานไปแล้ว"
-  };
-  res.json({ outcome: result.outcome, message: messages[result.outcome] ?? messages[TX_STATUS.REJECTED] });
-});
-app.get("/api/dashboard", async (req, res) => {
-  if (!allowed(req)) return res.sendStatus(401);
-  const user = await getUser(req.query.u), current = user.transactions.filter((tx) => sameMonth(tx.createdAt)), t = totals(current);
-  const categories = Object.entries(current.filter((tx) => tx.type === "expense").reduce((o, tx) => ({ ...o, [tx.category]: (o[tx.category] ?? 0) + tx.amount }), {})).map(([category, amount]) => ({ category, amount })).sort((a, b) => b.amount - a.amount);
-  const now = new Date(), history = Array.from({ length: 6 }, (_, index) => { const d = new Date(now.getFullYear(), now.getMonth() - (5 - index), 1), p = parts(d), total = totals(user.transactions.filter((tx) => sameMonth(tx.createdAt, p.year, p.month))); return { label: new Intl.DateTimeFormat("th-TH", { month: "short", timeZone: "Asia/Bangkok" }).format(d), ...total }; });
-  res.json({ label: `ข้อมูลเดือน ${new Intl.DateTimeFormat("th-TH", { month: "long", year: "numeric", timeZone: "Asia/Bangkok" }).format(now)}`, income: t.income, expense: t.expense, balance: t.income - t.expense, categories, history, recent: [...user.transactions].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 30).map((tx) => ({ ...tx, date: new Intl.DateTimeFormat("th-TH", { dateStyle: "short", timeZone: "Asia/Bangkok" }).format(new Date(tx.createdAt)) })) });
-});
-// เรนเดอร์ QR ของ payment session เป็นภาพ PNG จริง เพื่อให้ LINE Image Message ใช้ originalContentUrl/
-// previewImageUrl ชี้มาที่นี่ได้ (LINE ต้องการ URL รูปภาพที่เข้าถึงได้จริง จะส่ง payload string ตรง ๆ ไม่ได้)
-app.get("/qr/:sessionId.png", async (req, res) => {
-  try {
-    const session = await paymentSessionService.getById(req.params.sessionId);
-    if (!session) return res.sendStatus(404);
-    const qr = qrService.generateForSession(session);
-    if (!qr.available) return res.sendStatus(404);
-    res.set({ "content-type": "image/png", "cache-control": "no-store" });
-    await QRCode.toFileStream(res, qr.payload, { type: "png", width: 500, margin: 2 });
-  } catch (error) {
-    console.error("QR image render failed:", error.message);
-    res.sendStatus(500);
-  }
-});
-app.post("/webhook", express.raw({ type: "application/json" }), async (req, res) => {
-  if (!signatureValid(req.body, req.get("x-line-signature"))) return res.sendStatus(401);
-  res.sendStatus(200); const payload = JSON.parse(req.body.toString("utf8"));
-  for (const event of payload.events ?? []) {
-    // --- ผู้ใช้แอดบอทเป็นเพื่อนใหม่ (1-1 chat) — คนละ event กับ "join" (นั่นคือถูกเชิญเข้ากลุ่ม/ห้อง ดูด้านล่าง) ---
-    if (event.type === "follow") {
-      const uid = event.source?.userId;
-      if (!uid) continue;
-      try { await replyMessages(event.replyToken, [followWelcomeFlexMessage()]); }
-      catch (error) { console.error("Follow welcome message failed:", error.message); }
-      continue;
-    }
-    // --- บอทถูกเชิญเข้ากลุ่ม/ห้อง: เริ่มรอยืนยันเจ้าของ (spec: กลุ่มจดบัญชี) ---
-    if (event.type === "join") {
-      const groupId = event.source?.groupId ?? event.source?.roomId;
-      if (!groupId) continue;
-      try {
-        await groupLinkService.startPending(groupId);
-        await replyMessages(event.replyToken, [groupWelcomeFlexMessage()]);
-      } catch (error) { console.error("Group join handling failed:", error.message); }
-      continue;
-    }
-    // --- บอทถูกเตะ/ออกจากกลุ่มเอง: เคลียร์สถานะ link ทิ้ง ---
-    if (event.type === "leave") {
-      const groupId = event.source?.groupId ?? event.source?.roomId;
-      if (!groupId) continue;
-      try { await groupLinkService.removeLink(groupId); } catch (error) { console.error("Group leave cleanup failed:", error.message); }
-      continue;
-    }
-    // --- ปุ่ม "รายรับ/รายจ่าย" หลังอ่านสลิป (ดู receiptConfirmFlexMessage) — ยังไม่เคยบันทึก tx จริงจนกว่าจะถึงตรงนี้ ---
-    if (event.type === "postback") {
-      const data = event.postback?.data ?? "";
-      const params = new URLSearchParams(data);
-      // --- ปุ่ม "ลบ" บนการ์ดจดสำเร็จ (ดู txFlexMessage) — ลบรายการทันที ไม่ถามยืนยันซ้ำ ---
-      if (params.has("delete_tx")) {
-        const txId = params.get("delete_tx");
-        const delUserId = params.get("u");
-        let message;
-        if (!txId || !delUserId) message = noticeFlexMessage("ข้อมูลรายการหมดอายุแล้ว", "info");
-        else {
-          try {
-            const user = await getUser(delUserId);
-            const index = (user.transactions ?? []).findIndex((t) => t.id === txId);
-            if (index === -1) message = noticeFlexMessage("ไม่พบรายการนี้แล้ว อาจถูกลบไปก่อนหน้านี้", "info");
-            else {
-              const [removed] = user.transactions.splice(index, 1);
-              await saveUser(delUserId, user);
-              message = noticeFlexMessage(`ลบแล้ว: ${removed.description} ${money(removed.amount)} บาท`, "success");
-            }
-          } catch (error) { console.error("Delete tx postback failed", error.message); message = noticeFlexMessage("เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง", "error"); }
+    const PRO_TOGGLES=['categoryMemory','dailyReminder']; // ตั้งค่าที่ต้องเป็น Premium ถึงเปิดได้ — non-premium แตะแล้วเด้งไปหน้าปลดล็อกแทน ไม่ให้เปิดเฉยๆ
+    // การ์ด "จดสำเร็จ" (ธีมสี/ปุ่ม/แถบงบ) ย้ายไปเป็นหน้าเว็บแยก /confirm-message แล้ว (มีตัวอย่างการ์ดจริงให้ดูสด ๆ)
+    // จึงไม่มี toggle หรือ sheet ของฟีเจอร์นี้เหลืออยู่ในไฟล์นี้อีก — ดู confirm-message.html สำหรับ logic ทั้งหมด
+    function bindSettings(){
+      document.querySelectorAll('[data-toggle]').forEach(tg=>tg.onclick=async()=>{
+        const id=tg.dataset.toggle;
+        if(PRO_TOGGLES.includes(id)&&!subscription.active&&!prefs[id])return openUpgradeSheet();
+        prefs[id]=!prefs[id];savePrefs();
+        tg.classList.toggle('on',prefs[id]);tg.setAttribute('aria-checked',String(prefs[id]));
+        toast(prefs[id]?t('toastOn'):t('toastOff'));
+        if(id==='dailyReminder'){
+          try{await api('/api/reminder',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({enabled:prefs.dailyReminder,time:prefs.reminderTime})})}
+          catch(e){prefs[id]=!prefs[id];savePrefs();toast(e.message||t('genericError'))}
         }
-        try { await replyMessages(event.replyToken, [message]); } catch (error) { console.error("Could not reply", error.message); }
-        continue;
-      }
-      if (params.get("slip_type") === "income" || params.get("slip_type") === "expense") {
-        const pbSourceType = event.source?.type;
-        const pbIsGroupChat = pbSourceType === "group" || pbSourceType === "room";
-        const pbUserId = pbIsGroupChat ? (event.source?.groupId ?? event.source?.roomId) : event.source?.userId;
-        if (!pbUserId) continue;
-        let message;
-        try {
-          const type = params.get("slip_type");
-          const step = params.get("slip_step") ?? "save"; // เดิมไม่มี step, บันทึกทันที — เผื่อ postback เก่าที่ยังไม่มี slip_step ค้างอยู่ในมือถือผู้ใช้ ให้ default เป็น "save" (พฤติกรรมเดิม)
-          const merchant = decodeURIComponent(params.get("m") ?? "อื่น ๆ").slice(0, 120) || "อื่น ๆ";
-          const amount = Number(params.get("a"));
-          const authorId = params.get("aid") ?? event.source?.userId ?? null;
-          if (!Number.isFinite(amount) || amount <= 0) message = "ข้อมูลสลิปหมดอายุแล้ว ลองส่งรูปใหม่อีกครั้ง";
-          else if (step === "category") {
-            // ปุ่ม "รายจ่าย" ถูกกด -> ยังไม่บันทึก แสดงการ์ดเลือกหมวดหมู่ต่อก่อน (ดู categoryPickerFlexMessage)
-            message = categoryPickerFlexMessage(merchant, amount, { authorId });
-          } else {
-            const category = decodeURIComponent(params.get("c") ?? ""); // ว่างได้ถ้ากด "ให้ยายเลือกให้" หรือเป็นรายรับ (ไม่มี c เลย)
-            const { user, tx } = await saveConfirmedSlipTx({ userId: pbUserId, type, merchant, amount, category, authorId, isGroupChat: pbIsGroupChat });
-            // confirmMessagePrefs ใช้ได้ทั้งกลุ่มและแชทส่วนตัว (ฟีเจอร์ Premium) — ผู้ใช้ที่ไม่เคยตั้งค่าจะได้ default เดิมอยู่แล้ว (ดู defaultConfirmMessagePrefs)
-            message = txFlexMessage(tx, { budget: budgetProgressFor(user, tx), dashboardUrl: dashboardEditUrl(pbUserId), userId: pbUserId, prefs: user.confirmMessagePrefs });
-          }
-        } catch (error) { console.error("Slip postback confirm failed", error.message); message = "เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง"; }
-        try { await (typeof message === "string" ? reply(event.replyToken, message) : replyMessages(event.replyToken, [message])); } catch (error) { console.error("Could not reply", error.message); }
-      }
-      continue;
+        render();
+      });
+      const upgrade=document.getElementById('upgradeBtn');if(upgrade)upgrade.onclick=goToLineUpgrade;
+      view.querySelectorAll('[data-setting]').forEach(el=>{
+        const id=el.dataset.setting;
+        if(el.querySelector('[data-toggle]'))return;
+        el.onclick=(e)=>{
+          if(e.target.closest('[data-toggle]'))return;
+          if(id==='language')return radioSheet(t('langSheetTitle'),['ไทย','English'],prefs.language,v=>{prefs.language=v;savePrefs();toast(I18N[v].toastLangChanged);document.documentElement.lang=v==='English'?'en':'th';render()});
+          if(id==='currency')return radioSheet(t('currencySheetTitle'),['บาท (฿)','ดอลลาร์สหรัฐ ($)'],prefs.currency,v=>{prefs.currency=v;savePrefs();toast(t('toastCurrencyChanged'));render()});
+          if(id==='timezone')return radioSheet(t('tzSheetTitle'),['Bangkok (GMT+7)','London (GMT+0)','Tokyo (GMT+9)'],prefs.timezone,v=>{prefs.timezone=v;savePrefs();toast(t('toastTzChanged'));render()});
+          if(id==='reminderTime')return openReminderTimeSheet();
+          if(id==='confirmMessagePage')return void(location.href='/confirm-message'+query);
+          if(id==='recurring')return openRecurringSheet();
+          if(id==='plan')return openUpgradeSheet();
+          if(id==='billing')return openSettingsSheet('<div class="empty"><span class="emoji">🧾</span>'+esc(t('billingEmpty'))+'</div>',t('billingHeaderTitle'));
+        };
+      });
     }
-    if (event.type !== "message") continue;
-    const sourceType = event.source?.type; // "user" | "group" | "room"
-    const isGroupChat = sourceType === "group" || sourceType === "room";
-    // ในกลุ่ม/ห้อง: รายการทั้งหมดเข้ากองกลางเดียวกันที่คีย์ด้วย groupId/roomId
-    // ผู้จดแต่ละคนแยกด้วย authorId (LINE userId ของคนที่พิมพ์จริง — ไม่ใช่ userId ของกลุ่ม)
-    const userId = isGroupChat ? (event.source?.groupId ?? event.source?.roomId) : event.source?.userId;
-    const authorId = event.source?.userId ?? null; // มีเฉพาะตอนอยู่ในกลุ่ม/ห้อง (1:1 ไม่ต้องใช้ค่านี้)
-    if (!userId) continue;
-
-    // --- ในกลุ่ม/ห้อง: ข้อความตัวอักษรต้องขึ้นต้นด้วย "/บอท" เสมอ ไม่งั้นเงียบสนิท ไม่อ่านไม่ตอบ (spec: กลุ่มจดบัญชี) ---
-    // รูปภาพไม่ผ่านเงื่อนไขนี้ (แนบ prefix กับรูปพร้อมกันไม่ได้) — คุมด้วย groupLinkService.consumeReceiptWait แทน (ดูด้านล่าง)
-    if (isGroupChat && event.message?.type === "text") {
-      const stripped = stripBotPrefix(event.message.text.trim());
-      if (stripped === null) continue; // ไม่มี "/บอท" นำหน้า -> ไม่ทำอะไรเลย
-      event.message.text = stripped; // ตัด prefix ออก แล้วปล่อยให้ logic เดิมด้านล่างทำงานเหมือน 1:1
+    // ใช้ทั้งตอนกดแถว "แพ็กเกจ" และตอนแตะ toggle ที่ล็อกไว้เฉพาะ Premium (เช่น เตือนจดประจำวัน, จัดหมวดด้วยความจำ)
+    function openUpgradeSheet(){
+      const isPremium=subscription.active;
+      const body=isPremium?t('planPremiumBody')(fmtExpiry(subscription.expiresAt)):t('planFreeBody');
+      const actionLabel=isPremium?t('manageBtn'):t('upgradeBtn');
+      openSettingsSheet('<div class="notice">'+body+'</div><div class="actions"><button class="primary" style="flex:1" id="planUpgrade">'+esc(actionLabel)+'</button></div>',t('planHeaderTitle'));
+      document.getElementById('planUpgrade').onclick=goToLineUpgrade;
     }
-
-    if (event.message?.type === "image" && isGroupChat) {
-      // ในกลุ่ม รูปภาพจะถูกอ่านก็ต่อเมื่อ "เพิ่งพิมพ์ /บอท สลิป มาก่อน" เท่านั้น (consumeReceiptWait เช็คทั้งคนส่งและเวลา)
-      // ไม่มีการสมัคร/จ่าย Premium ในกลุ่มเลย จึงไม่ต้องพึ่ง uploadSessionService/paymentSession แบบ 1:1
-      let message;
-      try {
-        const waiting = await groupLinkService.consumeReceiptWait(userId, authorId);
-        if (!waiting) { continue; } // ไม่มีใครสั่ง "/บอท สลิป" ไว้ก่อน (หรือหมดเวลาแล้ว) -> เพิกเฉยรูปนี้ทั้งหมด
-        if (!ai || !visionModel) message = noticeFlexMessage("ยังไม่ได้ตั้งค่าโมเดล AI แบบอ่านรูปภาพ (ตั้งค่า OPENAI_VISION_MODEL หรือ OPENAI_MODEL ที่รองรับรูปภาพใน .env) ตอนนี้พิมพ์รายการแทนได้ก่อน เช่น /บอท กาแฟ 60", "info");
-        else {
-          // ไม่มี "..." กำลังพิมพ์ในกลุ่ม/ห้อง เพราะ LINE ไม่รองรับ loading animation นอกแชท 1:1 (ทำได้แค่แชทเดี่ยวเท่านั้น)
-          // เลยตอบข้อความสั้น ๆ ผ่าน reply token ก่อนแทน (ใช้ได้แค่ครั้งเดียว) แล้วค่อย push ผลลัพธ์จริงตามหลัง
-          try { await reply(event.replyToken, "รอยายอ่านรูปแป๊บนึงนะจ๊ะ 👀"); } catch (error) { console.error("Could not reply", error.message); }
-          try {
-            const { mime, base64 } = await downloadLineImage(event.message.id);
-            const result = await readReceipt(mime, base64);
-            if (result.error === "system") message = noticeFlexMessage("ตอนนี้ระบบอ่านภาพขัดข้องชั่วคราว ไม่เกี่ยวกับความชัดของรูปเลย ลองส่งรูปเดิมอีกครั้งใน 1-2 นาที หรือพิมพ์รายการเองแทนได้เลย เช่น /บอท กาแฟ 60", "error");
-            else if (result.error === "unreadable") message = noticeFlexMessage("อ่านยอดเงินจากใบเสร็จนี้ไม่ได้ ลองถ่ายให้เห็นยอดรวมชัด ๆ อีกครั้ง หรือพิมพ์รายการเองแทนได้ เช่น /บอท กาแฟ 60", "error");
-            else message = receiptConfirmFlexMessage(result.receipt, { authorId }); // ยังไม่บันทึก รอผู้ใช้กดยืนยันรายรับ/รายจ่ายก่อน (ดู postback handler)
-          } catch (error) { console.error("Receipt read failed", error.message); message = noticeFlexMessage("ระบบประมวลผลภาพใช้เวลานานกว่าปกติ กรุณาลองใหม่อีกครั้ง", "error"); }
-          try { await push(userId, message); } catch (error) { console.error("Could not push", error.message); }
-          continue;
+    // แผงเลือกเวลาแจ้งเตือน — เลือกชั่วโมง/นาทีแยกกันแบบ scroll list ง่าย ๆ ให้ทัชง่ายบนมือถือ ไม่ใช้ <input type=time> เพราะ UI แต่ละแพลตฟอร์มไม่เหมือนกันและคุมสไตล์ไม่ได้
+    function openReminderTimeSheet(){
+      if(!subscription.active)return openUpgradeSheet();
+      const [curH,curM]=prefs.reminderTime.split(':');
+      const hours=Array.from({length:24},(_,i)=>String(i).padStart(2,'0'));
+      const minutes=['00','15','30','45'];
+      const html='<p class="lead" style="margin-top:0">'+esc(t('reminderSheetLead'))+'</p>'
+        +'<div style="display:flex;gap:10px;align-items:center;justify-content:center;padding:8px 0">'
+          +'<select id="reminderHour" style="font-size:22px;font-weight:800;padding:8px 10px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--ink)">'+hours.map(h=>'<option value="'+h+'"'+(h===curH?' selected':'')+'>'+h+'</option>').join('')+'</select>'
+          +'<strong style="font-size:22px">:</strong>'
+          +'<select id="reminderMinute" style="font-size:22px;font-weight:800;padding:8px 10px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--ink)">'+minutes.map(m=>'<option value="'+m+'"'+(m===curM?' selected':'')+'>'+m+'</option>').join('')+'</select>'
+        +'</div>'
+        +'<div class="actions"><button class="primary" style="flex:1" id="reminderTimeSave">'+esc(t('reminderSave'))+'</button></div>';
+      openSettingsSheet(html,t('reminderSheetTitle'));
+      document.getElementById('reminderTimeSave').onclick=async()=>{
+        const time=document.getElementById('reminderHour').value+':'+document.getElementById('reminderMinute').value;
+        const btn=document.getElementById('reminderTimeSave');btn.disabled=true;btn.textContent='…';
+        try{
+          await api('/api/reminder',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({enabled:prefs.dailyReminder,time})});
+          prefs.reminderTime=time;savePrefs();toast(t('toastReminderSaved'));closeSettingsSheet();render();
+        }catch(e){btn.disabled=false;btn.textContent=t('reminderSave');toast(e.message||t('genericError'))}
+      };
+    }
+    // แผงเลือกช่วงเวลาสำหรับรายงาน PDF (ฟีเจอร์ Premium) — เลือกได้ทั้งรายเดือน (เลือกเดือน+ปี) หรือรายปี (เลือกแค่ปี)
+    function openPdfReportSheet(){
+      if(!subscription.active)return openUpgradeSheet();
+      const now=new Date();
+      const years=Array.from({length:5},(_,i)=>now.getFullYear()-i); // ย้อนหลัง 5 ปี พอสำหรับเอกสารยื่นภาษี/บัญชีทั่วไป
+      const months=[t('monthJan'),t('monthFeb'),t('monthMar'),t('monthApr'),t('monthMay'),t('monthJun'),t('monthJul'),t('monthAug'),t('monthSep'),t('monthOct'),t('monthNov'),t('monthDec')];
+      const html='<p class="lead" style="margin-top:0">'+esc(t('pdfSheetLead'))+'</p>'
+        +'<div class="toolbar" style="margin:0 0 14px"><button class="active" data-pdf-period="month">'+esc(t('pdfMonthLabel'))+'</button><button data-pdf-period="year">'+esc(t('pdfYearLabel'))+'</button></div>'
+        +'<div id="pdfPeriodFields" style="display:flex;gap:10px;align-items:center;justify-content:center;padding:8px 0">'
+          +'<select id="pdfMonth" style="font-size:16px;font-weight:700;padding:8px 10px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--ink)">'+months.map((m,i)=>'<option value="'+(i+1)+'"'+(i===now.getMonth()?' selected':'')+'>'+esc(m)+'</option>').join('')+'</select>'
+          +'<select id="pdfYear" style="font-size:16px;font-weight:700;padding:8px 10px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--ink)">'+years.map(y=>'<option value="'+y+'">'+(y+543)+'</option>').join('')+'</select>'
+        +'</div>'
+        +'<div class="actions"><button class="primary" style="flex:1" id="pdfDownloadBtn">'+esc(t('exportPdf'))+'</button></div>';
+      openSettingsSheet(html,t('pdfSheetTitle'));
+      let period='month';
+      document.querySelectorAll('[data-pdf-period]').forEach(b=>b.onclick=()=>{
+        period=b.dataset.pdfPeriod;
+        document.querySelectorAll('[data-pdf-period]').forEach(x=>x.classList.toggle('active',x===b));
+        document.getElementById('pdfMonth').style.display=period==='month'?'':'none';
+      });
+      document.getElementById('pdfDownloadBtn').onclick=()=>downloadPdfReport(period,Number(document.getElementById('pdfYear').value),Number(document.getElementById('pdfMonth').value));
+    }
+    // ดาวน์โหลด PDF ผ่าน fetch+blob แทน location.href ตรง ๆ (ต่างจากปุ่ม CSV) เพราะถ้าไม่ใช่ Premium (403) หรือฟอนต์ยังไม่พร้อม (500)
+    // อยาก catch error มาโชว์ toast ได้ แทนที่จะพา browser ไปเปิดหน้า error/JSON ดิบ ๆ ตรง ๆ ซึ่งดูแปลกบนมือถือ
+    async function downloadPdfReport(period,year,month){
+      const btn=document.getElementById('pdfDownloadBtn');
+      btn.disabled=true;const originalLabel=btn.textContent;btn.textContent=t('exportingPdf');
+      try{
+        const params=new URLSearchParams({period,year:String(year)});
+        if(period==='month')params.set('month',String(month));
+        const r=await fetch('/api/reports/pdf?'+params.toString()+'&token='+encodeURIComponent(token||'')+'&u='+encodeURIComponent(uid||''));
+        if(!r.ok){
+          const body=await r.json().catch(()=>({}));
+          throw new Error(body.error==='premium_required'?t('pdfPremiumRequired'):(body.message||t('genericError')));
         }
-      } catch (error) { console.error("Group image handling failed", error.message); message = noticeFlexMessage("ระบบประมวลผลภาพใช้เวลานานกว่าปกติ กรุณาลองใหม่อีกครั้ง", "error"); }
-      try { await (typeof message === "string" ? reply(event.replyToken, message) : replyMessages(event.replyToken, [message])); } catch (error) { console.error("Could not reply", error.message); }
-      continue;
+        const blob=await r.blob();
+        const filename=period==='year'?'pa-nuan-report-'+year+'.pdf':'pa-nuan-report-'+year+'-'+String(month).padStart(2,'0')+'.pdf';
+        const url=URL.createObjectURL(blob);
+        const a=document.createElement('a');a.href=url;a.download=filename;document.body.appendChild(a);a.click();a.remove();
+        setTimeout(()=>URL.revokeObjectURL(url),4000);
+        closeSettingsSheet();
+      }catch(e){toast(e.message||t('genericError'))}
+      finally{btn.disabled=false;btn.textContent=originalLabel}
     }
-    if (event.message?.type === "image") {
-      // 1:1 เดิม: รูปภาพอาจเป็น "สลิปการชำระเงิน Premium" (ถ้ามี upload_session ค้างรออยู่) หรือ "ใบเสร็จ" (ฟีเจอร์ Premium)
-      // การตัดสินใจว่าเป็นแบบไหน และการตรวจสิทธิ์ Premium เกิดที่ backend เสมอ ไม่เชื่อ Rich Menu ที่ผู้ใช้กดมา (spec §16)
-      // ทั้งสองเส้นทางเรียก AI อ่านรูป (readSlip/readReceipt) ซึ่งมักใช้เวลาหลายวินาที จึงโชว์ "..." ให้เห็นทันทีที่รู้ว่าเป็นรูปภาพ
-      // ไม่ต้องรอผลว่าจะเป็นสลิปหรือใบเสร็จก่อน เพราะยิงแบบ fire-and-forget (ไม่ await) ไม่เสียเวลาจริง
-      startLoadingAnimation(event.source?.userId);
-      let message;
-      try {
-        const routing = await subLineHandlers.handleReceiptOrSlipImage(userId, () => downloadLineImage(event.message.id));
-        if (routing.type === "slip") {
-          message = routing.message;
-        } else if (routing.type === "premium_denied") {
-          message = routing.message;
-        } else {
-          // routing.type === "receipt" && routing.isPremium === true -> ฟีเจอร์เดิม: อ่านใบเสร็จบันทึกบัญชี
-          if (!ai || !visionModel) message = noticeFlexMessage("ยังไม่ได้ตั้งค่าโมเดล AI แบบอ่านรูปภาพ (ตั้งค่า OPENAI_VISION_MODEL หรือ OPENAI_MODEL ที่รองรับรูปภาพใน .env) ตอนนี้พิมพ์รายการแทนได้ก่อน เช่น กาแฟ 60", "info");
-          else {
-            try {
-              const { mime, base64 } = await downloadLineImage(event.message.id);
-              const result = await readReceipt(mime, base64);
-              if (result.error === "system") message = noticeFlexMessage("ตอนนี้ระบบอ่านภาพขัดข้องชั่วคราว ไม่เกี่ยวกับความชัดของรูปเลย ลองส่งรูปเดิมอีกครั้งใน 1-2 นาที หรือพิมพ์รายการเองแทนได้เลย เช่น กาแฟ 60", "error");
-              else if (result.error === "unreadable") message = noticeFlexMessage("อ่านยอดเงินจากใบเสร็จนี้ไม่ได้ ลองถ่ายให้เห็นยอดรวมชัด ๆ อีกครั้ง หรือพิมพ์รายการเองแทนได้ เช่น กาแฟ 60", "error");
-              else message = receiptConfirmFlexMessage(result.receipt); // ยังไม่บันทึก รอผู้ใช้กดยืนยันรายรับ/รายจ่ายก่อน (ดู postback handler)
-            } catch (error) { console.error("Receipt read failed", error.message); message = noticeFlexMessage("ระบบประมวลผลภาพใช้เวลานานกว่าปกติ กรุณาลองใหม่อีกครั้ง", "error"); }
-          }
-        }
-      } catch (error) { console.error("Image handling failed", error.message); message = noticeFlexMessage("ระบบประมวลผลภาพใช้เวลานานกว่าปกติ กรุณาลองใหม่อีกครั้ง", "error"); }
-      try { await (typeof message === "string" ? reply(event.replyToken, message) : replyMessages(event.replyToken, [message])); } catch (error) { console.error("Could not reply", error.message); }
-      continue;
-    }
-    if (event.message?.type !== "text") continue;
-    const text = event.message.text.trim();
-
-    // --- คำสั่งเฉพาะกลุ่ม: ยืนยันความเป็นเจ้าของ (spec: กลุ่มจดบัญชี) ---
-    if (isGroupChat && text === "ยืนยันเจ้าของ") {
-      let message;
-      try {
-        const result = await groupLinkService.confirmOwner(userId, authorId);
-        if (result.ok) {
-          message = noticeFlexMessage("ยืนยันสำเร็จ กลุ่มนี้ปลดล็อกฟีเจอร์ Premium แล้ว (ใช้ได้เฉพาะในกลุ่มนี้เท่านั้น)\n\nทุกคำสั่งต้องขึ้นต้นด้วย \"/บอท\" เสมอ เช่น \"/บอท กาแฟ 60\"", "success");
-        } else if (result.reason === "NOT_PREMIUM") {
-          message = noticeFlexMessage("บัญชีของคุณยังไม่ใช่ Premium ยายจันทร์ขอตัวออกจากกลุ่มนี้นะคะ 🙏\nถ้าอยากใช้งานฟีเจอร์นี้ ต้องสมัคร Premium แบบส่วนตัวกับยายจันทร์ก่อน (แชท 1:1 พิมพ์ \"สมัครพรีเมียม\")", "error");
-          try { await replyMessages(event.replyToken, [message]); } catch (error) { console.error("Could not reply", error.message); }
-          try { await leaveGroup(userId); await groupLinkService.markLeft(userId); } catch (error) { console.error("Leaving group after rejection failed:", error.message); }
-          continue;
-        } else if (result.reason === "EXPIRED") {
-          message = noticeFlexMessage("หมดเวลายืนยันแล้ว ยายจันทร์ขอตัวออกจากกลุ่มนี้นะคะ 🙏 เชิญเข้ามาใหม่ได้เลยถ้าต้องการลองอีกครั้ง", "error");
-          try { await replyMessages(event.replyToken, [message]); } catch (error) { console.error("Could not reply", error.message); }
-          try { await leaveGroup(userId); await groupLinkService.markLeft(userId); } catch (error) { console.error("Leaving group after expiry failed:", error.message); }
-          continue;
-        } else {
-          message = noticeFlexMessage("กลุ่มนี้ยืนยันเจ้าของไปแล้ว หรือไม่มีคำขอที่รอยืนยันอยู่", "info");
-        }
-      } catch (error) { console.error("Confirm owner failed", error.message); message = noticeFlexMessage("เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง", "error"); }
-      try { await replyMessages(event.replyToken, [message]); } catch (error) { console.error("Could not reply", error.message); }
-      continue;
+    function openRecurringSheet(){
+      const html=(recurring&&recurring.length?recurring.map(x=>'<div class="row"><div><strong>'+esc(x.description)+'</strong><div class="meta">'+esc(t('recurringEvery'))+' '+x.day+' · '+esc(x.category)+'</div></div><div style="display:flex;align-items:center;gap:8px"><span class="amount num '+x.type+'">'+fmt(x.amount)+'</span><button class="danger" data-recurring="'+x.id+'">'+esc(t('deleteBtn'))+'</button></div></div>').join(''):'<div class="empty"><span class="emoji">⟳</span>'+esc(t('recurringEmptySheet'))+'</div>')
+        +'<div class="actions"><button class="primary" style="flex:1" id="addRecurringSheet">'+esc(t('addRecurringBtn'))+'</button></div>';
+      openSettingsSheet(html,t('recurringSheetTitle'));
+      document.querySelectorAll('[data-recurring]').forEach(b=>b.onclick=async()=>{if(confirm(t('recurringDeleteConfirm'))){await api('/api/recurring/'+b.dataset.recurring,{method:'DELETE'});toast(t('recurringDeleted'));await loadData();openRecurringSheet()}});
+      document.getElementById('addRecurringSheet').onclick=async()=>{await addRecurring();openRecurringSheet()};
     }
 
-    // --- Premium subscription commands: เช็คก่อน finance parser เสมอ เพื่อไม่ให้ "สมัครพรีเมียม" ถูกตีความเป็นรายการบัญชี ---
-    // ห้ามสมัคร/ต่ออายุ Premium จากในกลุ่มเด็ดขาด (spec: ต้องไปสมัครแบบ 1:1 เท่านั้น) — งดคำสั่งนี้ในกลุ่ม
-    if (!isGroupChat && text === "สมัครพรีเมียม") {
-      let result;
-      try { result = await subLineHandlers.handleSubscribeCommand(userId); }
-      catch (error) { console.error("Subscribe command failed", error.message); result = { text: "เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง" }; }
-      const messages = [];
-      if (result.qrImageUrl) messages.push(qrImageMessage(result.qrImageUrl));
-      messages.push({ type: "text", text: result.text.slice(0, 4900) });
-      try { await replyMessages(event.replyToken, messages); } catch (error) { console.error("Could not reply", error.message); }
-      continue;
+    function render(){
+      applyStaticI18n();
+      if(!loaded){view.innerHTML=skeletonSummary();return}
+      if(page==='summary')view.innerHTML=summaryPage();
+      else if(page==='analysis')view.innerHTML=analysisPage();
+      else if(page==='budgets')view.innerHTML=budgetsPage();
+      else if(page==='transactions')view.innerHTML=transactionPage();
+      else view.innerHTML=settingsPage();
+      view.classList.remove('page-enter');void view.offsetWidth;view.classList.add('page-enter');
+      view.querySelectorAll('[data-target]').forEach(el=>animateNumber(el,Number(el.dataset.target)));
+      bindPage();
+      if(page==='settings')bindSettings();
     }
-    if (isGroupChat && text === "สมัครพรีเมียม") {
-      try { await replyMessages(event.replyToken, [noticeFlexMessage("สมัคร Premium ทำได้เฉพาะแชทส่วนตัวกับยายจันทร์เท่านั้นนะ ไปคุย 1:1 แล้วพิมพ์ \"สมัครพรีเมียม\" ได้เลย\n\nพอสมัครเสร็จแล้ว เชิญยายจันทร์เข้ากลุ่มนี้ (หรือกลุ่มอื่น) แล้วพิมพ์ \"/บอท ยืนยันเจ้าของ\" เพื่อปลดล็อก Premium ให้ทั้งกลุ่มได้เลย", "info")]); } catch (error) { console.error("Could not reply", error.message); }
-      continue;
+    function bindSwipe(){
+      view.querySelectorAll('.row-wrap').forEach(wrap=>{
+        let startX=0,dx=0,active=false;
+        const article=wrap.querySelector('.row');
+        wrap.addEventListener('touchstart',e=>{startX=e.touches[0].clientX;active=true},{passive:true});
+        wrap.addEventListener('touchmove',e=>{if(!active)return;dx=e.touches[0].clientX-startX;if(dx<0)article.style.transform='translateX('+Math.max(dx,-90)+'px)'},{passive:true});
+        wrap.addEventListener('touchend',()=>{active=false;article.style.transform='';wrap.classList.toggle('swiped',dx<-40);dx=0});
+      });
+      view.querySelectorAll('[data-del]').forEach(b=>b.onclick=async(e)=>{e.stopPropagation();const id=b.dataset.del;if(confirm(t('deleteEntryConfirm'))){await api('/api/transactions/'+id,{method:'DELETE'});toast(t('entryDeleted'));await loadData()}else{b.closest('.row-wrap').classList.remove('swiped')}});
     }
-    if (!isGroupChat && text === "ส่งสลิป") {
-      let message;
-      try { message = await subLineHandlers.handleSendSlipCommand(userId); }
-      catch (error) { console.error("Send-slip command failed", error.message); message = "เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง"; }
-      try { await replyMessages(event.replyToken, [noticeFlexMessage(message, "info")]); } catch (error) { console.error("Could not reply", error.message); }
-      continue;
+    function bindPage(){
+      view.querySelectorAll('[data-filter]').forEach(b=>b.onclick=()=>{filter=b.dataset.filter;render()});
+      view.querySelectorAll('.row-wrap .row').forEach(r=>r.onclick=()=>{if(r.closest('.row-wrap').classList.contains('swiped')){r.closest('.row-wrap').classList.remove('swiped');return}openForm(transactions.find(x=>x.id===r.dataset.id))});
+      bindSwipe();
+      const download=document.getElementById('download');if(download)download.onclick=()=>{location.href='/api/transactions/export'+query;toast(t('exportingCsv'))};
+      const downloadPdf=document.getElementById('downloadPdf');if(downloadPdf)downloadPdf.onclick=()=>{if(!subscription.active)return openUpgradeSheet();openPdfReportSheet()};
+      view.querySelectorAll('.save-budget').forEach(b=>b.onclick=async()=>{const category=b.dataset.category,input=view.querySelector('[data-budget="'+CSS.escape(category)+'"]');b.textContent='…';await api('/api/budgets/'+encodeURIComponent(category),{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({amount:Number(input.value)})});toast(t('budgetSaved')(category));await loadData()});
     }
-    // ในกลุ่ม "/บอท สลิป" ใช้แค่เพื่อ "รอรับรูปใบเสร็จ" มาจดรายจ่ายกองกลาง (ต้องเป็นกลุ่ม Premium อยู่แล้วเท่านั้น)
-    // คนละเรื่องกับ "ส่งสลิป" แบบ 1:1 ที่ผูกกับ payment_session ตอนสมัคร Premium — ในกลุ่มไม่มี payment_session ให้ผูก
-    // จึงใช้ groupLinkService.openReceiptWait/consumeReceiptWait แทน uploadSessionService โดยสิ้นเชิง
-    if (isGroupChat && text === "สลิป") {
-      let message, tone = "info";
-      try {
-        const isPremiumGroup = await groupLinkService.isPremiumGroup(userId);
-        if (!isPremiumGroup) { message = "กลุ่มนี้ยังไม่ได้ปลดล็อก Premium นะ (ต้องมีสมาชิก Premium เป็นเจ้าของกลุ่ม)\nไปสมัคร Premium แบบ 1:1 กับยายจันทร์ก่อน แล้วเชิญเข้ากลุ่มพร้อมพิมพ์ \"/บอท ยืนยันเจ้าของ\""; tone = "error"; }
-        else { await groupLinkService.openReceiptWait(userId, authorId); message = "กรุณาส่งรูปใบเสร็จตามมาได้เลย 🧾"; }
-      } catch (error) { console.error("Group slip command failed", error.message); message = "เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง"; tone = "error"; }
-      try { await replyMessages(event.replyToken, [noticeFlexMessage(message, tone)]); } catch (error) { console.error("Could not reply", error.message); }
-      continue;
+    async function loadData(){
+      // ข้อความยืนยัน (ธีมสี/ปุ่ม/แถบงบ) ย้ายไปอยู่ที่หน้า /confirm-message ทั้งหมดแล้ว ไม่ต้อง fetch /api/confirm-message-prefs ที่นี่อีก
+      const [reminderPrefs]=await Promise.all([
+        api('/api/reminder').catch(()=>null),
+        Promise.all([api('/api/dashboard'),api('/api/transactions').then(x=>x.transactions),api('/api/budgets').then(x=>x.budgets),api('/api/recurring').then(x=>x.recurring).catch(()=>[]),api('/api/subscription').catch(()=>subscription)]).then(r=>{[dashboard,transactions,budgets,recurring,subscription]=r})
+      ]);
+      if(reminderPrefs){prefs.dailyReminder=Boolean(reminderPrefs.dailyReminder);prefs.reminderTime=reminderPrefs.reminderTime||prefs.reminderTime;savePrefs()}
+      loaded=true;render();
     }
-
-    const user = await getUser(userId);
-    if (applyRecurring(user)) await saveUser(userId, user);
-    let message;
-    const helpText = isGroupChat
-      ? "📒 ยายจันทร์พร้อมจดบัญชีกองกลางให้กลุ่มนี้\n\nทุกคำสั่งต้องขึ้นต้นด้วย \"/บอท\" เสมอ เช่น:\n/บอท กาแฟ 60\n/บอท เงินเดือน 15000\n/บอท สลิป (แล้วส่งรูปใบเสร็จตาม — ต้องมีสมาชิก Premium เป็นเจ้าของกลุ่มนี้ก่อน)\n/บอท สรุปวันนี้ | /บอท สรุปเดือนนี้ | /บอท ลบล่าสุด | /บอท เว็บ\n\nสมัคร Premium ต้องไปแชท 1:1 กับยายจันทร์เท่านั้น"
-      : "📒 ยายจันทร์พร้อมจดบัญชีของคุณ (ข้อมูลของแต่ละคนแยกกันเป็นส่วนตัว)\n\nพิมพ์: กาแฟ 60\nรายรับ: เงินเดือน 15000\nถ่ายรูปใบเสร็จส่งมาได้เลย (ฟีเจอร์ Premium) ยายจันทร์จะอ่านยอดกับร้านค้าให้อัตโนมัติ\nคำสั่ง: สรุปวันนี้ | สรุปเดือนนี้ | ลบล่าสุด | เว็บ | สมัครพรีเมียม\nทุกวันอาทิตย์ยายจันทร์จะสรุปสัปดาห์ให้อัตโนมัติด้วย\n\nหรือถามยายจันทร์ได้เลย เช่น \"เดือนนี้ใช้เงินไปกับอะไรมากสุด\" ยายจันทร์เน้นตอบเรื่องการเงินเป็นหลัก แต่คุยเรื่องอื่นได้ด้วยนะ";
-    if (["เริ่ม", "ช่วยเหลือ", "help"].includes(text.toLowerCase())) message = helpText;
-    else if (text === "สรุปวันนี้") message = summary(user.transactions.filter((tx) => sameDay(tx.createdAt)), "วันนี้");
-    else if (text === "สรุปเดือนนี้") { const month = user.transactions.filter((tx) => sameMonth(tx.createdAt)); message = `${summary(month, "เดือนนี้")}\n\n${advice(month)}`; }
-    else if (text === "ลบล่าสุด") { const tx = user.transactions.pop(); if (tx) { await saveUser(userId, user); message = noticeFlexMessage(`ลบแล้ว: ${tx.description} ${money(tx.amount)} บาท`, "success"); } else message = noticeFlexMessage("ยังไม่มีรายการให้ลบ", "info"); }
-    else if (text === "เว็บ") message = dashboardFlexMessage(user, { isGroupChat, dashboardUrl: dashboardEditUrl(userId) });
-    else {
-      let tx = parse(text);
-      if (tx) {
-        const ambiguous = tx._typeAmbiguous; delete tx._typeAmbiguous;
-        tx = await enrichWithAi(tx, text, ambiguous);
-        if (isGroupChat) tx = { ...tx, authorId, authorName: await getGroupMemberName(userId, authorId) };
-        user.transactions.push(tx); await saveUser(userId, user);
-        // confirmMessagePrefs ใช้ได้ทั้งกลุ่มและแชทส่วนตัว (ฟีเจอร์ Premium) — ผู้ใช้ที่ไม่เคยตั้งค่าจะได้ default เดิมอยู่แล้ว (ดู defaultConfirmMessagePrefs)
-        message = txFlexMessage(tx, { budget: budgetProgressFor(user, tx), dashboardUrl: dashboardEditUrl(userId), userId, prefs: user.confirmMessagePrefs });
-      }
-      else {
-        const aiAnswer = await askFinanceAi(user, text);
-        message = aiAnswer ?? (isGroupChat ? "พิมพ์ได้เลย เช่น /บอท กาแฟ 60 หรือ /บอท เงินเดือน 15000\nพิมพ์ /บอท ช่วยเหลือ เพื่อดูคำสั่ง" : "พิมพ์ได้เลย เช่น กาแฟ 60 หรือ เงินเดือน 15000\nพิมพ์ ช่วยเหลือ เพื่อดูคำสั่ง");
-      }
+    function categorySuggestions(){
+      const list=document.getElementById('catList');if(!list)return;
+      const cats=[...new Set(transactions.map(x=>x.category))];
+      list.innerHTML=cats.map(c=>'<option value="'+esc(c)+'">').join('');
     }
-    try { await (typeof message === "string" ? reply(event.replyToken, message) : replyMessages(event.replyToken, [message])); } catch (error) { console.error("Could not reply", error.message); }
-  }
-});
-app.listen(Number(process.env.PORT ?? 3000), () => console.log(`Ta Phin listening on ${process.env.PORT ?? 3000}`));
+    function openForm(x){const f=document.getElementById('transactionForm');f.reset();document.getElementById('transactionId').value=x?.id||'';document.getElementById('formTitle').textContent=x?t('editEntry'):t('addEntry');type.value=x?.type||'expense';description.value=x?.description||'';amount.value=x?.amount||'';category.value=x?.category||'';createdAt.value=local(x?.createdAt);deleteButton.classList.toggle('hidden',!x);categorySuggestions();modal.classList.add('open');
+      if(prefs.categoryMemory&&subscription.active&&!x){description.oninput=()=>{const m=transactions.find(tx=>tx.description.trim().toLowerCase()===description.value.trim().toLowerCase());if(m&&!category.value)category.value=m.category}}
+    }
+    document.getElementById('addButton').onclick=()=>openForm();
+    document.getElementById('cancelButton').onclick=()=>modal.classList.remove('open');
+    document.getElementById('transactionForm').onsubmit=async e=>{e.preventDefault();const id=transactionId.value,body={type:type.value,description:description.value.trim(),amount:Number(amount.value),category:category.value.trim(),createdAt:new Date(createdAt.value).toISOString()};await api(id?'/api/transactions/'+id:'/api/transactions',{method:id?'PUT':'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});modal.classList.remove('open');toast(id?t('entryUpdated'):t('entrySaved'));await loadData()};
+    document.getElementById('deleteButton').onclick=async()=>{if(confirm(t('deleteEntryConfirm'))){await api('/api/transactions/'+transactionId.value,{method:'DELETE'});modal.classList.remove('open');toast(t('entryDeleted'));await loadData()}};
+    document.getElementById('settingsModal').addEventListener('click',e=>{if(e.target.id==='settingsModal')closeSettingsSheet()});
+    async function addRecurring(){const description=prompt(t('promptRecurringDesc'));if(!description)return;const amount=Number(prompt(t('promptRecurringAmount')));const category=prompt(t('promptRecurringCategory'),t('promptRecurringCategoryDefault'));const day=Number(prompt(t('promptRecurringDay'),String(new Date().getDate())));if(!Number.isFinite(amount)||amount<=0||!category||!Number.isInteger(day)||day<1||day>31)return alert(t('invalidData'));await api('/api/recurring',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({type:confirm(t('promptRecurringType'))?'income':'expense',description,amount,category,day})});toast(t('recurringAdded'))}
+    document.querySelectorAll('.nav button').forEach(b=>b.onclick=()=>setPage(b.dataset.page));
+    document.addEventListener('scroll',()=>document.getElementById('topbar').classList.toggle('scrolled',window.scrollY>4),{passive:true});
 
+    (function(){
+      let startY=0,pulling=false;const ptr=document.getElementById('ptr');
+      document.addEventListener('touchstart',e=>{if(window.scrollY<=0){startY=e.touches[0].clientY;pulling=true}},{passive:true});
+      document.addEventListener('touchmove',e=>{if(!pulling)return;const dy=e.touches[0].clientY-startY;if(dy>60)ptr.classList.add('show')},{passive:true});
+      document.addEventListener('touchend',async()=>{if(pulling&&ptr.classList.contains('show')){const seal=document.getElementById('seal');seal.classList.add('spin');await loadData().catch(()=>{});setTimeout(()=>seal.classList.remove('spin'),500);ptr.classList.remove('show');toast(t('dataRefreshed'))}pulling=false},{passive:true});
+    })();
 
-
-
+    render();
+    loadData().then(()=>setPage('summary')).catch(e=>{view.innerHTML='<div class="notice">'+esc(t('loadError')(e.message))+'</div>'});
+  </script>
+</body>
+</html>
 
 
 
