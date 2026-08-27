@@ -21,7 +21,7 @@ function assertFontsReady() {
   const missing = [FONT_REGULAR, FONT_BOLD].filter((p) => !fs.existsSync(p));
   if (missing.length) {
     throw new Error(`ไม่พบไฟล์ฟอนต์ไทยสำหรับสร้าง PDF: ${missing.map((p) => path.relative(process.cwd(), p)).join(", ")} — ดูวิธีติดตั้งที่คอมเมนต์ต้นไฟล์ src/reports/pdfReport.js`);
-}
+  }
 }
 
 const PINK = "#D23283";
@@ -189,4 +189,5 @@ export async function generateReportPdf({ period, year, month, transactions, bud
   doc.end();
   return done;
 }
+
 
