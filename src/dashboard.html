@@ -207,9 +207,6 @@
     .radio-dot{width:19px;height:19px;border-radius:50%;border:2px solid var(--line);position:relative;flex:none}
     .radio-dot.checked{border-color:var(--wine)}
     .radio-dot.checked::after{content:"";position:absolute;inset:3px;border-radius:50%;background:var(--wine)}
-    .checkout-qr{display:flex;justify-content:center;padding:6px 0}
-    .checkout-qr img{border-radius:12px;border:1px solid var(--line);background:#fff;padding:8px}
-    #slipInput{margin-top:2px}
   </style>
 </head>
 <body>
@@ -253,16 +250,10 @@
         sectionMember:'สมาชิก',planTitle:'แพ็กเกจของฉัน',planSub:'ดูสิทธิ์และวันหมดอายุ',billingTitle:'ประวัติการชำระเงิน',billingSub:'ดูใบเสร็จย้อนหลัง',
         sectionGeneral:'ทั่วไป',languageTitle:'ภาษา',currencyTitle:'สกุลเงิน',timezoneTitle:'โซนเวลา',
         sectionLine:'ใช้ใน LINE',lineNotice:'พิมพ์ “ค่าอาหาร 80”, “เงินเดือน 15000”, “สรุปเดือนนี้” หรือ “เว็บ” ในแชตกับยายจันทร์ได้ ข้อมูลจะอัปเดตที่หน้านี้',
-        pillFree:'ฟรี',pillPro:'PRO',pillPremium:'Premium',
-        planFreeBody:'ตอนนี้ใช้แพ็กเกจฟรีอยู่ — มีโฆษณาก่อนเข้าแดชบอร์ด และจำกัดรายการประจำ อัปเกรดเป็น Pro เพื่อปลดล็อกทุกลูกเล่น',
-        planPremiumBody:expiresAt=>'คุณเป็นสมาชิก Premium อยู่แล้ว'+(expiresAt?'<br>ใช้งานได้ถึง '+expiresAt:''),
-        planHeaderTitle:'แพ็กเกจของฉัน',billingHeaderTitle:'ประวัติการชำระเงิน',billingEmpty:'ยังไม่มีประวัติการชำระเงิน',
-        upgradeHowTitle:'วิธีสมัคร Premium',upgradeHowBody:'การสมัครและชำระเงินต้องทำผ่านแชท LINE กับยายจันทร์เท่านั้น (แชทส่วนตัว 1:1) พิมพ์ “สมัครพรีเมียม” แล้วทำตามขั้นตอนได้เลย',
-        openLineChat:'เปิดแชท LINE',langSheetTitle:'ภาษา',currencySheetTitle:'สกุลเงิน',tzSheetTitle:'โซนเวลา',
+        pillFree:'ฟรี',pillPro:'PRO',
+        billingHeaderTitle:'ประวัติการชำระเงิน',billingEmpty:'ยังไม่มีประวัติการชำระเงิน',
+        langSheetTitle:'ภาษา',currencySheetTitle:'สกุลเงิน',tzSheetTitle:'โซนเวลา',
         toastOn:'เปิดใช้งานแล้ว',toastOff:'ปิดใช้งานแล้ว',toastLangChanged:'เปลี่ยนภาษาแล้ว',toastCurrencyChanged:'เปลี่ยนสกุลเงินแล้ว',toastTzChanged:'เปลี่ยนโซนเวลาแล้ว',
-        checkoutTitle:'สแกนจ่ายเพื่อสมัคร Premium',checkoutLoading:'กำลังสร้างรายการชำระเงิน…',checkoutError:'เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง',
-        checkoutAmount:'จำนวนเงิน:',checkoutRef:'เลขอ้างอิง:',checkoutExpiry:'หมดอายุ:',
-        checkoutUploadLabel:'อัปโหลดรูปสลิปหลังชำระเงินแล้ว',checkoutSubmit:'ส่งสลิปเพื่อตรวจสอบ',checkoutSubmitting:'กำลังส่ง…',
         appName:'ยายจันทร์',appTitle:'ยายจันทร์ — สมุดบัญชี',appSub:'สมุดบัญชีที่เชื่อมกับ LINE',statusConnected:'เชื่อมข้อมูลแล้ว',refreshing:'กำลังรีเฟรช…',dataRefreshed:'อัปเดตข้อมูลแล้ว',
         addEntry:'เพิ่มรายการ',editEntry:'แก้ไขรายการ',navSummary:'สรุป',navAnalysis:'วิเคราะห์',navBudgets:'งบ',navTransactions:'รายการ',navSettings:'ตั้งค่า',
         formType:'ประเภท',formExpense:'รายจ่าย',formIncome:'รายรับ',formDescription:'ชื่อรายการ',formDescPlaceholder:'เช่น ค่าอาหาร',formAmount:'จำนวนเงิน (บาท)',formCategory:'หมวดหมู่',formCategoryPlaceholder:'เช่น อาหาร',formDate:'วันที่และเวลา',
@@ -270,7 +261,7 @@
         loading:'กำลังโหลด…',income:'รายรับ',expense:'รายจ่าย',balance:'คงเหลือสุทธิ',byCategory:'ใช้จ่ายตามหมวด',recentEntries:'รายการล่าสุด',noExpenseThisMonth:'ยังไม่มีรายจ่ายในเดือนนี้',totalLabel:'รวม',categoryPieAria:'สัดส่วนรายจ่ายตามหมวด',
         analysisTitle:'วิเคราะห์',analysisLead:'ดูแนวโน้มรายรับและรายจ่าย 6 เดือนล่าสุด',monthlyTrend:'แนวโน้มรายเดือน',noHistory:'ยังไม่มีข้อมูลย้อนหลัง',trendAria:'เทียบรายรับรายจ่ายย้อนหลัง',observation:'ข้อสังเกต',observationBody:'ข้อมูลจากหน้าเว็บและข้อความที่ส่งให้ LINE ยายจันทร์ จะถูกเก็บในบัญชีเดียวกันทันที',
         budgetsTitle:'หมวดและงบ',budgetsLead:'กำหนดวงเงินรายเดือนแยกตามหมวด',budgetPanelTitle:'งบประมาณ',budgetSpent:'ใช้แล้ว',budgetOf:'จาก',budgetSave:'บันทึก',budgetEmpty:'เพิ่มรายจ่ายก่อน แล้วหมวดจะปรากฏที่นี่',budgetSaved:n=>'บันทึกงบ'+n+'แล้ว',
-        transTitle:'รายการ',transLead:'ปัดซ้ายเพื่อลบ หรือแตะเพื่อแก้ไข',filterAll:'ทั้งหมด',filterExpense:'รายจ่าย',filterIncome:'รายรับ',exportCsv:'⇩ ส่งออก CSV',exportingCsv:'กำลังส่งออก CSV',exportPdf:'📄 รายงาน PDF',exportingPdf:'กำลังสร้างรายงาน PDF...',pdfPremiumRequired:'รายงาน PDF เป็นฟีเจอร์ Premium',pdfMonthLabel:'รายเดือน',pdfYearLabel:'รายปี',pdfSheetTitle:'ส่งออกรายงาน PDF',pdfSheetLead:'เลือกช่วงเวลาที่ต้องการสรุป รายงานจะมีกราฟและตารางรายการครบพร้อมเก็บไว้ยื่นภาษีหรือส่งให้นักบัญชีได้เลย',noEntries:'ยังไม่มีรายการ กด + เพื่อเริ่มบันทึก',noEntriesShort:'ยังไม่มีรายการ',
+        transTitle:'รายการ',transLead:'ปัดซ้ายเพื่อลบ หรือแตะเพื่อแก้ไข',filterAll:'ทั้งหมด',filterExpense:'รายจ่าย',filterIncome:'รายรับ',exportCsv:'⇩ ส่งออก CSV',exportingCsv:'กำลังส่งออก CSV',exportPdf:'📄 รายงาน PDF',exportingPdf:'กำลังสร้างรายงาน PDF...',pdfPremiumRequired:'รายงาน PDF เป็นฟีเจอร์ Pro',pdfMonthLabel:'รายเดือน',pdfYearLabel:'รายปี',pdfSheetTitle:'ส่งออกรายงาน PDF',pdfSheetLead:'เลือกช่วงเวลาที่ต้องการสรุป รายงานจะมีกราฟและตารางรายการครบพร้อมเก็บไว้ยื่นภาษีหรือส่งให้นักบัญชีได้เลย',noEntries:'ยังไม่มีรายการ กด + เพื่อเริ่มบันทึก',noEntriesShort:'ยังไม่มีรายการ',
         deleteEntryConfirm:'ลบรายการนี้?',entryDeleted:'ลบรายการแล้ว',entrySaved:'บันทึกรายการแล้ว',entryUpdated:'แก้ไขรายการแล้ว',
         recurringSheetTitle:'จดประจำ',recurringEvery:'ทุกวันที่',addRecurringBtn:'+ เพิ่มรายการประจำ',recurringDeleteConfirm:'ลบรายการประจำ?',recurringDeleted:'ลบรายการประจำแล้ว',recurringAdded:'ตั้งรายการประจำแล้ว',recurringEmptySheet:'ยังไม่มีรายการประจำ',
         promptRecurringDesc:'ชื่อรายการประจำ เช่น ค่าเช่า',promptRecurringAmount:'จำนวนเงิน (บาท)',promptRecurringCategory:'หมวดหมู่',promptRecurringCategoryDefault:'อื่น ๆ',promptRecurringDay:'บันทึกทุกวันที่ (1-31)',promptRecurringType:'กด OK = รายรับ, Cancel = รายจ่าย',invalidData:'ข้อมูลไม่ถูกต้อง',
@@ -288,16 +279,10 @@
         sectionMember:'Membership',planTitle:'My plan',planSub:'View benefits and expiry date',billingTitle:'Payment history',billingSub:'View past receipts',
         sectionGeneral:'General',languageTitle:'Language',currencyTitle:'Currency',timezoneTitle:'Timezone',
         sectionLine:'Using LINE',lineNotice:'You can type "food 80", "salary 15000", "summary this month", or "web" to ยายจันทร์ in chat. This page will update automatically.',
-        pillFree:'Free',pillPro:'PRO',pillPremium:'Premium',
-        planFreeBody:'You\u2019re currently on the Free plan — ads show before the dashboard and recurring entries are limited. Upgrade to Pro to unlock everything.',
-        planPremiumBody:expiresAt=>'You already have Premium'+(expiresAt?'<br>Valid until '+expiresAt:''),
-        planHeaderTitle:'My plan',billingHeaderTitle:'Payment history',billingEmpty:'No payment history yet',
-        upgradeHowTitle:'How to subscribe to Premium',upgradeHowBody:'Subscribing and payment can only be done through a 1:1 LINE chat with ยายจันทร์. Type "สมัครพรีเมียม" there and follow the steps.',
-        openLineChat:'Open LINE chat',langSheetTitle:'Language',currencySheetTitle:'Currency',tzSheetTitle:'Timezone',
+        pillFree:'Free',pillPro:'PRO',
+        billingHeaderTitle:'Payment history',billingEmpty:'No payment history yet',
+        langSheetTitle:'Language',currencySheetTitle:'Currency',tzSheetTitle:'Timezone',
         toastOn:'Turned on',toastOff:'Turned off',toastLangChanged:'Language changed',toastCurrencyChanged:'Currency changed',toastTzChanged:'Timezone changed',
-        checkoutTitle:'Scan to pay for Premium',checkoutLoading:'Creating payment request…',checkoutError:'Something went wrong, please try again',
-        checkoutAmount:'Amount:',checkoutRef:'Reference:',checkoutExpiry:'Expires:',
-        checkoutUploadLabel:'Upload the slip after paying',checkoutSubmit:'Submit slip for review',checkoutSubmitting:'Submitting…',
         appName:'Yai Chan',appTitle:'Yai Chan — Ledger',appSub:'A ledger connected to LINE',statusConnected:'Data connected',refreshing:'Refreshing…',dataRefreshed:'Data updated',
         addEntry:'Add entry',editEntry:'Edit entry',navSummary:'Summary',navAnalysis:'Analysis',navBudgets:'Budgets',navTransactions:'Entries',navSettings:'Settings',
         formType:'Type',formExpense:'Expense',formIncome:'Income',formDescription:'Description',formDescPlaceholder:'e.g. Lunch',formAmount:'Amount (THB)',formCategory:'Category',formCategoryPlaceholder:'e.g. Food',formDate:'Date & time',
@@ -305,7 +290,7 @@
         loading:'Loading…',income:'Income',expense:'Expense',balance:'Net balance',byCategory:'Spending by category',recentEntries:'Recent entries',noExpenseThisMonth:'No expenses this month yet',totalLabel:'Total',categoryPieAria:'Spending share by category',
         analysisTitle:'Analysis',analysisLead:'View income and expense trends for the last 6 months',monthlyTrend:'Monthly trend',noHistory:'No historical data yet',trendAria:'Income vs expense over time',observation:'Notes',observationBody:'Data from the website and messages sent to ยายจันทร์ on LINE are saved to the same account instantly',
         budgetsTitle:'Categories & Budgets',budgetsLead:'Set a monthly limit for each category',budgetPanelTitle:'Budget',budgetSpent:'Spent',budgetOf:'of',budgetSave:'Save',budgetEmpty:'Add an expense first, and categories will appear here',budgetSaved:n=>'Saved budget for '+n,
-        transTitle:'Entries',transLead:'Swipe left to delete, or tap to edit',filterAll:'All',filterExpense:'Expense',filterIncome:'Income',exportCsv:'⇩ Export CSV',exportingCsv:'Exporting CSV',exportPdf:'📄 PDF report',exportingPdf:'Generating PDF report...',pdfPremiumRequired:'PDF reports are a Premium feature',pdfMonthLabel:'Monthly',pdfYearLabel:'Yearly',pdfSheetTitle:'Export PDF report',pdfSheetLead:'Choose a period to summarize. The report includes charts and a full transaction table — ready to keep for tax filing or send to your accountant.',noEntries:'No entries yet — tap + to start logging',noEntriesShort:'No entries yet',
+        transTitle:'Entries',transLead:'Swipe left to delete, or tap to edit',filterAll:'All',filterExpense:'Expense',filterIncome:'Income',exportCsv:'⇩ Export CSV',exportingCsv:'Exporting CSV',exportPdf:'📄 PDF report',exportingPdf:'Generating PDF report...',pdfPremiumRequired:'PDF reports are a Pro feature',pdfMonthLabel:'Monthly',pdfYearLabel:'Yearly',pdfSheetTitle:'Export PDF report',pdfSheetLead:'Choose a period to summarize. The report includes charts and a full transaction table — ready to keep for tax filing or send to your accountant.',noEntries:'No entries yet — tap + to start logging',noEntriesShort:'No entries yet',
         deleteEntryConfirm:'Delete this entry?',entryDeleted:'Entry deleted',entrySaved:'Entry saved',entryUpdated:'Entry updated',
         recurringSheetTitle:'Recurring entries',recurringEvery:'Every day',addRecurringBtn:'+ Add recurring entry',recurringDeleteConfirm:'Delete this recurring entry?',recurringDeleted:'Recurring entry deleted',recurringAdded:'Recurring entry set',recurringEmptySheet:'No recurring entries yet',
         promptRecurringDesc:'Recurring entry name, e.g. Rent',promptRecurringAmount:'Amount (THB)',promptRecurringCategory:'Category',promptRecurringCategoryDefault:'Other',promptRecurringDay:'Log on which day each month (1-31)',promptRecurringType:'Click OK = Income, Cancel = Expense',invalidData:'Invalid data',
@@ -427,7 +412,7 @@
     function settingsPage(){
       const isPremium=subscription.active;
       const banner=isPremium
-        ? '<div class="pro-banner"><span class="tag">'+esc(t('pillPremium'))+'</span><h3>'+esc(t('proTitleActive'))+'</h3><p>'+esc(t('proDescActive'))+'</p><button id="upgradeBtn">'+esc(t('manageBtn'))+'</button></div>'
+        ? '<div class="pro-banner"><span class="tag">'+esc(t('pillPro'))+'</span><h3>'+esc(t('proTitleActive'))+'</h3><p>'+esc(t('proDescActive'))+'</p><button id="upgradeBtn">'+esc(t('manageBtn'))+'</button></div>'
         : '<div class="pro-banner"><span class="tag">'+esc(t('proTag'))+'</span><h3>'+esc(t('proTitle'))+'</h3><p>'+esc(t('proDesc'))+'</p><button id="upgradeBtn">'+esc(t('upgradeBtn'))+'</button></div>';
       return '<h1 class="view-title">'+esc(t('settingsTitle'))+'</h1><p class="lead">'+esc(t('settingsLead'))+'</p>'
       +banner
@@ -465,7 +450,7 @@
       const icon=o.icon,title=o.title,sub=o.sub,right=o.right,id=o.id,value=o.value,pro=o.pro;
       const rightHtml = right==='toggle' ? '<button class="toggle '+(prefs[id]?'on':'')+'" data-toggle="'+id+'" role="switch" aria-checked="'+!!prefs[id]+'" aria-label="'+esc(title)+'"></button>'
         : right==='chevron' ? '<span class="chev">›</span>'
-        : right==='pill' ? '<span class="pill '+(o.pillState==='premium'?'pro':'free')+'">'+esc(o.pillState==='premium'?t('pillPremium'):t('pillFree'))+'</span><span class="chev">›</span>'
+        : right==='pill' ? '<span class="pill '+(o.pillState==='premium'?'pro':'free')+'">'+esc(o.pillState==='premium'?t('pillPro'):t('pillFree'))+'</span><span class="chev">›</span>'
         : '<span class="si-right">'+esc(value)+'<span class="chev">›</span></span>';
       return '<div class="setting-item" data-setting="'+id+'"><div class="si-main"><span class="si-icon">'+icon+'</span><div class="si-text"><strong>'+esc(title)+(pro?' <span class="pill pro">'+esc(t('pillPro'))+'</span>':'')+'</strong>'+(sub?'<span>'+esc(sub)+'</span>':'')+'</div></div>'+rightHtml+'</div>';
     }
@@ -484,75 +469,15 @@
       openSettingsSheet(html,title);
       document.querySelectorAll('[data-pick]').forEach(el=>el.onclick=()=>{onPick(el.dataset.pick);closeSettingsSheet()});
     }
-    // เปิดหน้าสมัคร Premium ในเว็บ: สร้าง payment session + โชว์ QR PromptPay ให้จ่าย แล้วอัปโหลดสลิปตรวจสอบ
-    // ใช้ backend endpoint เดียวกับที่ฝั่ง LINE ใช้ (/api/premium/checkout, /api/premium/slip)
-    // สลิปทุกใบต้องผ่านการตรวจสอบ/รอแอดมินอนุมัติเสมอ — เว็บไม่ได้ auto-approve เอง (ดู ARCHITECTURE.md)
-    let checkoutSession=null;
-    async function goToLineUpgrade(){
-      openSettingsSheet('<div class="notice">'+esc(t('checkoutLoading'))+'</div>',t('upgradeHowTitle'));
-      try{
-        const res=await api('/api/premium/checkout',{method:'POST'});
-        if(res.alreadyPremium){
-          openSettingsSheet('<div class="notice">'+t('planPremiumBody')(fmtExpiry(res.expiresAt))+'</div>',t('planHeaderTitle'));
-          await loadData();
-          return;
-        }
-        checkoutSession=res;
-        renderCheckoutSheet();
-      }catch(e){
-        const lineFallback=subscription.lineOaLink?'<div class="actions"><button class="secondary" style="flex:1" id="lineFallbackBtn">'+esc(t('openLineChat'))+'</button></div>':'';
-        openSettingsSheet('<div class="notice">'+esc(e.message||t('checkoutError'))+'</div>'+lineFallback,t('upgradeHowTitle'));
-        const fb=document.getElementById('lineFallbackBtn');if(fb)fb.onclick=()=>window.open(subscription.lineOaLink,'_blank');
-      }
-    }
-    function renderCheckoutSheet(){
-      const s=checkoutSession;
-      const html=
-        '<div class="checkout-qr"><img src="'+esc(s.qrImageUrl+query)+'" alt="PromptPay QR" width="220" height="220"></div>'
-        +'<div class="notice" style="margin-top:12px">'+esc(t('checkoutAmount'))+' <strong class="num">'+fmt(s.amount)+'</strong><br>'+esc(t('checkoutRef'))+' '+esc(s.referenceId)+'<br>'+esc(t('checkoutExpiry'))+' '+esc(fmtExpiry(s.expiresAt)||'')+'</div>'
-        +'<div class="field"><label>'+esc(t('checkoutUploadLabel'))+'</label><input type="file" id="slipInput" accept="image/*"></div>'
-        +'<div id="slipStatus"></div>'
-        +'<div class="actions"><button class="primary" style="flex:1" id="slipSubmit" disabled>'+esc(t('checkoutSubmit'))+'</button></div>';
-      openSettingsSheet(html,t('checkoutTitle'));
-      const fileInput=document.getElementById('slipInput'),submitBtn=document.getElementById('slipSubmit'),statusEl=document.getElementById('slipStatus');
-      let picked=null;
-      fileInput.onchange=()=>{picked=fileInput.files[0]||null;submitBtn.disabled=!picked};
-      submitBtn.onclick=async()=>{
-        if(!picked)return;
-        submitBtn.disabled=true;submitBtn.textContent=t('checkoutSubmitting');statusEl.innerHTML='';
-        try{
-          const base64=await fileToBase64(picked);
-          const result=await api('/api/premium/slip',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sessionId:s.sessionId,mime:picked.type,base64})});
-          statusEl.innerHTML='<div class="notice">'+esc(result.message)+'</div>';
-          toast(result.message);
-          await loadData();
-          if(result.outcome==='VERIFIED'||result.outcome==='PENDING_REVIEW'){
-            checkoutSession=null;
-            setTimeout(()=>{closeSettingsSheet();render()},1400);
-          }else{
-            submitBtn.disabled=false;submitBtn.textContent=t('checkoutSubmit');
-          }
-        }catch(e){
-          statusEl.innerHTML='<div class="notice">'+esc(e.message||t('checkoutError'))+'</div>';
-          submitBtn.disabled=false;submitBtn.textContent=t('checkoutSubmit');
-        }
-      };
-    }
-    function fileToBase64(file){
-      return new Promise((resolve,reject)=>{
-        const reader=new FileReader();
-        reader.onload=()=>resolve(String(reader.result).split(',')[1]||'');
-        reader.onerror=()=>reject(new Error(t('checkoutError')));
-        reader.readAsDataURL(file);
-      });
-    }
-    const PRO_TOGGLES=['categoryMemory','dailyReminder']; // ตั้งค่าที่ต้องเป็น Premium ถึงเปิดได้ — non-premium แตะแล้วเด้งไปหน้าปลดล็อกแทน ไม่ให้เปิดเฉยๆ
+    // สมัคร/จัดการ Pro ทำผ่านหน้าเว็บแยกต่างหากที่ /pro (มี checkout QR + อัปโหลดสลิปในตัว, ธีมและ UX ดีกว่าชีทเดิม)
+    function goToProPage(){ location.href='/pro'+query; }
+    const PRO_TOGGLES=['categoryMemory','dailyReminder']; // ตั้งค่าที่ต้องเป็น Premium ถึงเปิดได้ — non-premium แตะแล้วเด้งไปหน้า /pro แทน ไม่ให้เปิดเฉยๆ
     // การ์ด "จดสำเร็จ" (ธีมสี/ปุ่ม/แถบงบ) ย้ายไปเป็นหน้าเว็บแยก /confirm-message แล้ว (มีตัวอย่างการ์ดจริงให้ดูสด ๆ)
     // จึงไม่มี toggle หรือ sheet ของฟีเจอร์นี้เหลืออยู่ในไฟล์นี้อีก — ดู confirm-message.html สำหรับ logic ทั้งหมด
     function bindSettings(){
       document.querySelectorAll('[data-toggle]').forEach(tg=>tg.onclick=async()=>{
         const id=tg.dataset.toggle;
-        if(PRO_TOGGLES.includes(id)&&!subscription.active&&!prefs[id])return openUpgradeSheet();
+        if(PRO_TOGGLES.includes(id)&&!subscription.active&&!prefs[id])return goToProPage();
         prefs[id]=!prefs[id];savePrefs();
         tg.classList.toggle('on',prefs[id]);tg.setAttribute('aria-checked',String(prefs[id]));
         toast(prefs[id]?t('toastOn'):t('toastOff'));
@@ -562,7 +487,7 @@
         }
         render();
       });
-      const upgrade=document.getElementById('upgradeBtn');if(upgrade)upgrade.onclick=goToLineUpgrade;
+      const upgrade=document.getElementById('upgradeBtn');if(upgrade)upgrade.onclick=goToProPage;
       view.querySelectorAll('[data-setting]').forEach(el=>{
         const id=el.dataset.setting;
         if(el.querySelector('[data-toggle]'))return;
@@ -574,22 +499,14 @@
           if(id==='reminderTime')return openReminderTimeSheet();
           if(id==='confirmMessagePage')return void(location.href='/confirm-message'+query);
           if(id==='recurring')return openRecurringSheet();
-          if(id==='plan')return openUpgradeSheet();
+          if(id==='plan')return goToProPage();
           if(id==='billing')return openSettingsSheet('<div class="empty"><span class="emoji">🧾</span>'+esc(t('billingEmpty'))+'</div>',t('billingHeaderTitle'));
         };
       });
     }
-    // ใช้ทั้งตอนกดแถว "แพ็กเกจ" และตอนแตะ toggle ที่ล็อกไว้เฉพาะ Premium (เช่น เตือนจดประจำวัน, จัดหมวดด้วยความจำ)
-    function openUpgradeSheet(){
-      const isPremium=subscription.active;
-      const body=isPremium?t('planPremiumBody')(fmtExpiry(subscription.expiresAt)):t('planFreeBody');
-      const actionLabel=isPremium?t('manageBtn'):t('upgradeBtn');
-      openSettingsSheet('<div class="notice">'+body+'</div><div class="actions"><button class="primary" style="flex:1" id="planUpgrade">'+esc(actionLabel)+'</button></div>',t('planHeaderTitle'));
-      document.getElementById('planUpgrade').onclick=goToLineUpgrade;
-    }
     // แผงเลือกเวลาแจ้งเตือน — เลือกชั่วโมง/นาทีแยกกันแบบ scroll list ง่าย ๆ ให้ทัชง่ายบนมือถือ ไม่ใช้ <input type=time> เพราะ UI แต่ละแพลตฟอร์มไม่เหมือนกันและคุมสไตล์ไม่ได้
     function openReminderTimeSheet(){
-      if(!subscription.active)return openUpgradeSheet();
+      if(!subscription.active)return goToProPage();
       const [curH,curM]=prefs.reminderTime.split(':');
       const hours=Array.from({length:24},(_,i)=>String(i).padStart(2,'0'));
       const minutes=['00','15','30','45'];
@@ -612,7 +529,7 @@
     }
     // แผงเลือกช่วงเวลาสำหรับรายงาน PDF (ฟีเจอร์ Premium) — เลือกได้ทั้งรายเดือน (เลือกเดือน+ปี) หรือรายปี (เลือกแค่ปี)
     function openPdfReportSheet(){
-      if(!subscription.active)return openUpgradeSheet();
+      if(!subscription.active)return goToProPage();
       const now=new Date();
       const years=Array.from({length:5},(_,i)=>now.getFullYear()-i); // ย้อนหลัง 5 ปี พอสำหรับเอกสารยื่นภาษี/บัญชีทั่วไป
       const months=[t('monthJan'),t('monthFeb'),t('monthMar'),t('monthApr'),t('monthMay'),t('monthJun'),t('monthJul'),t('monthAug'),t('monthSep'),t('monthOct'),t('monthNov'),t('monthDec')];
@@ -690,7 +607,7 @@
       view.querySelectorAll('.row-wrap .row').forEach(r=>r.onclick=()=>{if(r.closest('.row-wrap').classList.contains('swiped')){r.closest('.row-wrap').classList.remove('swiped');return}openForm(transactions.find(x=>x.id===r.dataset.id))});
       bindSwipe();
       const download=document.getElementById('download');if(download)download.onclick=()=>{location.href='/api/transactions/export'+query;toast(t('exportingCsv'))};
-      const downloadPdf=document.getElementById('downloadPdf');if(downloadPdf)downloadPdf.onclick=()=>{if(!subscription.active)return openUpgradeSheet();openPdfReportSheet()};
+      const downloadPdf=document.getElementById('downloadPdf');if(downloadPdf)downloadPdf.onclick=()=>{if(!subscription.active)return goToProPage();openPdfReportSheet()};
       view.querySelectorAll('.save-budget').forEach(b=>b.onclick=async()=>{const category=b.dataset.category,input=view.querySelector('[data-budget="'+CSS.escape(category)+'"]');b.textContent='…';await api('/api/budgets/'+encodeURIComponent(category),{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({amount:Number(input.value)})});toast(t('budgetSaved')(category));await loadData()});
     }
     async function loadData(){
