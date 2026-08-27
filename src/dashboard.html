@@ -162,6 +162,12 @@
     .skel-row .skel.t1{height:14px;width:55%}
     .skel-row .skel.t2{height:10px;width:35%;margin-top:6px}
     .skel-row .skel.amt{height:14px;width:60px;flex:none}
+    .skel-hero{display:flex;justify-content:center;padding:18px 0 6px}
+    .skel-illustration .skel-book{animation:skel-book-breathe 2.6s ease-in-out infinite}
+    .skel-illustration .skel-coin{animation:skel-coin-float 2.2s ease-in-out infinite}
+    .skel-illustration .coin2{animation-delay:.4s}
+    @keyframes skel-book-breathe{0%,100%{transform:translateY(0)}50%{transform:translateY(-2px)}}
+    @keyframes skel-coin-float{0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}
 
     .settings-list{display:flex;flex-direction:column}
     .setting-item{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:13px 2px;border-bottom:1px solid var(--line-soft);cursor:pointer;transition:background .15s}
@@ -262,11 +268,12 @@
         loading:'กำลังโหลด…',income:'รายรับ',expense:'รายจ่าย',balance:'คงเหลือสุทธิ',byCategory:'ใช้จ่ายตามหมวด',recentEntries:'รายการล่าสุด',noExpenseThisMonth:'ยังไม่มีรายจ่ายในเดือนนี้',totalLabel:'รวม',categoryPieAria:'สัดส่วนรายจ่ายตามหมวด',
         analysisTitle:'วิเคราะห์',analysisLead:'ดูแนวโน้มรายรับและรายจ่าย 6 เดือนล่าสุด',monthlyTrend:'แนวโน้มรายเดือน',noHistory:'ยังไม่มีข้อมูลย้อนหลัง',trendAria:'เทียบรายรับรายจ่ายย้อนหลัง',observation:'ข้อสังเกต',observationBody:'ข้อมูลจากหน้าเว็บและข้อความที่ส่งให้ LINE ยายจันทร์ จะถูกเก็บในบัญชีเดียวกันทันที',
         budgetsTitle:'หมวดและงบ',budgetsLead:'กำหนดวงเงินรายเดือนแยกตามหมวด',budgetPanelTitle:'งบประมาณ',budgetSpent:'ใช้แล้ว',budgetOf:'จาก',budgetSave:'บันทึก',budgetEmpty:'เพิ่มรายจ่ายก่อน แล้วหมวดจะปรากฏที่นี่',budgetSaved:n=>'บันทึกงบ'+n+'แล้ว',
-        transTitle:'รายการ',transLead:'ปัดซ้ายเพื่อลบ หรือแตะเพื่อแก้ไข',filterAll:'ทั้งหมด',filterExpense:'รายจ่าย',filterIncome:'รายรับ',exportCsv:'⇩ ส่งออก CSV',exportingCsv:'กำลังส่งออก CSV',noEntries:'ยังไม่มีรายการ กด + เพื่อเริ่มบันทึก',noEntriesShort:'ยังไม่มีรายการ',
+        transTitle:'รายการ',transLead:'ปัดซ้ายเพื่อลบ หรือแตะเพื่อแก้ไข',filterAll:'ทั้งหมด',filterExpense:'รายจ่าย',filterIncome:'รายรับ',exportCsv:'⇩ ส่งออก CSV',exportingCsv:'กำลังส่งออก CSV',exportPdf:'📄 รายงาน PDF',exportingPdf:'กำลังสร้างรายงาน PDF...',pdfPremiumRequired:'รายงาน PDF เป็นฟีเจอร์ Premium',pdfMonthLabel:'รายเดือน',pdfYearLabel:'รายปี',pdfSheetTitle:'ส่งออกรายงาน PDF',pdfSheetLead:'เลือกช่วงเวลาที่ต้องการสรุป รายงานจะมีกราฟและตารางรายการครบพร้อมเก็บไว้ยื่นภาษีหรือส่งให้นักบัญชีได้เลย',noEntries:'ยังไม่มีรายการ กด + เพื่อเริ่มบันทึก',noEntriesShort:'ยังไม่มีรายการ',
         deleteEntryConfirm:'ลบรายการนี้?',entryDeleted:'ลบรายการแล้ว',entrySaved:'บันทึกรายการแล้ว',entryUpdated:'แก้ไขรายการแล้ว',
         recurringSheetTitle:'จดประจำ',recurringEvery:'ทุกวันที่',addRecurringBtn:'+ เพิ่มรายการประจำ',recurringDeleteConfirm:'ลบรายการประจำ?',recurringDeleted:'ลบรายการประจำแล้ว',recurringAdded:'ตั้งรายการประจำแล้ว',recurringEmptySheet:'ยังไม่มีรายการประจำ',
         promptRecurringDesc:'ชื่อรายการประจำ เช่น ค่าเช่า',promptRecurringAmount:'จำนวนเงิน (บาท)',promptRecurringCategory:'หมวดหมู่',promptRecurringCategoryDefault:'อื่น ๆ',promptRecurringDay:'บันทึกทุกวันที่ (1-31)',promptRecurringType:'กด OK = รายรับ, Cancel = รายจ่าย',invalidData:'ข้อมูลไม่ถูกต้อง',
-        loadError:n=>'เปิดข้อมูลไม่ได้: '+n,genericError:'ทำรายการไม่สำเร็จ',summaryTitle:'สรุปเดือนนี้',navAriaLabel:'เมนูหลัก'
+        loadError:n=>'เปิดข้อมูลไม่ได้: '+n,genericError:'ทำรายการไม่สำเร็จ',summaryTitle:'สรุปเดือนนี้',navAriaLabel:'เมนูหลัก',
+        monthJan:'มกราคม',monthFeb:'กุมภาพันธ์',monthMar:'มีนาคม',monthApr:'เมษายน',monthMay:'พฤษภาคม',monthJun:'มิถุนายน',monthJul:'กรกฎาคม',monthAug:'สิงหาคม',monthSep:'กันยายน',monthOct:'ตุลาคม',monthNov:'พฤศจิกายน',monthDec:'ธันวาคม'
       },
       'English':{
         settingsTitle:'Settings',settingsLead:'Manage recurring entries and customize your experience',
@@ -294,11 +301,12 @@
         loading:'Loading…',income:'Income',expense:'Expense',balance:'Net balance',byCategory:'Spending by category',recentEntries:'Recent entries',noExpenseThisMonth:'No expenses this month yet',totalLabel:'Total',categoryPieAria:'Spending share by category',
         analysisTitle:'Analysis',analysisLead:'View income and expense trends for the last 6 months',monthlyTrend:'Monthly trend',noHistory:'No historical data yet',trendAria:'Income vs expense over time',observation:'Notes',observationBody:'Data from the website and messages sent to ยายจันทร์ on LINE are saved to the same account instantly',
         budgetsTitle:'Categories & Budgets',budgetsLead:'Set a monthly limit for each category',budgetPanelTitle:'Budget',budgetSpent:'Spent',budgetOf:'of',budgetSave:'Save',budgetEmpty:'Add an expense first, and categories will appear here',budgetSaved:n=>'Saved budget for '+n,
-        transTitle:'Entries',transLead:'Swipe left to delete, or tap to edit',filterAll:'All',filterExpense:'Expense',filterIncome:'Income',exportCsv:'⇩ Export CSV',exportingCsv:'Exporting CSV',noEntries:'No entries yet — tap + to start logging',noEntriesShort:'No entries yet',
+        transTitle:'Entries',transLead:'Swipe left to delete, or tap to edit',filterAll:'All',filterExpense:'Expense',filterIncome:'Income',exportCsv:'⇩ Export CSV',exportingCsv:'Exporting CSV',exportPdf:'📄 PDF report',exportingPdf:'Generating PDF report...',pdfPremiumRequired:'PDF reports are a Premium feature',pdfMonthLabel:'Monthly',pdfYearLabel:'Yearly',pdfSheetTitle:'Export PDF report',pdfSheetLead:'Choose a period to summarize. The report includes charts and a full transaction table — ready to keep for tax filing or send to your accountant.',noEntries:'No entries yet — tap + to start logging',noEntriesShort:'No entries yet',
         deleteEntryConfirm:'Delete this entry?',entryDeleted:'Entry deleted',entrySaved:'Entry saved',entryUpdated:'Entry updated',
         recurringSheetTitle:'Recurring entries',recurringEvery:'Every day',addRecurringBtn:'+ Add recurring entry',recurringDeleteConfirm:'Delete this recurring entry?',recurringDeleted:'Recurring entry deleted',recurringAdded:'Recurring entry set',recurringEmptySheet:'No recurring entries yet',
         promptRecurringDesc:'Recurring entry name, e.g. Rent',promptRecurringAmount:'Amount (THB)',promptRecurringCategory:'Category',promptRecurringCategoryDefault:'Other',promptRecurringDay:'Log on which day each month (1-31)',promptRecurringType:'Click OK = Income, Cancel = Expense',invalidData:'Invalid data',
-        loadError:n=>'Could not load data: '+n,genericError:'Action failed',summaryTitle:'This month',navAriaLabel:'Main menu'
+        loadError:n=>'Could not load data: '+n,genericError:'Action failed',summaryTitle:'This month',navAriaLabel:'Main menu',
+        monthJan:'January',monthFeb:'February',monthMar:'March',monthApr:'April',monthMay:'May',monthJun:'June',monthJul:'July',monthAug:'August',monthSep:'September',monthOct:'October',monthNov:'November',monthDec:'December'
       }
     };
     function t(key){const dict=I18N[prefs.language]||I18N['ไทย'];return dict[key]}
@@ -365,11 +373,32 @@
     function setPage(next){page=next;document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.page===page));document.getElementById('addButton').classList.toggle('hidden',page==='settings'||page==='budgets');render()}
 
     function skeletonSummary(){
-      return '<h1 class="view-title">'+esc(t('summaryTitle'))+'</h1><p class="lead">'+esc(t('loading'))+'</p>'
+      return '<div class="skel-hero" aria-hidden="true">'+skeletonIllustration()+'</div>'
+        +'<h1 class="view-title">'+esc(t('summaryTitle'))+'</h1><p class="lead">'+esc(t('loading'))+'</p>'
         +'<div class="ledger skel-ledger">'+[t('income'),t('expense'),t('balance')].map(()=>'<div class="ledger-row"><span class="skel k"></span><span class="skel v"></span></div>').join('')+'</div>'
         +'<div class="cards">'+Array.from({length:3}).map(()=>'<div class="card skel-card"><span class="skel"></span><span class="skel"></span></div>').join('')+'</div>'
         +'<section class="panel"><h2>'+esc(t('byCategory'))+'</h2><div style="display:flex;justify-content:center;padding:14px 0"><div class="skel" style="width:146px;height:146px;border-radius:50%"></div></div></section>'
         +'<section class="panel"><h2>'+esc(t('recentEntries'))+'</h2>'+skeletonRows(4)+'</section>';
+    }
+    // ภาพประกอบตอนโหลดครั้งแรก — สมุดบัญชีเปิดอยู่พร้อมเหรียญเด้งเบา ๆ (ธีมเดียวกับ "ยายจันทร์" สมุดบัญชี) วาดด้วย inline SVG ล้วน
+    // ไม่พึ่งไฟล์ภาพภายนอก/CDN เพราะโหลดครั้งแรกยิ่งเร็วยิ่งดี ไม่อยากเพิ่ม network request ระหว่างที่กำลังรอข้อมูลจริงอยู่แล้ว
+    function skeletonIllustration(){
+      return '<svg viewBox="0 0 120 90" width="108" height="81" class="skel-illustration">'
+        +'<ellipse cx="60" cy="78" rx="42" ry="6" fill="var(--line-soft)"/>'
+        +'<g class="skel-book">'
+          +'<path d="M60 24 L18 32 V70 L60 62 Z" fill="var(--card)" stroke="var(--line)" stroke-width="2"/>'
+          +'<path d="M60 24 L102 32 V70 L60 62 Z" fill="var(--card)" stroke="var(--line)" stroke-width="2"/>'
+          +'<line x1="26" y1="42" x2="52" y2="38" stroke="var(--line)" stroke-width="2" stroke-linecap="round"/>'
+          +'<line x1="26" y1="52" x2="52" y2="48" stroke="var(--line)" stroke-width="2" stroke-linecap="round"/>'
+          +'<line x1="26" y1="62" x2="52" y2="58" stroke="var(--line)" stroke-width="2" stroke-linecap="round"/>'
+          +'<line x1="68" y1="38" x2="94" y2="42" stroke="var(--line)" stroke-width="2" stroke-linecap="round"/>'
+          +'<line x1="68" y1="48" x2="94" y2="52" stroke="var(--line)" stroke-width="2" stroke-linecap="round"/>'
+        +'</g>'
+        +'<circle class="skel-coin coin1" cx="38" cy="18" r="9" fill="var(--wine)"/>'
+        +'<text class="skel-coin coin1" x="38" y="22" font-size="10" text-anchor="middle" fill="#fff" font-weight="700">฿</text>'
+        +'<circle class="skel-coin coin2" cx="82" cy="14" r="7" fill="var(--sage,#8AA07A)"/>'
+        +'<text class="skel-coin coin2" x="82" y="17.5" font-size="8" text-anchor="middle" fill="#fff" font-weight="700">฿</text>'
+      +'</svg>';
     }
     function skeletonRows(n){return Array.from({length:n}).map(()=>'<div class="skel-row"><div><span class="skel t1"></span><span class="skel t2"></span></div><span class="skel amt"></span></div>').join('')}
 
@@ -386,7 +415,7 @@
     }
     function analysisPage(){const d=dashboard||{history:[],categories:[]};return '<h1 class="view-title">'+esc(t('analysisTitle'))+'</h1><p class="lead">'+esc(t('analysisLead'))+'</p><section class="panel"><h2>'+esc(t('monthlyTrend'))+'</h2><div class="chart-legend"><span><i class="dot" style="background:#4b6a58"></i>'+esc(t('income'))+'</span><span><i class="dot" style="background:#7a2b3d"></i>'+esc(t('expense'))+'</span></div>'+barChart(d.history)+(d.history||[]).map((x,i)=>'<div class="chart-row stagger" style="animation-delay:'+(i*40)+'ms"><span>'+esc(x.label)+'</span><strong class="income num">+'+fmt(x.income)+'</strong><strong class="expense num">-'+fmt(x.expense)+'</strong></div>').join('')+'</section><section class="panel"><h2>'+esc(t('observation'))+'</h2><div class="notice">'+esc(t('observationBody'))+'</div></section>';}
     function budgetsPage(){const thisMonth=new Date().toISOString().slice(0,7);const cats=[...new Set(transactions.filter(x=>x.type==='expense').map(x=>x.category).concat(Object.keys(budgets)))].sort();return '<h1 class="view-title">'+esc(t('budgetsTitle'))+'</h1><p class="lead">'+esc(t('budgetsLead'))+'</p><section class="panel"><h2>'+esc(t('budgetPanelTitle'))+'</h2>'+(cats.length?cats.map((c,i)=>{const spent=transactions.filter(x=>x.type==='expense'&&x.category===c&&x.createdAt.slice(0,7)===thisMonth).reduce((s,x)=>s+x.amount,0),limit=budgets[c]||0,pct=limit?Math.min(100,spent/limit*100):0,over=limit>0&&spent>limit;return '<div class="stagger" style="animation-delay:'+(i*35)+'ms"><div class="budget"><div><strong>'+esc(c)+'</strong><div class="meta">'+esc(t('budgetSpent'))+' '+fmt(spent)+(limit?' '+esc(t('budgetOf'))+' '+fmt(limit):'')+'</div></div><input aria-label="'+esc(t('budgetPanelTitle'))+' '+esc(c)+'" data-budget="'+esc(c)+'" type="number" min="0" value="'+limit+'"><button class="primary save-budget" data-category="'+esc(c)+'">'+esc(t('budgetSave'))+'</button></div>'+(limit?'<div class="budget-bar'+(over?' over':'')+'"><i style="width:'+pct+'%"></i></div>':'')+'</div>'}).join(''):'<div class="empty"><span class="emoji">🗂️</span>'+esc(t('budgetEmpty'))+'</div>')+'</section>';}
-    function transactionPage(){const list=transactions.filter(x=>filter==='all'||x.type===filter);return '<h1 class="view-title">'+esc(t('transTitle'))+'</h1><p class="lead">'+esc(t('transLead'))+'</p><div class="toolbar"><button class="'+(filter==='all'?'active':'')+'" data-filter="all">'+esc(t('filterAll'))+'</button><button class="'+(filter==='expense'?'active':'')+'" data-filter="expense">'+esc(t('filterExpense'))+'</button><button class="'+(filter==='income'?'active':'')+'" data-filter="income">'+esc(t('filterIncome'))+'</button><button id="download">'+esc(t('exportCsv'))+'</button></div><section class="panel">'+(list.length?list.map(row).join(''):'<div class="empty"><span class="emoji">📒</span>'+esc(t('noEntries'))+'</div>')+'</section>';}
+    function transactionPage(){const list=transactions.filter(x=>filter==='all'||x.type===filter);return '<h1 class="view-title">'+esc(t('transTitle'))+'</h1><p class="lead">'+esc(t('transLead'))+'</p><div class="toolbar"><button class="'+(filter==='all'?'active':'')+'" data-filter="all">'+esc(t('filterAll'))+'</button><button class="'+(filter==='expense'?'active':'')+'" data-filter="expense">'+esc(t('filterExpense'))+'</button><button class="'+(filter==='income'?'active':'')+'" data-filter="income">'+esc(t('filterIncome'))+'</button><button id="download">'+esc(t('exportCsv'))+'</button><button id="downloadPdf">'+esc(t('exportPdf'))+(subscription.active?'':' 🔒')+'</button></div><section class="panel">'+(list.length?list.map(row).join(''):'<div class="empty"><span class="emoji">📒</span>'+esc(t('noEntries'))+'</div>')+'</section>';}
     function recentRows(n){return transactions.length?transactions.slice(0,n).map(row).join(''):'<div class="empty"><span class="emoji">📒</span>'+esc(t('noEntriesShort'))+'</div>'}
     function row(x,i){return '<div class="row-wrap" data-wrap-id="'+x.id+'"><div class="row-del" data-del="'+x.id+'">'+esc(t('deleteBtn'))+'</div><article class="row stagger" style="animation-delay:'+((i||0)*30)+'ms" data-id="'+x.id+'"><div><strong>'+esc(x.description)+'</strong><div class="meta">'+new Date(x.createdAt).toLocaleString(prefs.language==='English'?'en-GB':'th-TH',{dateStyle:'short',timeStyle:'short'})+' · '+esc(x.category)+'</div></div><span class="amount num '+x.type+'">'+(x.type==='income'?'+':'-')+fmt(x.amount)+'</span></article></div>'}
 
@@ -568,6 +597,50 @@
         }catch(e){btn.disabled=false;btn.textContent=t('reminderSave');toast(e.message||t('genericError'))}
       };
     }
+    // แผงเลือกช่วงเวลาสำหรับรายงาน PDF (ฟีเจอร์ Premium) — เลือกได้ทั้งรายเดือน (เลือกเดือน+ปี) หรือรายปี (เลือกแค่ปี)
+    function openPdfReportSheet(){
+      if(!subscription.active)return openUpgradeSheet();
+      const now=new Date();
+      const years=Array.from({length:5},(_,i)=>now.getFullYear()-i); // ย้อนหลัง 5 ปี พอสำหรับเอกสารยื่นภาษี/บัญชีทั่วไป
+      const months=[t('monthJan'),t('monthFeb'),t('monthMar'),t('monthApr'),t('monthMay'),t('monthJun'),t('monthJul'),t('monthAug'),t('monthSep'),t('monthOct'),t('monthNov'),t('monthDec')];
+      const html='<p class="lead" style="margin-top:0">'+esc(t('pdfSheetLead'))+'</p>'
+        +'<div class="toolbar" style="margin:0 0 14px"><button class="active" data-pdf-period="month">'+esc(t('pdfMonthLabel'))+'</button><button data-pdf-period="year">'+esc(t('pdfYearLabel'))+'</button></div>'
+        +'<div id="pdfPeriodFields" style="display:flex;gap:10px;align-items:center;justify-content:center;padding:8px 0">'
+          +'<select id="pdfMonth" style="font-size:16px;font-weight:700;padding:8px 10px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--ink)">'+months.map((m,i)=>'<option value="'+(i+1)+'"'+(i===now.getMonth()?' selected':'')+'>'+esc(m)+'</option>').join('')+'</select>'
+          +'<select id="pdfYear" style="font-size:16px;font-weight:700;padding:8px 10px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--ink)">'+years.map(y=>'<option value="'+y+'">'+(y+543)+'</option>').join('')+'</select>'
+        +'</div>'
+        +'<div class="actions"><button class="primary" style="flex:1" id="pdfDownloadBtn">'+esc(t('exportPdf'))+'</button></div>';
+      openSettingsSheet(html,t('pdfSheetTitle'));
+      let period='month';
+      document.querySelectorAll('[data-pdf-period]').forEach(b=>b.onclick=()=>{
+        period=b.dataset.pdfPeriod;
+        document.querySelectorAll('[data-pdf-period]').forEach(x=>x.classList.toggle('active',x===b));
+        document.getElementById('pdfMonth').style.display=period==='month'?'':'none';
+      });
+      document.getElementById('pdfDownloadBtn').onclick=()=>downloadPdfReport(period,Number(document.getElementById('pdfYear').value),Number(document.getElementById('pdfMonth').value));
+    }
+    // ดาวน์โหลด PDF ผ่าน fetch+blob แทน location.href ตรง ๆ (ต่างจากปุ่ม CSV) เพราะถ้าไม่ใช่ Premium (403) หรือฟอนต์ยังไม่พร้อม (500)
+    // อยาก catch error มาโชว์ toast ได้ แทนที่จะพา browser ไปเปิดหน้า error/JSON ดิบ ๆ ตรง ๆ ซึ่งดูแปลกบนมือถือ
+    async function downloadPdfReport(period,year,month){
+      const btn=document.getElementById('pdfDownloadBtn');
+      btn.disabled=true;const originalLabel=btn.textContent;btn.textContent=t('exportingPdf');
+      try{
+        const params=new URLSearchParams({period,year:String(year)});
+        if(period==='month')params.set('month',String(month));
+        const r=await fetch('/api/reports/pdf?'+params.toString()+'&token='+encodeURIComponent(token||'')+'&u='+encodeURIComponent(uid||''));
+        if(!r.ok){
+          const body=await r.json().catch(()=>({}));
+          throw new Error(body.error==='premium_required'?t('pdfPremiumRequired'):(body.message||t('genericError')));
+        }
+        const blob=await r.blob();
+        const filename=period==='year'?'pa-nuan-report-'+year+'.pdf':'pa-nuan-report-'+year+'-'+String(month).padStart(2,'0')+'.pdf';
+        const url=URL.createObjectURL(blob);
+        const a=document.createElement('a');a.href=url;a.download=filename;document.body.appendChild(a);a.click();a.remove();
+        setTimeout(()=>URL.revokeObjectURL(url),4000);
+        closeSettingsSheet();
+      }catch(e){toast(e.message||t('genericError'))}
+      finally{btn.disabled=false;btn.textContent=originalLabel}
+    }
     function openRecurringSheet(){
       const html=(recurring&&recurring.length?recurring.map(x=>'<div class="row"><div><strong>'+esc(x.description)+'</strong><div class="meta">'+esc(t('recurringEvery'))+' '+x.day+' · '+esc(x.category)+'</div></div><div style="display:flex;align-items:center;gap:8px"><span class="amount num '+x.type+'">'+fmt(x.amount)+'</span><button class="danger" data-recurring="'+x.id+'">'+esc(t('deleteBtn'))+'</button></div></div>').join(''):'<div class="empty"><span class="emoji">⟳</span>'+esc(t('recurringEmptySheet'))+'</div>')
         +'<div class="actions"><button class="primary" style="flex:1" id="addRecurringSheet">'+esc(t('addRecurringBtn'))+'</button></div>';
@@ -604,6 +677,7 @@
       view.querySelectorAll('.row-wrap .row').forEach(r=>r.onclick=()=>{if(r.closest('.row-wrap').classList.contains('swiped')){r.closest('.row-wrap').classList.remove('swiped');return}openForm(transactions.find(x=>x.id===r.dataset.id))});
       bindSwipe();
       const download=document.getElementById('download');if(download)download.onclick=()=>{location.href='/api/transactions/export'+query;toast(t('exportingCsv'))};
+      const downloadPdf=document.getElementById('downloadPdf');if(downloadPdf)downloadPdf.onclick=()=>{if(!subscription.active)return openUpgradeSheet();openPdfReportSheet()};
       view.querySelectorAll('.save-budget').forEach(b=>b.onclick=async()=>{const category=b.dataset.category,input=view.querySelector('[data-budget="'+CSS.escape(category)+'"]');b.textContent='…';await api('/api/budgets/'+encodeURIComponent(category),{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({amount:Number(input.value)})});toast(t('budgetSaved')(category));await loadData()});
     }
     async function loadData(){
@@ -643,5 +717,6 @@
   </script>
 </body>
 </html>
+
 
 
