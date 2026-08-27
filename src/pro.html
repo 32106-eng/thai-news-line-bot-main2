@@ -61,7 +61,7 @@
   .ledger{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden}
   .entry{display:flex;gap:13px;padding:15px 16px;align-items:flex-start}
   .entry+.entry{border-top:1px dashed var(--line-soft)}
-  .entry-stamp{width:36px;height:36px;border-radius:10px;background:var(--wine-soft);color:var(--wine);display:flex;align-items:center;justify-content:center;font-size:16px;flex:none}
+  .entry-stamp{width:36px;height:36px;border-radius:10px;background:var(--wine-soft);color:var(--wine);display:flex;align-items:center;justify-content:center;font-size:12.5px;font-weight:800;letter-spacing:.02em;font-variant-numeric:tabular-nums;flex:none}
   .entry-text strong{display:block;font-size:13.5px;font-weight:700;margin-bottom:2px}
   .entry-text span{display:block;font-size:12px;color:var(--ink-soft);line-height:1.5}
 
@@ -89,7 +89,12 @@
   .upload-box{margin-top:16px;border:1.5px dashed var(--line);border-radius:var(--radius-sm);padding:18px;text-align:center;background:var(--card);transition:border-color .15s,background .15s;position:relative}
   .upload-box.has-file{border-color:var(--sage);background:var(--sage-soft)}
   .upload-box input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer}
-  .upload-box .up-icon{font-size:24px;margin-bottom:6px}
+  .upload-box .up-icon{width:30px;height:38px;margin:0 auto 8px;border:1.5px solid var(--ink-soft);border-radius:3px;position:relative;opacity:.55}
+  .upload-box .up-icon::before,.upload-box .up-icon::after{content:"";position:absolute;left:6px;right:6px;height:1.5px;background:var(--ink-soft)}
+  .upload-box .up-icon::before{top:11px}
+  .upload-box .up-icon::after{top:18px;right:12px}
+  .upload-box.has-file .up-icon{border-color:var(--sage);opacity:.8}
+  .upload-box.has-file .up-icon::before,.upload-box.has-file .up-icon::after{background:var(--sage)}
   .upload-box .up-label{font-size:12.5px;font-weight:700;color:var(--ink)}
   .upload-box .up-sub{font-size:11px;color:var(--ink-soft);margin-top:3px}
 
@@ -141,13 +146,13 @@
   const fmtExpiry = iso => { if (!iso) return null; try { return new Date(iso).toLocaleDateString('th-TH', { day:'numeric', month:'long', year:'numeric' }); } catch { return null; } };
 
   const FEATURES = [
-    { icon:'📸', title:'อ่านใบเสร็จอัตโนมัติ', sub:'ถ่ายรูปสลิปส่งมา ยายจันทร์อ่านยอดเงินกับร้านค้าให้เอง ไม่ต้องพิมพ์เอง' },
-    { icon:'👥', title:'จดบัญชีกลุ่ม', sub:'ชวนยายจันทร์เข้ากลุ่ม จดกองกลางร่วมกับเพื่อนหรือครอบครัวได้' },
-    { icon:'🚫', title:'ไม่มีโฆษณาคั่น', sub:'กดเข้าแดชบอร์ดได้ทันที ไม่ต้องรอดูโฆษณาก่อน' },
-    { icon:'⏰', title:'เตือนจดประจำวัน', sub:'ตั้งเวลาที่อยากให้ยายจันทร์ทักให้เอง ไม่พลาดทุกวัน' },
-    { icon:'📄', title:'รายงาน PDF', sub:'สรุปรายเดือน/รายปีพร้อมกราฟ เก็บไว้ยื่นภาษีหรือส่งนักบัญชีได้เลย' },
-    { icon:'🎨', title:'ปรับแต่งการ์ดจดสำเร็จ', sub:'เลือกธีมสี ซ่อน/โชว์ปุ่มต่าง ๆ ให้เข้ากับสไตล์ของคุณ' },
-    { icon:'✨', title:'จดจำหมวดหมู่', sub:'พิมพ์ชื่อรายการที่เคยจด ยายจันทร์เติมหมวดให้อัตโนมัติ' }
+    { mark:'01', title:'อ่านใบเสร็จอัตโนมัติ', sub:'ถ่ายรูปสลิปส่งมา ยายจันทร์อ่านยอดเงินกับร้านค้าให้เอง ไม่ต้องพิมพ์เอง' },
+    { mark:'02', title:'จดบัญชีกลุ่ม', sub:'ชวนยายจันทร์เข้ากลุ่ม จดกองกลางร่วมกับเพื่อนหรือครอบครัวได้' },
+    { mark:'03', title:'ไม่มีโฆษณาคั่น', sub:'กดเข้าแดชบอร์ดได้ทันที ไม่ต้องรอดูโฆษณาก่อน' },
+    { mark:'04', title:'เตือนจดประจำวัน', sub:'ตั้งเวลาที่อยากให้ยายจันทร์ทักให้เอง ไม่พลาดทุกวัน' },
+    { mark:'05', title:'รายงาน PDF', sub:'สรุปรายเดือน/รายปีพร้อมกราฟ เก็บไว้ยื่นภาษีหรือส่งนักบัญชีได้เลย' },
+    { mark:'06', title:'ปรับแต่งการ์ดจดสำเร็จ', sub:'เลือกธีมสี ซ่อน/โชว์ปุ่มต่าง ๆ ให้เข้ากับสไตล์ของคุณ' },
+    { mark:'07', title:'จดจำหมวดหมู่', sub:'พิมพ์ชื่อรายการที่เคยจด ยายจันทร์เติมหมวดให้อัตโนมัติ' }
   ];
 
   let subscription = { active:false, expiresAt:null, plan:'FREE', lineOaLink:null };
@@ -169,7 +174,7 @@
   function renderFeatureLedger(){
     return `<div class="ledger">${FEATURES.map(f => `
       <div class="entry">
-        <div class="entry-stamp">${f.icon}</div>
+        <div class="entry-stamp">${f.mark}</div>
         <div class="entry-text"><strong>${esc(f.title)}</strong><span>${esc(f.sub)}</span></div>
       </div>`).join('')}</div>`;
   }
@@ -289,7 +294,7 @@
 
         <label class="upload-box" id="uploadBox">
           <input type="file" id="slipInput" accept="image/*">
-          <div class="up-icon">🧾</div>
+          <div class="up-icon"></div>
           <div class="up-label" id="uploadLabel">แตะเพื่ออัปโหลดรูปสลิป</div>
           <div class="up-sub" id="uploadSub">หลังโอนเงินแล้ว ถ่ายรูปสลิปส่งมาตรวจสอบ</div>
         </label>
