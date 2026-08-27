@@ -236,9 +236,11 @@
     let page='summary',filter='all',transactions=[],dashboard=null,budgets={},recurring=[],loaded=false;
     const PALETTE=['#7a2b3d','#4b6a58','#a6772e','#5c7a9e','#8a5a3f','#6b5490','#a15a6e','#557a6a'];
     const PREFS_KEY='panuan-prefs';
-    const prefs=Object.assign({categoryMemory:true,dailyReminder:false,reminderTime:'20:00',language:'ไทย',currency:'บาท (฿)',timezone:'Bangkok (GMT+7)'},JSON.parse(localStorage.getItem(PREFS_KEY)||'{}'));
+    const prefs=Object.assign({categoryMemory:true,dailyReminder:false,reminderTime:'20:00',language:'ไทย',currency:'บาท (฿)',timezone:'Bangkok (GMT+7)',confirmShowBudgetBar:true,confirmShowAuthorName:true,confirmShowEditButton:true,confirmShowDeleteButton:true,confirmTheme:'pink'},JSON.parse(localStorage.getItem(PREFS_KEY)||'{}'));
     function savePrefs(){localStorage.setItem(PREFS_KEY,JSON.stringify(prefs))}
-    let subscription={plan:'FREE',active:false,expiresAt:null,lineOaLink:null};
+    let subscription={plan:'FREE',active:false,expiresAt:null,lineOaLink:null,isGroup:false};
+    // ชุดธีมสีของการ์ด "จดสำเร็จ" ให้ตรงกับ CONFIRM_MESSAGE_THEMES ฝั่งเซิร์ฟเวอร์ (src/index.js) — swatch ใช้แค่โชว์ตัวอย่างสีในหน้าตั้งค่า ไม่ได้ส่งขึ้นเซิร์ฟเวอร์
+    const CONFIRM_THEMES=[{id:'pink',swatch:'#D23283'},{id:'green',swatch:'#4B6A58'},{id:'brown',swatch:'#8A5A3B'},{id:'gold',swatch:'#A6772E'},{id:'purple',swatch:'#7B5AA6'},{id:'orange',swatch:'#D2662E'}];
 
     // ── i18n: หน้าตั้งค่าเท่านั้นที่มีสองภาษาตอนนี้ ─────────────────────────
     const I18N={
@@ -248,6 +250,14 @@
         sectionCategory:'หมวดและงบ',categoryMemoryTitle:'จัดหมวดด้วยความจำ',categoryMemoryOn:'จำหมวดจากชื่อรายการที่เคยพิมพ์',categoryMemoryOff:'ปิดอยู่ — พิมพ์หมวดเองทุกครั้ง',
         recurringTitle:'จดประจำ',recurringCount:n=>n+' รายการที่ตั้งไว้',recurringEmpty:'ยังไม่มีรายการประจำ',
         sectionNotify:'การแจ้งเตือน',dailyReminderTitle:'เตือนจดประจำวัน',dailyReminderOn:time=>'แจ้งเตือนทุกวัน '+time+' น.',dailyReminderOff:'ปิดอยู่',reminderTimeRow:'เวลาแจ้งเตือน',reminderSheetTitle:'ตั้งเวลาแจ้งเตือน',reminderSheetLead:'ยายจันทร์จะทักในแชท LINE ตามเวลานี้ทุกวัน ถ้าวันนั้นยังไม่ได้จดอะไรเลย',reminderSave:'บันทึกเวลา',toastReminderSaved:'บันทึกเวลาแจ้งเตือนแล้ว',
+        sectionConfirmMsg:'ข้อความยืนยัน',confirmMsgLead:'ปรับแต่งการ์ด “จดสำเร็จ” ที่ยายจันทร์ส่งในกลุ่มหลังทุกครั้งที่มีคนจดรายการ',
+        confirmBudgetBarTitle:'แถบงบประมาณคงเหลือ',confirmBudgetBarSub:'โชว์ยอดใช้ไป/งบที่ตั้งไว้ของหมวดนั้น',
+        confirmAuthorTitle:'ชื่อผู้จด',confirmAuthorSub:'โชว์ว่าใครในกลุ่มเป็นคนจดรายการนี้',
+        confirmEditBtnTitle:'ปุ่มแก้ไข',confirmEditBtnSub:'ปุ่มเปิดหน้าเว็บเพื่อแก้ไขรายการ',
+        confirmDeleteBtnTitle:'ปุ่มลบ',confirmDeleteBtnSub:'ปุ่มลบรายการนี้ทันทีจากในแชท',
+        confirmThemeTitle:'ธีมสีการ์ด',confirmThemeSheetTitle:'เลือกธีมสีการ์ด',
+        themePink:'ชมพู',themeGreen:'เขียว',themeBrown:'น้ำตาล',themeGold:'ทอง',themePurple:'ม่วง',themeOrange:'ส้ม',
+        confirmMsgGroupOnly:'ตั้งค่าข้อความยืนยันใช้ได้เฉพาะแชทกลุ่มเท่านั้น (ไม่ใช้กับแชทส่วนตัว)',toastThemeChanged:'เปลี่ยนธีมสีแล้ว',
         sectionMember:'สมาชิก',planTitle:'แพ็กเกจของฉัน',planSub:'ดูสิทธิ์และวันหมดอายุ',billingTitle:'ประวัติการชำระเงิน',billingSub:'ดูใบเสร็จย้อนหลัง',
         sectionGeneral:'ทั่วไป',languageTitle:'ภาษา',currencyTitle:'สกุลเงิน',timezoneTitle:'โซนเวลา',
         sectionLine:'ใช้ใน LINE',lineNotice:'พิมพ์ “ค่าอาหาร 80”, “เงินเดือน 15000”, “สรุปเดือนนี้” หรือ “เว็บ” ในแชตกับยายจันทร์ได้ ข้อมูลจะอัปเดตที่หน้านี้',
@@ -281,6 +291,14 @@
         sectionCategory:'Categories & Budgets',categoryMemoryTitle:'Smart category memory',categoryMemoryOn:'Remembers categories from past entries',categoryMemoryOff:'Off — you\u2019ll type the category every time',
         recurringTitle:'Recurring entries',recurringCount:n=>n+' entries set',recurringEmpty:'No recurring entries yet',
         sectionNotify:'Notifications',dailyReminderTitle:'Daily logging reminder',dailyReminderOn:time=>'Reminds you every day at '+time,dailyReminderOff:'Off',reminderTimeRow:'Reminder time',reminderSheetTitle:'Set reminder time',reminderSheetLead:'ยายจันทร์ will message you on LINE at this time each day if you haven\u2019t logged anything yet',reminderSave:'Save time',toastReminderSaved:'Reminder time saved',
+        sectionConfirmMsg:'Confirmation message',confirmMsgLead:'Customize the \u201cSaved\u201d card ยายจันทร์ sends in the group every time someone logs an entry',
+        confirmBudgetBarTitle:'Remaining budget bar',confirmBudgetBarSub:'Show spent/limit for that category',
+        confirmAuthorTitle:'Logger\u2019s name',confirmAuthorSub:'Show who in the group logged this entry',
+        confirmEditBtnTitle:'Edit button',confirmEditBtnSub:'Button that opens the dashboard to edit the entry',
+        confirmDeleteBtnTitle:'Delete button',confirmDeleteBtnSub:'Button to delete this entry right from the chat',
+        confirmThemeTitle:'Card color theme',confirmThemeSheetTitle:'Choose a card color theme',
+        themePink:'Pink',themeGreen:'Green',themeBrown:'Brown',themeGold:'Gold',themePurple:'Purple',themeOrange:'Orange',
+        confirmMsgGroupOnly:'Confirmation message settings only apply to group chats (not 1:1 chats)',toastThemeChanged:'Theme changed',
         sectionMember:'Membership',planTitle:'My plan',planSub:'View benefits and expiry date',billingTitle:'Payment history',billingSub:'View past receipts',
         sectionGeneral:'General',languageTitle:'Language',currencyTitle:'Currency',timezoneTitle:'Timezone',
         sectionLine:'Using LINE',lineNotice:'You can type "food 80", "salary 15000", "summary this month", or "web" to ยายจันทร์ in chat. This page will update automatically.',
@@ -437,6 +455,18 @@
         +settingRow({icon:'🔔',title:t('dailyReminderTitle'),sub:prefs.dailyReminder?t('dailyReminderOn')(prefs.reminderTime):t('dailyReminderOff'),right:'toggle',id:'dailyReminder',pro:true})
         +(prefs.dailyReminder&&subscription.active?settingRow({icon:'⏰',title:t('reminderTimeRow'),sub:'',right:'value',id:'reminderTime',value:prefs.reminderTime}):'')
       +'</section>'
+      // เมนู "ข้อความยืนยัน" โชว์เฉพาะแชทกลุ่ม (subscription.isGroup, มาจาก /api/subscription) — ในแชทส่วนตัวการ์ดเห็นแค่เจ้าของคนเดียวเลยไม่ต้องมีปุ่มนี้
+      +(subscription.isGroup?(
+        '<div class="section-label">'+esc(t('sectionConfirmMsg'))+'</div>'
+        +'<p class="lead" style="margin-top:-4px">'+esc(t('confirmMsgLead'))+'</p>'
+        +'<section class="panel" style="padding:6px 17px">'
+          +settingRow({icon:'📊',title:t('confirmBudgetBarTitle'),sub:t('confirmBudgetBarSub'),right:'toggle',id:'confirmShowBudgetBar',pro:true})
+          +settingRow({icon:'🙋',title:t('confirmAuthorTitle'),sub:t('confirmAuthorSub'),right:'toggle',id:'confirmShowAuthorName',pro:true})
+          +settingRow({icon:'✏️',title:t('confirmEditBtnTitle'),sub:t('confirmEditBtnSub'),right:'toggle',id:'confirmShowEditButton',pro:true})
+          +settingRow({icon:'🗑️',title:t('confirmDeleteBtnTitle'),sub:t('confirmDeleteBtnSub'),right:'toggle',id:'confirmShowDeleteButton',pro:true})
+          +settingRow({icon:'🎨',title:t('confirmThemeTitle'),sub:CONFIRM_THEMES.find(x=>x.id===prefs.confirmTheme)?t('theme'+prefs.confirmTheme[0].toUpperCase()+prefs.confirmTheme.slice(1)):'',right:'value',id:'confirmTheme',value:t('theme'+prefs.confirmTheme[0].toUpperCase()+prefs.confirmTheme.slice(1))})
+        +'</section>'
+      ):'')
       +'<div class="section-label">'+esc(t('sectionMember'))+'</div>'
       +'<section class="panel" style="padding:6px 17px">'
         +settingRow({icon:'👑',title:t('planTitle'),sub:t('planSub'),right:'pill',id:'plan',pillState:isPremium?'premium':'free'})
@@ -536,7 +566,12 @@
         reader.readAsDataURL(file);
       });
     }
-    const PRO_TOGGLES=['categoryMemory','dailyReminder']; // ตั้งค่าที่ต้องเป็น Premium ถึงเปิดได้ — non-premium แตะแล้วเด้งไปหน้าปลดล็อกแทน ไม่ให้เปิดเฉยๆ
+    const PRO_TOGGLES=['categoryMemory','dailyReminder','confirmShowBudgetBar','confirmShowAuthorName','confirmShowEditButton','confirmShowDeleteButton']; // ตั้งค่าที่ต้องเป็น Premium ถึงเปิดได้ — non-premium แตะแล้วเด้งไปหน้าปลดล็อกแทน ไม่ให้เปิดเฉยๆ
+    const CONFIRM_MSG_TOGGLES=['confirmShowBudgetBar','confirmShowAuthorName','confirmShowEditButton','confirmShowDeleteButton']; // toggle กลุ่ม "ข้อความยืนยัน" — บันทึกรวมกันเป็นก้อนเดียวผ่าน saveConfirmMessagePrefs
+    // บันทึกค่าปัจจุบันของ CONFIRM_MSG_TOGGLES ทั้งหมด + ธีมสี ไปที่ /api/confirm-message-prefs พร้อมกันทีเดียว (ฟีเจอร์เฉพาะกลุ่ม+Premium เท่านั้น เช็คซ้ำฝั่งเซิร์ฟเวอร์อีกที)
+    async function saveConfirmMessagePrefs(){
+      return api('/api/confirm-message-prefs',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({showBudgetBar:prefs.confirmShowBudgetBar,showAuthorName:prefs.confirmShowAuthorName,showEditButton:prefs.confirmShowEditButton,showDeleteButton:prefs.confirmShowDeleteButton,theme:prefs.confirmTheme})});
+    }
     function bindSettings(){
       document.querySelectorAll('[data-toggle]').forEach(tg=>tg.onclick=async()=>{
         const id=tg.dataset.toggle;
@@ -546,6 +581,10 @@
         toast(prefs[id]?t('toastOn'):t('toastOff'));
         if(id==='dailyReminder'){
           try{await api('/api/reminder',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({enabled:prefs.dailyReminder,time:prefs.reminderTime})})}
+          catch(e){prefs[id]=!prefs[id];savePrefs();toast(e.message||t('genericError'))}
+        }
+        if(CONFIRM_MSG_TOGGLES.includes(id)){
+          try{await saveConfirmMessagePrefs()}
           catch(e){prefs[id]=!prefs[id];savePrefs();toast(e.message||t('genericError'))}
         }
         render();
@@ -560,6 +599,7 @@
           if(id==='currency')return radioSheet(t('currencySheetTitle'),['บาท (฿)','ดอลลาร์สหรัฐ ($)'],prefs.currency,v=>{prefs.currency=v;savePrefs();toast(t('toastCurrencyChanged'));render()});
           if(id==='timezone')return radioSheet(t('tzSheetTitle'),['Bangkok (GMT+7)','London (GMT+0)','Tokyo (GMT+9)'],prefs.timezone,v=>{prefs.timezone=v;savePrefs();toast(t('toastTzChanged'));render()});
           if(id==='reminderTime')return openReminderTimeSheet();
+          if(id==='confirmTheme')return openConfirmThemeSheet();
           if(id==='recurring')return openRecurringSheet();
           if(id==='plan')return openUpgradeSheet();
           if(id==='billing')return openSettingsSheet('<div class="empty"><span class="emoji">🧾</span>'+esc(t('billingEmpty'))+'</div>',t('billingHeaderTitle'));
@@ -596,6 +636,22 @@
           prefs.reminderTime=time;savePrefs();toast(t('toastReminderSaved'));closeSettingsSheet();render();
         }catch(e){btn.disabled=false;btn.textContent=t('reminderSave');toast(e.message||t('genericError'))}
       };
+    }
+    // แผงเลือกธีมสีการ์ด "จดสำเร็จ" (ฟีเจอร์ Premium เฉพาะกลุ่ม) — โครงเดียวกับ radioSheet แต่เพิ่มวงกลมสีตัวอย่างหน้ารายการ
+    function openConfirmThemeSheet(){
+      if(!subscription.active)return openUpgradeSheet();
+      const html='<div class="radio-list">'+CONFIRM_THEMES.map(x=>{
+        const label=t('theme'+x.id[0].toUpperCase()+x.id.slice(1));
+        return '<div class="radio-item" data-theme-pick="'+x.id+'"><span style="display:flex;align-items:center;gap:10px"><i style="width:18px;height:18px;border-radius:50%;background:'+x.swatch+';flex:none;box-shadow:inset 0 -2px 0 rgba(0,0,0,.15)"></i>'+esc(label)+'</span><span class="radio-dot'+(x.id===prefs.confirmTheme?' checked':'')+'"></span></div>';
+      }).join('')+'</div>';
+      openSettingsSheet(html,t('confirmThemeSheetTitle'));
+      document.querySelectorAll('[data-theme-pick]').forEach(el=>el.onclick=async()=>{
+        const prev=prefs.confirmTheme,next=el.dataset.themePick;
+        if(next===prev)return closeSettingsSheet();
+        prefs.confirmTheme=next;savePrefs();closeSettingsSheet();render();
+        try{await saveConfirmMessagePrefs();toast(t('toastThemeChanged'))}
+        catch(e){prefs.confirmTheme=prev;savePrefs();render();toast(e.message||t('genericError'))}
+      });
     }
     // แผงเลือกช่วงเวลาสำหรับรายงาน PDF (ฟีเจอร์ Premium) — เลือกได้ทั้งรายเดือน (เลือกเดือน+ปี) หรือรายปี (เลือกแค่ปี)
     function openPdfReportSheet(){
@@ -681,11 +737,14 @@
       view.querySelectorAll('.save-budget').forEach(b=>b.onclick=async()=>{const category=b.dataset.category,input=view.querySelector('[data-budget="'+CSS.escape(category)+'"]');b.textContent='…';await api('/api/budgets/'+encodeURIComponent(category),{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({amount:Number(input.value)})});toast(t('budgetSaved')(category));await loadData()});
     }
     async function loadData(){
-      const [reminderPrefs]=await Promise.all([
+      const [reminderPrefs,confirmPrefs]=await Promise.all([
         api('/api/reminder').catch(()=>null),
+        api('/api/confirm-message-prefs').catch(()=>null),
         Promise.all([api('/api/dashboard'),api('/api/transactions').then(x=>x.transactions),api('/api/budgets').then(x=>x.budgets),api('/api/recurring').then(x=>x.recurring).catch(()=>[]),api('/api/subscription').catch(()=>subscription)]).then(r=>{[dashboard,transactions,budgets,recurring,subscription]=r})
       ]);
       if(reminderPrefs){prefs.dailyReminder=Boolean(reminderPrefs.dailyReminder);prefs.reminderTime=reminderPrefs.reminderTime||prefs.reminderTime;savePrefs()}
+      // /api/confirm-message-prefs คืนค่า default เสมอแม้ไม่ใช่กลุ่ม/ไม่ใช่ Premium (ดูฝั่งเซิร์ฟเวอร์) — ใช้ subscription.isGroup คุมว่าจะโชว์เมนูนี้ไหม ไม่ใช่เช็คจาก object นี้
+      if(confirmPrefs){prefs.confirmShowBudgetBar=Boolean(confirmPrefs.showBudgetBar);prefs.confirmShowAuthorName=Boolean(confirmPrefs.showAuthorName);prefs.confirmShowEditButton=Boolean(confirmPrefs.showEditButton);prefs.confirmShowDeleteButton=Boolean(confirmPrefs.showDeleteButton);prefs.confirmTheme=confirmPrefs.theme||'pink';savePrefs()}
       loaded=true;render();
     }
     function categorySuggestions(){
