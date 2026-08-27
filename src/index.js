@@ -136,7 +136,10 @@ const INCOME_WORDS = ["เงินเดือน", "รายรับ", "ร�
 // คำนำหน้าสั้น ๆ ที่หมายถึง "นี่คือรายรับ" เช่น "รับ 30", "+30", "จดรับ30"
 const INCOME_PREFIX = /^(?:\+|รับ)\s*(?=[0-9])|^จดรับ\s*(?=[0-9]|\s)/;
 
-function emptyUser() { return { transactions: [], recurring: [], budgets: {}, dailyReminder: false, reminderTime: "20:00" }; }
+// confirmMessagePrefs: ปรับแต่งการ์ด "จดสำเร็จ" (txFlexMessage) — ฟีเจอร์ Premium เฉพาะแชทกลุ่มเท่านั้น (ดู /api/confirm-message-prefs)
+// ค่า default ทุกตัว = พฤติกรรมเดิมของการ์ด (เปิดหมด, ธีมชมพู) เพื่อไม่กระทบผู้ใช้เก่าที่ยังไม่เคยตั้งค่า
+function defaultConfirmMessagePrefs() { return { showBudgetBar: true, showAuthorName: true, showEditButton: true, showDeleteButton: true, theme: "pink" }; }
+function emptyUser() { return { transactions: [], recurring: [], budgets: {}, dailyReminder: false, reminderTime: "20:00", confirmMessagePrefs: defaultConfirmMessagePrefs() }; }
 async function getUser(uid) {
   const snap = await usersCol.doc(String(uid)).get();
   return snap.exists ? { ...emptyUser(), ...snap.data() } : emptyUser();
@@ -248,13 +251,27 @@ async function reply(token, text) { return replyMessages(token, [{ type: "text",
 async function push(to, message) { const messages = typeof message === "string" ? [{ type: "text", text: message.slice(0, 4900) }] : [message]; return line("push", { to, messages }); }
 function qrImageMessage(url) { return { type: "image", originalContentUrl: url, previewImageUrl: url }; }
 
+// ชุดธีมสีของการ์ด "จดสำเร็จ" — ปรับได้จากหน้าตั้งค่า (ดู /api/confirm-message-prefs), ค่า default คือ "pink" (สีเดิมของการ์ดก่อนมีฟีเจอร์นี้)
+// accent = สีหลัก (แท็กประเภท/ตัวเลขเงิน/แถบงบ), accentSoft = พื้นหลังแท็กหมวดหมู่, accentDeep = สีแถบงบตอนเกินงบ, cream = พื้นหลังการ์ด
+const CONFIRM_MESSAGE_THEMES = {
+  pink: { accent: "#D23283", accentSoft: "#FCE4EF", accentDeep: "#B0225F", cream: "#FBF3EC" },
+  green: { accent: "#4B6A58", accentSoft: "#E7EFE8", accentDeep: "#33493C", cream: "#F3F7F1" },
+  brown: { accent: "#8A5A3B", accentSoft: "#F1E4D8", accentDeep: "#623F29", cream: "#FBF4EC" },
+  gold: { accent: "#A6772E", accentSoft: "#F5ECD9", accentDeep: "#7A5820", cream: "#FBF6EA" },
+  purple: { accent: "#7B5AA6", accentSoft: "#EAE3F5", accentDeep: "#5A3F80", cream: "#F6F3FB" },
+  orange: { accent: "#D2662E", accentSoft: "#FCE6D8", accentDeep: "#A8501F", cream: "#FDF3EC" }
+};
+function confirmMessageTheme(name) { return CONFIRM_MESSAGE_THEMES[name] ?? CONFIRM_MESSAGE_THEMES.pink; }
+
 // การ์ด Flex Message แสดงผลตอนจดรายการสำเร็จ (แทนข้อความ text ธรรมดา)
 // tx: รายการที่เพิ่งบันทึก, opts.budget: { limit, spent } หมวดนี้ในเดือนนี้ (ถ้ามีตั้งงบไว้), opts.dashboardUrl: ลิงก์แก้ไขผ่านเว็บ, opts.userId: เจ้าของบัญชี (ใช้ผูกปุ่มลบ)
+// opts.prefs: confirmMessagePrefs ของ user (ดู defaultConfirmMessagePrefs) — คุมว่าจะโชว์แถบงบ/ชื่อผู้จด/ปุ่มแก้ไข/ปุ่มลบ และธีมสีไหน
+// ไม่ส่ง opts.prefs มา = fallback เป็นค่า default ทั้งหมด (พฤติกรรมเดิมก่อนมีฟีเจอร์นี้ ไม่กระทบ user เก่า)
 function txFlexMessage(tx, opts = {}) {
   const isIncome = tx.type === "income";
   const typeLabel = isIncome ? "รายรับ" : "รายจ่าย";
-  const pink = "#D23283";
-  const cream = "#FBF3EC";
+  const prefs = { ...defaultConfirmMessagePrefs(), ...(opts.prefs ?? {}) };
+  const { accent: pink, accentSoft: pinkSoft, accentDeep: pinkDeep, cream } = confirmMessageTheme(prefs.theme);
   const { budget, dashboardUrl, userId } = opts;
 
   const bodyContents = [
@@ -280,7 +297,7 @@ function txFlexMessage(tx, opts = {}) {
         {
           type: "box",
           layout: "vertical",
-          backgroundColor: "#FCE4EF",
+          backgroundColor: pinkSoft,
           cornerRadius: "12px",
           paddingAll: "6px",
           paddingStart: "10px",
@@ -295,7 +312,7 @@ function txFlexMessage(tx, opts = {}) {
     },
     // ชื่อรายการ
     { type: "text", text: tx.description || typeLabel, size: "md", weight: "bold", color: "#3A3540", margin: "md", wrap: true },
-    tx.authorName ? { type: "text", text: `ผู้จด: ${tx.authorName}`, size: "xs", color: "#9B94A0", margin: "xs" } : null,
+    (prefs.showAuthorName && tx.authorName) ? { type: "text", text: `ผู้จด: ${tx.authorName}`, size: "xs", color: "#9B94A0", margin: "xs" } : null,
     { type: "separator", margin: "lg", color: "#EFE3D8" },
     // จำนวนเงินตัวใหญ่สีชมพู
     {
@@ -309,8 +326,8 @@ function txFlexMessage(tx, opts = {}) {
     }
   ].filter(Boolean);
 
-  // แถบ progress bar เทียบยอดรวม (หมวดนี้/เดือนนี้) กับงบที่ตั้งไว้ — แสดงเฉพาะรายจ่ายที่มีการตั้งงบหมวดนี้
-  if (!isIncome && budget && budget.limit > 0) {
+  // แถบ progress bar เทียบยอดรวม (หมวดนี้/เดือนนี้) กับงบที่ตั้งไว้ — แสดงเฉพาะรายจ่ายที่มีการตั้งงบหมวดนี้ และเปิด showBudgetBar ไว้
+  if (prefs.showBudgetBar && !isIncome && budget && budget.limit > 0) {
     const ratio = Math.min(budget.spent / budget.limit, 1);
     const overBudget = budget.spent > budget.limit;
     bodyContents.push(
@@ -326,7 +343,7 @@ function txFlexMessage(tx, opts = {}) {
             layout: "horizontal",
             contents: [
               { type: "text", text: `งบ${tx.category}เดือนนี้`, size: "xs", color: "#9B94A0", flex: 1 },
-              { type: "text", text: `${money(budget.spent)} / ${money(budget.limit)} บาท`, size: "xs", color: overBudget ? "#D23283" : "#9B94A0", align: "end" }
+              { type: "text", text: `${money(budget.spent)} / ${money(budget.limit)} บาท`, size: "xs", color: overBudget ? pink : "#9B94A0", align: "end" }
             ]
           },
           {
@@ -335,24 +352,24 @@ function txFlexMessage(tx, opts = {}) {
             height: "8px",
             cornerRadius: "4px",
             contents: [
-              { type: "box", layout: "vertical", flex: Math.max(Math.round(ratio * 100), 4), backgroundColor: overBudget ? "#B0225F" : pink, contents: [] },
+              { type: "box", layout: "vertical", flex: Math.max(Math.round(ratio * 100), 4), backgroundColor: overBudget ? pinkDeep : pink, contents: [] },
               { type: "box", layout: "vertical", flex: Math.max(100 - Math.round(ratio * 100), 0), backgroundColor: "#F1E7DC", contents: [] }
             ]
           },
-          overBudget ? { type: "text", text: "เกินงบที่ตั้งไว้แล้วนะ", size: "xxs", color: "#B0225F", margin: "xs" } : null
+          overBudget ? { type: "text", text: "เกินงบที่ตั้งไว้แล้วนะ", size: "xxs", color: pinkDeep, margin: "xs" } : null
         ].filter(Boolean)
       }
     );
   }
 
   const footerButtons = [];
-  if (dashboardUrl) {
+  if (prefs.showEditButton && dashboardUrl) {
     footerButtons.push({ type: "button", style: "secondary", height: "sm", color: "#F1E7DC", action: { type: "uri", label: "แก้ไข", uri: dashboardUrl } });
   }
   // ปุ่ม "ลบ": ยิง postback กลับมาให้บอทลบรายการนี้ทันที (ไม่เปิดเว็บ, ไม่ถามยืนยันซ้ำ)
-  if (userId && tx.id) {
+  if (prefs.showDeleteButton && userId && tx.id) {
     // displayText เว้นว่างไว้ตั้งใจ: กันไม่ให้มีข้อความ "ลบรายการนี้" เด้งขึ้นฝั่งเราเองตอนกด (จะรกแชท)
-    footerButtons.push({ type: "button", style: "secondary", height: "sm", color: "#FCE4EF", action: { type: "postback", label: "ลบ", data: `delete_tx=${tx.id}&u=${encodeURIComponent(userId)}`, displayText: "\u200b" } });
+    footerButtons.push({ type: "button", style: "secondary", height: "sm", color: pinkSoft, action: { type: "postback", label: "ลบ", data: `delete_tx=${tx.id}&u=${encodeURIComponent(userId)}`, displayText: "\u200b" } });
   }
 
   return {
@@ -921,6 +938,17 @@ function reminderInput(body) {
   if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) return null;
   return { dailyReminder: enabled, reminderTime: time };
 }
+// ตั้งค่าการ์ด "จดสำเร็จ" (ดู txFlexMessage/CONFIRM_MESSAGE_THEMES ด้านบน) — ฟีเจอร์ Premium เฉพาะแชทกลุ่ม
+function confirmMessagePrefsInput(body) {
+  if (typeof body?.theme !== "undefined" && !(body.theme in CONFIRM_MESSAGE_THEMES)) return null;
+  return {
+    showBudgetBar: Boolean(body?.showBudgetBar),
+    showAuthorName: Boolean(body?.showAuthorName),
+    showEditButton: Boolean(body?.showEditButton),
+    showDeleteButton: Boolean(body?.showDeleteButton),
+    theme: body?.theme in CONFIRM_MESSAGE_THEMES ? body.theme : "pink"
+  };
+}
 function applyRecurring(user) {
   user.recurring ??= [];
   const now = new Date(), key = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
@@ -972,6 +1000,27 @@ app.put("/api/reminder", express.json(), async (req, res) => {
   }
   user.dailyReminder = input.dailyReminder; user.reminderTime = input.reminderTime;
   await saveUser(uid, user); res.json(input);
+});
+// ปรับแต่งการ์ด "จดสำเร็จ" (แถบงบ/ชื่อผู้จด/ปุ่มแก้ไข/ปุ่มลบ/ธีมสี) — ฟีเจอร์ Premium เฉพาะแชทกลุ่มเท่านั้น (ไม่ใช้กับแชทส่วนตัว 1:1)
+// เหตุผลจำกัดแค่กลุ่ม: การ์ดในแชทส่วนตัวมีแค่เจ้าของคนเดียวเห็น ปรับแต่งไม่ค่อยมีประโยชน์เท่ากลุ่มที่ทุกคนในกลุ่มเห็นการ์ดเดียวกัน
+app.get("/api/confirm-message-prefs", async (req, res) => {
+  if (!allowed(req)) return res.sendStatus(401);
+  const uid = req.query.u;
+  const groupLink = await groupLinkService.getRaw(uid).catch(() => null);
+  const user = await getUser(uid);
+  res.json({ ...defaultConfirmMessagePrefs(), ...(user.confirmMessagePrefs ?? {}), isGroup: Boolean(groupLink) });
+});
+app.put("/api/confirm-message-prefs", express.json(), async (req, res) => {
+  if (!allowed(req)) return res.sendStatus(401);
+  const uid = req.query.u;
+  const groupLink = await groupLinkService.getRaw(uid).catch(() => null);
+  if (!groupLink) return res.status(403).json({ error: "ตั้งค่าข้อความยืนยันใช้ได้เฉพาะแชทกลุ่มเท่านั้น" });
+  // Premium ผูกกับ ownerId ของกลุ่ม ไม่ใช่ groupId เอง (เหมือน /api/subscription และ /dashboard-gate ด้านบน)
+  const premium = await groupLinkService.isPremiumGroup(uid).catch(() => false);
+  if (!premium) return res.status(403).json({ error: "ตั้งค่าข้อความยืนยันเป็นฟีเจอร์ของสมาชิก Premium" });
+  const input = confirmMessagePrefsInput(req.body); if (!input) return res.status(400).json({ error: "ข้อมูลไม่ถูกต้อง" });
+  const user = await getUser(uid); user.confirmMessagePrefs = input;
+  await saveUser(uid, user); res.json({ ...input, isGroup: true });
 });
 app.post("/api/recurring", express.json(), async (req, res) => {
   if (!allowed(req)) return res.sendStatus(401);
@@ -1062,7 +1111,8 @@ app.get("/api/subscription", async (req, res) => {
   const statusUid = groupLink?.ownerId ?? uid;
   const status = await subscriptionService.getStatusView(statusUid).catch(() => ({ plan: PLAN.FREE, active: false }));
   const lineOaLink = process.env.LINE_OA_BASIC_ID ? `https://line.me/R/ti/p/${encodeURIComponent(process.env.LINE_OA_BASIC_ID)}` : null;
-  res.json({ ...status, lineOaLink });
+  // isGroup: ให้หน้าเว็บรู้ว่า u นี้คือแชทกลุ่มไหม เพื่อโชว์/ซ่อนเมนู "ข้อความยืนยัน" (ฟีเจอร์เฉพาะกลุ่ม ดู /api/confirm-message-prefs)
+  res.json({ ...status, lineOaLink, isGroup: Boolean(groupLink) });
 });
 // สมัคร/ต่ออายุ Premium จากหน้าเว็บ — ใช้ paymentSessionService + qrService ตัวเดียวกับที่ฝั่ง LINE ใช้
 // (ดู lineHandlers.js handleSubscribeCommand) เพื่อให้ session/QR ผูกกับ user เดียวกันไม่ว่าจะสมัครทางไหน
@@ -1218,7 +1268,8 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
           } else {
             const category = decodeURIComponent(params.get("c") ?? ""); // ว่างได้ถ้ากด "ให้ยายเลือกให้" หรือเป็นรายรับ (ไม่มี c เลย)
             const { user, tx } = await saveConfirmedSlipTx({ userId: pbUserId, type, merchant, amount, category, authorId, isGroupChat: pbIsGroupChat });
-            message = txFlexMessage(tx, { budget: budgetProgressFor(user, tx), dashboardUrl: dashboardEditUrl(pbUserId), userId: pbUserId });
+            // confirmMessagePrefs ใช้ได้เฉพาะแชทกลุ่ม (ฟีเจอร์ Premium ของกลุ่ม) — 1:1 ใช้ default เสมอ ถึงแม้ user.confirmMessagePrefs จะมีค่าค้างอยู่ก็ตาม
+            message = txFlexMessage(tx, { budget: budgetProgressFor(user, tx), dashboardUrl: dashboardEditUrl(pbUserId), userId: pbUserId, prefs: pbIsGroupChat ? user.confirmMessagePrefs : undefined });
           }
         } catch (error) { console.error("Slip postback confirm failed", error.message); message = "เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง"; }
         try { await (typeof message === "string" ? reply(event.replyToken, message) : replyMessages(event.replyToken, [message])); } catch (error) { console.error("Could not reply", error.message); }
@@ -1381,7 +1432,8 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
         tx = await enrichWithAi(tx, text, ambiguous);
         if (isGroupChat) tx = { ...tx, authorId, authorName: await getGroupMemberName(userId, authorId) };
         user.transactions.push(tx); await saveUser(userId, user);
-        message = txFlexMessage(tx, { budget: budgetProgressFor(user, tx), dashboardUrl: dashboardEditUrl(userId), userId });
+        // confirmMessagePrefs ใช้ได้เฉพาะแชทกลุ่ม (ฟีเจอร์ Premium ของกลุ่ม) — 1:1 ใช้ default เสมอ ถึงแม้ user.confirmMessagePrefs จะมีค่าค้างอยู่ก็ตาม
+        message = txFlexMessage(tx, { budget: budgetProgressFor(user, tx), dashboardUrl: dashboardEditUrl(userId), userId, prefs: isGroupChat ? user.confirmMessagePrefs : undefined });
       }
       else {
         const aiAnswer = await askFinanceAi(user, text);
@@ -1392,6 +1444,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
   }
 });
 app.listen(Number(process.env.PORT ?? 3000), () => console.log(`Ta Phin listening on ${process.env.PORT ?? 3000}`));
+
 
 
 
