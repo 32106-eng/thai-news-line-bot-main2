@@ -854,6 +854,7 @@ cron.schedule("* * * * *", () => { pushDailyReminders().catch((error) => console
 
 const dashboard = await fs.readFile(path.join(__dirname, "dashboard.html"), "utf8");
 const confirmMessagePage = await fs.readFile(path.join(__dirname, "confirm-message.html"), "utf8");
+const proPage = await fs.readFile(path.join(__dirname, "pro.html"), "utf8");
 
 app.get("/health", (_req, res) => res.json({ ok: true, app: "pa-nuan" }));
 
@@ -918,6 +919,7 @@ app.get("/dashboard-gate", async (req, res) => {
 });
 app.get("/dashboard", (req, res) => allowed(req) ? res.type("html").send(dashboard) : res.sendStatus(401));
 app.get("/confirm-message", (req, res) => allowed(req) ? res.type("html").send(confirmMessagePage) : res.sendStatus(401));
+app.get("/pro", (req, res) => allowed(req) ? res.type("html").send(proPage) : res.sendStatus(401));
 function transactionInput(body) {
   const type = body?.type === "income" ? "income" : body?.type === "expense" ? "expense" : null;
   const description = String(body?.description ?? "").trim().slice(0, 120);
