@@ -19,6 +19,7 @@ import { createUploadSessionService } from "./subscription/uploadSessions.js";
 import { createPaymentTransactionService, TX_STATUS } from "./subscription/paymentTransactions.js";
 import { getPaymentProvider } from "./subscription/paymentProvider.js";
 import { createQrService } from "./subscription/qr.js";
+import { generateReportPdf } from "./reports/pdfReport.js";
 import { readSlip } from "./subscription/ocr.js";
 import { createRichMenuService } from "./subscription/richMenu.js";
 import { createSubscriptionLineHandlers } from "./subscription/lineHandlers.js";
@@ -1009,6 +1010,45 @@ app.get("/api/transactions/export", async (req, res) => {
   const user = await getUser(req.query.u), quote = (value) => `"${String(value).replaceAll('"', '""')}"`;
   const csv = ["วันที่,ประเภท,รายการ,หมวดหมู่,จำนวนเงิน", ...user.transactions.map((tx) => [new Date(tx.createdAt).toLocaleString("th-TH", { timeZone: "Asia/Bangkok" }), tx.type === "income" ? "รายรับ" : "รายจ่าย", tx.description, tx.category, tx.amount].map(quote).join(","))].join("\n");
   res.set({ "content-type": "text/csv; charset=utf-8", "content-disposition": "attachment; filename=pa-nuan-transactions.csv" }).send(`\uFEFF${csv}`);
+});
+// รายงาน PDF สรุปรายเดือน/รายปี — ฟีเจอร์ Premium เท่านั้น (ต่างจาก CSV export ด้านบนที่ใช้ได้ทุกคน)
+// ต้องเช็คสิทธิ์ Premium แบบเดียวกับ /api/subscription ด้านล่าง (รองรับทั้ง userId เดี่ยวและ groupId ที่ผูกกับ ownerId)
+// query params: period=month|year (default month), year=YYYY (default ปีปัจจุบัน), month=1-12 (จำเป็นถ้า period=month, default เดือนปัจจุบัน)
+app.get("/api/reports/pdf", async (req, res) => {
+  if (!allowed(req)) return res.sendStatus(401);
+  const uid = req.query.u;
+  const groupLink = await groupLinkService.getRaw(uid).catch(() => null);
+  const statusUid = groupLink?.ownerId ?? uid;
+  const isPremium = await subscriptionService.isPremium(statusUid).catch(() => false);
+  if (!isPremium) return res.status(403).json({ error: "premium_required", message: "รายงาน PDF เป็นฟีเจอร์ Premium" });
+
+  const period = req.query.period === "year" ? "year" : "month";
+  const now = new Date();
+  const year = Number(req.query.year) || now.getFullYear();
+  const month = period === "month" ? (Number(req.query.month) || now.getMonth() + 1) : undefined;
+  if (!Number.isInteger(year) || year < 2000 || year > 2100) return res.status(400).json({ error: "invalid_year" });
+  if (period === "month" && (!Number.isInteger(month) || month < 1 || month > 12)) return res.status(400).json({ error: "invalid_month" });
+
+  const user = await getUser(uid);
+  const inRange = (tx) => {
+    const d = new Date(tx.createdAt);
+    if (Number.isNaN(d.getTime())) return false;
+    return period === "year" ? d.getFullYear() === year : (d.getFullYear() === year && d.getMonth() + 1 === month);
+  };
+  const transactions = (user.transactions ?? []).filter(inRange);
+  const isGroupChat = Boolean(groupLink);
+  const ownerLabel = isGroupChat ? "กองกลางของกลุ่ม" : null; // ไม่ดึงชื่อผู้ใช้จริงมาโชว์ในรายงาน กันข้อมูลส่วนตัวรั่วถ้าไฟล์ถูกส่งต่อ
+
+  try {
+    const pdfBuffer = await generateReportPdf({ period, year, month, transactions, budgets: user.budgets ?? {}, ownerLabel });
+    const filename = period === "year" ? `pa-nuan-report-${year}.pdf` : `pa-nuan-report-${year}-${String(month).padStart(2, "0")}.pdf`;
+    res.set({ "content-type": "application/pdf", "content-disposition": `attachment; filename=${filename}` }).send(pdfBuffer);
+  } catch (error) {
+    console.error("PDF report generation failed:", error.message);
+    // ข้อความ error นี้อาจมาจาก assertFontsReady() (ยังไม่ได้วางไฟล์ฟอนต์) หรือ pdfkit ล้มเหลวด้วยเหตุอื่น — log เต็มไว้ฝั่งเซิร์ฟเวอร์
+    // แต่ตอบกลับ client แบบสั้น ๆ พอ ไม่ควรโชว์ path ไฟล์ภายในเซิร์ฟเวอร์ให้ client เห็นตรง ๆ
+    res.status(500).json({ error: "pdf_generation_failed", message: "สร้างรายงาน PDF ไม่สำเร็จ กรุณาลองใหม่อีกครั้ง" });
+  }
 });
 // สถานะสมาชิก Premium จริงจาก DB (ไม่เชื่อ client) — ใช้แสดงในหน้าตั้งค่าของ dashboard.html
 app.get("/api/subscription", async (req, res) => {
