@@ -136,7 +136,7 @@ const INCOME_WORDS = ["เงินเดือน", "รายรับ", "ร�
 // คำนำหน้าสั้น ๆ ที่หมายถึง "นี่คือรายรับ" เช่น "รับ 30", "+30", "จดรับ30"
 const INCOME_PREFIX = /^(?:\+|รับ)\s*(?=[0-9])|^จดรับ\s*(?=[0-9]|\s)/;
 
-// confirmMessagePrefs: ปรับแต่งการ์ด "จดสำเร็จ" (txFlexMessage) — ฟีเจอร์ Premium เฉพาะแชทกลุ่มเท่านั้น (ดู /api/confirm-message-prefs)
+// confirmMessagePrefs: ปรับแต่งการ์ด "จดสำเร็จ" (txFlexMessage) — ฟีเจอร์ Premium ใช้ได้ทั้งกลุ่มและแชทส่วนตัว 1:1 (ดู /api/confirm-message-prefs)
 // ค่า default ทุกตัว = พฤติกรรมเดิมของการ์ด (เปิดหมด, ธีมชมพู) เพื่อไม่กระทบผู้ใช้เก่าที่ยังไม่เคยตั้งค่า
 function defaultConfirmMessagePrefs() { return { showBudgetBar: true, showAuthorName: true, showEditButton: true, showDeleteButton: true, theme: "pink" }; }
 function emptyUser() { return { transactions: [], recurring: [], budgets: {}, dailyReminder: false, reminderTime: "20:00", confirmMessagePrefs: defaultConfirmMessagePrefs() }; }
@@ -853,6 +853,7 @@ async function pushDailyReminders() {
 cron.schedule("* * * * *", () => { pushDailyReminders().catch((error) => console.error("Daily reminder job failed:", error.message)); }, { timezone: "Asia/Bangkok" });
 
 const dashboard = await fs.readFile(path.join(__dirname, "dashboard.html"), "utf8");
+const confirmMessagePage = await fs.readFile(path.join(__dirname, "confirm-message.html"), "utf8");
 
 app.get("/health", (_req, res) => res.json({ ok: true, app: "pa-nuan" }));
 
@@ -916,6 +917,7 @@ app.get("/dashboard-gate", async (req, res) => {
   res.type("html").send(adInterstitial({ nextUrl: `/dashboard${query}`, waitSeconds }));
 });
 app.get("/dashboard", (req, res) => allowed(req) ? res.type("html").send(dashboard) : res.sendStatus(401));
+app.get("/confirm-message", (req, res) => allowed(req) ? res.type("html").send(confirmMessagePage) : res.sendStatus(401));
 function transactionInput(body) {
   const type = body?.type === "income" ? "income" : body?.type === "expense" ? "expense" : null;
   const description = String(body?.description ?? "").trim().slice(0, 120);
@@ -1001,26 +1003,35 @@ app.put("/api/reminder", express.json(), async (req, res) => {
   user.dailyReminder = input.dailyReminder; user.reminderTime = input.reminderTime;
   await saveUser(uid, user); res.json(input);
 });
-// ปรับแต่งการ์ด "จดสำเร็จ" (แถบงบ/ชื่อผู้จด/ปุ่มแก้ไข/ปุ่มลบ/ธีมสี) — ฟีเจอร์ Premium เฉพาะแชทกลุ่มเท่านั้น (ไม่ใช้กับแชทส่วนตัว 1:1)
-// เหตุผลจำกัดแค่กลุ่ม: การ์ดในแชทส่วนตัวมีแค่เจ้าของคนเดียวเห็น ปรับแต่งไม่ค่อยมีประโยชน์เท่ากลุ่มที่ทุกคนในกลุ่มเห็นการ์ดเดียวกัน
+// ปรับแต่งการ์ด "จดสำเร็จ" (แถบงบ/ชื่อผู้จด/ปุ่มแก้ไข/ปุ่มลบ/ธีมสี) — ฟีเจอร์ Premium ใช้ได้ทั้งแชทกลุ่มและแชทส่วนตัว 1:1
+// (เดิมจำกัดแค่กลุ่มเพราะคิดว่าแชทส่วนตัวมีแค่เจ้าของคนเดียวเห็นการ์ด เลยไม่มีประโยชน์ — แต่ผู้ใช้ 1:1 ก็อยากปรับธีม/ซ่อนปุ่มเองได้เหมือนกัน
+// ส่วน "ชื่อผู้จด" (showAuthorName) ไม่มีความหมายใน 1:1 เพราะมีคนจดคนเดียวอยู่แล้ว — คุมที่ฝั่ง UI (confirm-message.html) ไม่ต้องคุมที่ backend)
+// isGroup ในผลลัพธ์ยังส่งกลับไปเผื่อ UI อยากรู้ (เช่น จะซ่อนตัวเลือก "ชื่อผู้จด" ถ้าไม่ใช่กลุ่ม)
+async function resolveConfirmMessageAuth(uid) {
+  const groupLink = await groupLinkService.getRaw(uid).catch(() => null);
+  if (groupLink) {
+    // Premium ผูกกับ ownerId ของกลุ่ม ไม่ใช่ groupId เอง (เหมือน /api/subscription และ /dashboard-gate ด้านบน)
+    const premium = await groupLinkService.isPremiumGroup(uid).catch(() => false);
+    return { isGroup: true, premium };
+  }
+  const premium = await subscriptionService.isPremium(uid).catch(() => false);
+  return { isGroup: false, premium };
+}
 app.get("/api/confirm-message-prefs", async (req, res) => {
   if (!allowed(req)) return res.sendStatus(401);
   const uid = req.query.u;
-  const groupLink = await groupLinkService.getRaw(uid).catch(() => null);
+  const { isGroup } = await resolveConfirmMessageAuth(uid);
   const user = await getUser(uid);
-  res.json({ ...defaultConfirmMessagePrefs(), ...(user.confirmMessagePrefs ?? {}), isGroup: Boolean(groupLink) });
+  res.json({ ...defaultConfirmMessagePrefs(), ...(user.confirmMessagePrefs ?? {}), isGroup });
 });
 app.put("/api/confirm-message-prefs", express.json(), async (req, res) => {
   if (!allowed(req)) return res.sendStatus(401);
   const uid = req.query.u;
-  const groupLink = await groupLinkService.getRaw(uid).catch(() => null);
-  if (!groupLink) return res.status(403).json({ error: "ตั้งค่าข้อความยืนยันใช้ได้เฉพาะแชทกลุ่มเท่านั้น" });
-  // Premium ผูกกับ ownerId ของกลุ่ม ไม่ใช่ groupId เอง (เหมือน /api/subscription และ /dashboard-gate ด้านบน)
-  const premium = await groupLinkService.isPremiumGroup(uid).catch(() => false);
+  const { isGroup, premium } = await resolveConfirmMessageAuth(uid);
   if (!premium) return res.status(403).json({ error: "ตั้งค่าข้อความยืนยันเป็นฟีเจอร์ของสมาชิก Premium" });
   const input = confirmMessagePrefsInput(req.body); if (!input) return res.status(400).json({ error: "ข้อมูลไม่ถูกต้อง" });
   const user = await getUser(uid); user.confirmMessagePrefs = input;
-  await saveUser(uid, user); res.json({ ...input, isGroup: true });
+  await saveUser(uid, user); res.json({ ...input, isGroup });
 });
 app.post("/api/recurring", express.json(), async (req, res) => {
   if (!allowed(req)) return res.sendStatus(401);
@@ -1268,8 +1279,8 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
           } else {
             const category = decodeURIComponent(params.get("c") ?? ""); // ว่างได้ถ้ากด "ให้ยายเลือกให้" หรือเป็นรายรับ (ไม่มี c เลย)
             const { user, tx } = await saveConfirmedSlipTx({ userId: pbUserId, type, merchant, amount, category, authorId, isGroupChat: pbIsGroupChat });
-            // confirmMessagePrefs ใช้ได้เฉพาะแชทกลุ่ม (ฟีเจอร์ Premium ของกลุ่ม) — 1:1 ใช้ default เสมอ ถึงแม้ user.confirmMessagePrefs จะมีค่าค้างอยู่ก็ตาม
-            message = txFlexMessage(tx, { budget: budgetProgressFor(user, tx), dashboardUrl: dashboardEditUrl(pbUserId), userId: pbUserId, prefs: pbIsGroupChat ? user.confirmMessagePrefs : undefined });
+            // confirmMessagePrefs ใช้ได้ทั้งกลุ่มและแชทส่วนตัว (ฟีเจอร์ Premium) — ผู้ใช้ที่ไม่เคยตั้งค่าจะได้ default เดิมอยู่แล้ว (ดู defaultConfirmMessagePrefs)
+            message = txFlexMessage(tx, { budget: budgetProgressFor(user, tx), dashboardUrl: dashboardEditUrl(pbUserId), userId: pbUserId, prefs: user.confirmMessagePrefs });
           }
         } catch (error) { console.error("Slip postback confirm failed", error.message); message = "เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง"; }
         try { await (typeof message === "string" ? reply(event.replyToken, message) : replyMessages(event.replyToken, [message])); } catch (error) { console.error("Could not reply", error.message); }
@@ -1432,8 +1443,8 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
         tx = await enrichWithAi(tx, text, ambiguous);
         if (isGroupChat) tx = { ...tx, authorId, authorName: await getGroupMemberName(userId, authorId) };
         user.transactions.push(tx); await saveUser(userId, user);
-        // confirmMessagePrefs ใช้ได้เฉพาะแชทกลุ่ม (ฟีเจอร์ Premium ของกลุ่ม) — 1:1 ใช้ default เสมอ ถึงแม้ user.confirmMessagePrefs จะมีค่าค้างอยู่ก็ตาม
-        message = txFlexMessage(tx, { budget: budgetProgressFor(user, tx), dashboardUrl: dashboardEditUrl(userId), userId, prefs: isGroupChat ? user.confirmMessagePrefs : undefined });
+        // confirmMessagePrefs ใช้ได้ทั้งกลุ่มและแชทส่วนตัว (ฟีเจอร์ Premium) — ผู้ใช้ที่ไม่เคยตั้งค่าจะได้ default เดิมอยู่แล้ว (ดู defaultConfirmMessagePrefs)
+        message = txFlexMessage(tx, { budget: budgetProgressFor(user, tx), dashboardUrl: dashboardEditUrl(userId), userId, prefs: user.confirmMessagePrefs });
       }
       else {
         const aiAnswer = await askFinanceAi(user, text);
