@@ -1,3 +1,4 @@
+
 import crypto from "node:crypto";
 import { toDate } from "./db.js";
 import { addMinutes, isExpired } from "../shared/time.js";
@@ -38,9 +39,11 @@ export function createPaymentSessionService({ paymentSessions, FieldValue, db },
     const doc = snap.docs[0];
     const data = { id: doc.id, ...doc.data() };
     if (isExpired(toDate(data.expiresAt))) return null;
-    // ถ้า session เดิมเป็นคนละแผนกับที่ผู้ใช้เพิ่งเลือก (เช่นเปิดค้างไว้เป็นรายเดือนแล้วกลับมาเลือกรายปี)
-    // ต้องสร้างใหม่ตามแผนล่าสุด ไม่งั้นจะเอา QR ราคาเดิมมาโชว์ทับแผนที่เพิ่งกดเลือก ทำให้ยอดเงินไม่ตรงกับที่ผู้ใช้เห็นบนหน้าเว็บ
-  if (data.plan && data.plan !== plan) return null;
+    // เช็คว่า plan ตรงกันเฉพาะตอนที่ผู้เรียกระบุ plan มาจริง ๆ (เช่น createOrReuse ตอนกดเลือกแผนใหม่)
+    // ถ้าไม่ได้ส่ง plan มาเลย (undefined) แปลว่าผู้เรียกแค่ถามว่า "มี session ค้างไหม" ไม่ได้สนใจว่าเป็นแผนไหน
+    // (เช่น handleSendSlipCommand ตอนพิมพ์ "ส่งสลิป" ใน LINE) — ต้องไม่ตัดสิทธิ์ session ที่ยังไม่หมดอายุทิ้งไปเฉย ๆ
+    // บั๊กเดิม: เรียกแบบไม่ส่ง plan แล้วโดน "MONTHLY" !== undefined ตัดสิทธิ์ ทำให้เจอ "ยังไม่มีรายการรอชำระเงิน" ทั้งที่เพิ่งสร้าง QR ไปหมาด ๆ
+    if (plan !== undefined && data.plan && data.plan !== plan) return null;
     return data;
   }
 
