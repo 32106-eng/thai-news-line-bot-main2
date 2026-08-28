@@ -10,7 +10,14 @@ export const SESSION_STATUS = Object.freeze({
 });
 
 const SESSION_TTL_MINUTES = 20;
-const PREMIUM_PRICE_THB = 50;
+// แผนที่ขายได้ตอนนี้: MONTHLY (รายเดือน +1 เดือน) และ YEARLY (รายปี +12 เดือน)
+// ราคา/ระยะเวลาผูกกับ "ชื่อแผน" ไว้ที่จุดเดียวนี้จุดเดียว ห้ามให้ client ส่ง amount มาเอง (ดู checkout ใน index.js)
+export const PLAN_CATALOG = Object.freeze({
+  MONTHLY: { amount: 50, months: 1 },
+  YEARLY: { amount: 370, months: 12 }
+});
+const DEFAULT_PLAN = "MONTHLY";
+const PREMIUM_PRICE_THB = PLAN_CATALOG.MONTHLY.amount; // เก็บไว้เพื่อความเข้ากันได้ย้อนหลังกับโค้ดเดิมที่อ้างชื่อนี้ (เช่น handleSubscribeCommand ฝั่ง LINE ที่ยังขายแค่รายเดือน)
 // กันผู้ใช้กด "สมัครพรีเมียม" รัว ๆ สร้าง session ใหม่ทุกครั้ง — ถ้ามี session ที่ยังไม่หมดอายุอยู่แล้ว ให้ใช้ตัวเดิม
 const REUSE_WINDOW = true;
 
@@ -20,7 +27,7 @@ export function createPaymentSessionService({ paymentSessions, FieldValue, db },
     return `PN${crypto.randomBytes(8).toString("hex").toUpperCase()}`;
   }
 
-  async function findActiveSession(userId) {
+  async function findActiveSession(userId, plan) {
     const snap = await paymentSessions
       .where("userId", "==", userId)
       .where("status", "==", SESSION_STATUS.WAITING_PAYMENT)
@@ -31,12 +38,16 @@ export function createPaymentSessionService({ paymentSessions, FieldValue, db },
     const doc = snap.docs[0];
     const data = { id: doc.id, ...doc.data() };
     if (isExpired(toDate(data.expiresAt))) return null;
+    // ถ้า session เดิมเป็นคนละแผนกับที่ผู้ใช้เพิ่งเลือก (เช่นเปิดค้างไว้เป็นรายเดือนแล้วกลับมาเลือกรายปี)
+    // ต้องสร้างใหม่ตามแผนล่าสุด ไม่งั้นจะเอา QR ราคาเดิมมาโชว์ทับแผนที่เพิ่งกดเลือก ทำให้ยอดเงินไม่ตรงกับที่ผู้ใช้เห็นบนหน้าเว็บ
+  if (data.plan && data.plan !== plan) return null;
     return data;
   }
 
-  /** สร้าง payment session ใหม่ (หรือคืน session เดิมที่ยังไม่หมดอายุ เพื่อกัน double-submit สร้างซ้ำ) */
-  async function createOrReuse(userId) {
-    const existing = REUSE_WINDOW ? await findActiveSession(userId) : null;
+  /** สร้าง payment session ใหม่ (หรือคืน session เดิมที่ยังไม่หมดอายุและแผนเดียวกัน เพื่อกัน double-submit สร้างซ้ำ) */
+  async function createOrReuse(userId, planKey = DEFAULT_PLAN) {
+    const plan = PLAN_CATALOG[planKey] ? planKey : DEFAULT_PLAN;
+    const existing = REUSE_WINDOW ? await findActiveSession(userId, plan) : null;
     if (existing) return { session: existing, reused: true };
 
     const expiresAt = addMinutes(new Date(), SESSION_TTL_MINUTES);
@@ -44,7 +55,9 @@ export function createPaymentSessionService({ paymentSessions, FieldValue, db },
     const payload = {
       userId,
       referenceId: referenceId(),
-      amount: PREMIUM_PRICE_THB,
+      plan,
+      months: PLAN_CATALOG[plan].months,
+      amount: PLAN_CATALOG[plan].amount,
       currency: "THB",
       status: SESSION_STATUS.WAITING_PAYMENT,
       expiresAt,
@@ -52,7 +65,7 @@ export function createPaymentSessionService({ paymentSessions, FieldValue, db },
       updatedAt: FieldValue.serverTimestamp()
     };
     await docRef.set(payload);
-    await auditLog({ userId, eventType: AUDIT_EVENTS.PAYMENT_SESSION_CREATED, paymentSessionId: docRef.id, metadata: { referenceId: payload.referenceId, amount: PREMIUM_PRICE_THB } });
+    await auditLog({ userId, eventType: AUDIT_EVENTS.PAYMENT_SESSION_CREATED, paymentSessionId: docRef.id, metadata: { referenceId: payload.referenceId, amount: payload.amount, plan } });
     return { session: { id: docRef.id, ...payload, expiresAt }, reused: false };
   }
 
@@ -84,5 +97,5 @@ export function createPaymentSessionService({ paymentSessions, FieldValue, db },
     });
   }
 
-  return { PREMIUM_PRICE_THB, createOrReuse, findActiveSession, getById, validateForUpload, consume };
+  return { PREMIUM_PRICE_THB, PLAN_CATALOG, createOrReuse, findActiveSession, getById, validateForUpload, consume };
 }
