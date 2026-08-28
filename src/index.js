@@ -1133,17 +1133,22 @@ app.get("/api/subscription", async (req, res) => {
 });
 // สมัคร/ต่ออายุ Premium จากหน้าเว็บ — ใช้ paymentSessionService + qrService ตัวเดียวกับที่ฝั่ง LINE ใช้
 // (ดู lineHandlers.js handleSubscribeCommand) เพื่อให้ session/QR ผูกกับ user เดียวกันไม่ว่าจะสมัครทางไหน
-app.post("/api/premium/checkout", async (req, res) => {
+app.post("/api/premium/checkout", express.json(), async (req, res) => {
   if (!allowed(req)) return res.sendStatus(401);
   const uid = req.query.u;
+  // planKey มาจาก body เท่านั้น (ไม่ใช่ amount ตรง ๆ) แล้วให้ paymentSessionService แปลงเป็นราคา/ระยะเวลาเอง
+  // เพื่อไม่ให้ client กำหนดยอดเงินได้เอง — createOrReuse จะ fallback เป็น MONTHLY ถ้าค่าที่ส่งมาไม่รู้จัก
+  const requestedPlan = req.body?.plan === "YEARLY" ? "YEARLY" : "MONTHLY";
   const status = await subscriptionService.getStatusView(uid).catch(() => ({ plan: PLAN.FREE, active: false }));
   if (status.active) return res.json({ alreadyPremium: true, expiresAt: status.expiresAt });
-  const { session } = await paymentSessionService.createOrReuse(uid);
+  const { session } = await paymentSessionService.createOrReuse(uid, requestedPlan);
   const qr = qrService.generateForSession(session);
   if (!qr.available) return res.status(503).json({ error: "ยังไม่พร้อมรับชำระเงิน กรุณาติดต่อผู้ดูแลระบบ", note: qr.note });
   res.json({
     sessionId: session.id,
     referenceId: session.referenceId,
+    plan: session.plan ?? requestedPlan,
+    months: session.months ?? (requestedPlan === "YEARLY" ? 12 : 1),
     amount: session.amount,
     expiresAt: session.expiresAt,
     qrImageUrl: `/qr/${session.id}.png`
@@ -1461,6 +1466,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
   }
 });
 app.listen(Number(process.env.PORT ?? 3000), () => console.log(`Ta Phin listening on ${process.env.PORT ?? 3000}`));
+
 
 
 
