@@ -331,13 +331,20 @@
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ sessionId: s.sessionId, mime: picked.type, base64 })
         });
-        const tone = result.outcome === 'VERIFIED' ? 'sage' : (result.outcome === 'REJECTED' || result.outcome === 'DUPLICATE' ? 'error' : '');
-        statusEl.innerHTML = `<div class="notice ${tone}">${esc(result.message)}</div>`;
-        toast(result.message);
-        if (result.outcome === 'VERIFIED' || result.outcome === 'PENDING_REVIEW') {
+        if (result.outcome === 'VERIFIED') {
           checkoutSession = null;
-          setTimeout(load, 1400);
+          submitBtn.disabled = false;
+          submitBtn.textContent = 'ส่งสลิปเพื่อตรวจสอบ';
+          await load(); // ดึงสถานะ active/expiresAt จริงจากเซิร์ฟเวอร์ (verify แล้วจริง ๆ ต่างจาก PENDING_REVIEW ที่ /api/subscription ยังไม่รู้จัก)
+        } else if (result.outcome === 'PENDING_REVIEW') {
+          checkoutSession = null;
+          submitBtn.disabled = false;
+          submitBtn.textContent = 'ส่งสลิปเพื่อตรวจสอบ';
+          renderPendingReview(result.message);
         } else {
+          const tone = (result.outcome === 'REJECTED' || result.outcome === 'DUPLICATE') ? 'error' : '';
+          statusEl.innerHTML = `<div class="notice ${tone}">${esc(result.message)}</div>`;
+          toast(result.message);
           submitBtn.disabled = false;
           submitBtn.textContent = 'ส่งสลิปเพื่อตรวจสอบ';
         }
@@ -347,6 +354,27 @@
         submitBtn.textContent = 'ส่งสลิปเพื่อตรวจสอบ';
       }
     };
+  }
+
+  // สลิปทุกใบต้องผ่านการตรวจสอบด้วยคนเสมอ (ยังไม่มี payment provider จริงที่ verify อัตโนมัติได้ — ดู paymentTransactions.js)
+  // ดังนั้นเกือบทุกครั้งผลลัพธ์คือ PENDING_REVIEW ไม่ใช่ VERIFIED — ต้องมีหน้าของตัวเองที่บอกสถานะนี้ชัดเจน
+  // ห้าม reload หน้าแล้วหวังให้ /api/subscription บอกสถานะ pending ให้ เพราะ endpoint นั้นรู้แค่ active/ไม่active เท่านั้น
+  // ไม่รู้จักสถานะ "รอตรวจสอบ" เลย — ถ้า reload ตอนนี้หน้าจะเด้งกลับไปหน้าขาย Pro เหมือนไม่มีอะไรเกิดขึ้น ทำให้ดูเหมือนค้าง
+  function renderPendingReview(message){
+    document.getElementById('topLabel').textContent = 'รอตรวจสอบ';
+    document.getElementById('root').innerHTML = `
+      <div class="hero fade-in">
+        <div class="seal-wrap"><div class="seal">จ</div></div>
+        <p class="eyebrow">ส่งสลิปแล้ว</p>
+        <h1>รอยายจันทร์<br><em>ตรวจสอบ</em>สักครู่</h1>
+        <p>${esc(message || 'ได้รับสลิปแล้ว ระบบกำลังตรวจสอบเพิ่มเติม เจ้าหน้าที่จะยืนยันให้เร็วที่สุด')}</p>
+      </div>
+      <div class="notice sage">เมื่อตรวจสอบเสร็จ ยายจันทร์จะทักแจ้งในแชท LINE ให้เอง ไม่ต้องรีเฟรชหน้านี้ค้างไว้</div>
+      <div class="actionbar">
+        <button class="secondary" id="backToDashboardBtn">กลับไปแดชบอร์ด</button>
+      </div>
+    `;
+    document.getElementById('backToDashboardBtn').onclick = () => { location.href = '/dashboard' + query; };
   }
 
   function fileToBase64(file){
