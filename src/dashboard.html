@@ -5,34 +5,43 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <title>ยายจันทร์ — สมุดบัญชี</title>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20,500,0,0" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+Thai:wght@600;800&family=Noto+Sans+Thai:wght@400;600;700;800&display=swap">
   <style>
-    @font-face{font-family:"Noto Sans Thai";font-display:swap}
     :root{
-      --paper:#f6f3ee;--card:#fffdfa;--ink:#231f1a;--ink-soft:#6b6258;--line:#e4ddd2;--line-soft:#eee8de;
-      --wine:#7a2b3d;--wine-deep:#5c1f2d;--wine-soft:#f3e5e6;
+      --paper:#F5F0E4;--paper-deep:#EDE5D3;--card:#FFFDFA;--ink:#241E19;--ink-soft:#7A6F62;--line:#E1D8C6;--line-soft:#EEE6D6;
+      --wine:#7A2B3D;--wine-deep:#4E1A26;--wine-soft:#F3E5E6;
       --sage:#4b6a58;--sage-soft:#e7efe8;
-      --gold:#a6772e;--gold-soft:#f5ecd9;
-      --shadow:0 1px 2px rgba(35,31,26,.04),0 8px 24px -12px rgba(35,31,26,.12);
-      --radius:16px;--radius-sm:10px;
+      --gold:#A87C2E;--gold-deep:#7A5A1E;--gold-shine:#E4C170;--gold-soft:#F6ECD3;
+      --shadow:0 1px 2px rgba(36,30,25,.05),0 10px 28px -14px rgba(36,30,25,.22);
+      --shadow-lift:0 4px 10px rgba(36,30,25,.08),0 22px 44px -20px rgba(36,30,25,.32);
+      --radius:17px;--radius-sm:11px;
+      --ease:cubic-bezier(.22,1,.36,1);--ease-spring:cubic-bezier(.34,1.56,.64,1);
     }
     *{box-sizing:border-box}
     ::selection{background:var(--wine-soft);color:var(--wine-deep)}
-    body{margin:0;background:var(--paper);color:var(--ink);font-family:"Noto Sans Thai",system-ui,-apple-system,sans-serif;-webkit-font-smoothing:antialiased}
+    body{margin:0;background:var(--paper);color:var(--ink);font-family:"Noto Sans Thai",system-ui,-apple-system,sans-serif;-webkit-font-smoothing:antialiased;
+      /* paper-grain: SVG fractal noise เป็น data-URI ไม่พึ่งไฟล์ภาพนอก ให้พื้นหลังมีผิวสัมผัสกระดาษจาง ๆ แทนสีตันแบน ๆ */
+      background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E")}
     .num{font-variant-numeric:tabular-nums;letter-spacing:-.01em}
-    .app{max-width:560px;min-height:100vh;margin:auto;background:var(--paper);padding:0 0 108px;position:relative}
+    .serif{font-family:"Noto Serif Thai","Noto Sans Thai",serif}
+    .app{max-width:560px;min-height:100vh;margin:auto;background:transparent;padding:0 0 108px;position:relative}
 
-    .top{position:sticky;top:0;z-index:5;background:var(--paper);padding:22px 20px 14px;display:flex;justify-content:space-between;align-items:flex-start;border-bottom:1px solid transparent;transition:border-color .25s,box-shadow .25s}
-    .top.scrolled{border-color:var(--line);box-shadow:0 4px 14px -10px rgba(35,31,26,.35)}
+    .top{position:sticky;top:0;z-index:5;background:var(--paper);padding:22px 20px 14px;display:flex;justify-content:space-between;align-items:flex-start;border-bottom:1px solid transparent;transition:border-color .25s,box-shadow .25s,background .25s}
+    .top.scrolled{border-color:var(--line);box-shadow:0 4px 14px -10px rgba(36,30,25,.35);background:rgba(245,240,228,.92);backdrop-filter:blur(10px) saturate(1.1)}
     .brandmark{display:flex;align-items:center;gap:11px}
-    .seal{width:38px;height:38px;border-radius:50%;background:var(--wine);color:#fff;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:700;flex:none;box-shadow:inset 0 -2px 0 rgba(0,0,0,.15);transition:transform .5s cubic-bezier(.22,1,.36,1)}
+    .seal{width:40px;height:40px;border-radius:50%;background:radial-gradient(circle at 32% 28%,#8c3549,var(--wine) 55%,var(--wine-deep) 100%);color:#fff;display:flex;align-items:center;justify-content:center;font-size:17px;font-weight:800;flex:none;box-shadow:inset 0 -3px 0 rgba(0,0,0,.18),inset 0 2px 2px rgba(255,255,255,.18),0 3px 8px -2px rgba(122,43,61,.5);transition:transform .5s var(--ease);position:relative;font-family:"Noto Serif Thai",serif}
+    .seal::after{content:"";position:absolute;inset:-4px;border-radius:50%;border:1px solid var(--gold-shine);opacity:0;transition:opacity .3s,transform .3s}
     .seal.spin{transform:rotate(360deg)}
-    .brand{font-size:19px;font-weight:800;letter-spacing:-.01em;line-height:1.1}
+    .seal.stamp::after{opacity:1;animation:ring-pulse .6s var(--ease) both}
+    @keyframes ring-pulse{from{transform:scale(.7);opacity:.9}to{transform:scale(1.35);opacity:0}}
+    .brand{font-size:19px;font-weight:800;letter-spacing:-.01em;line-height:1.1;font-family:"Noto Serif Thai",serif}
     .sub{font-size:12px;color:var(--ink-soft);margin-top:2px}
     .status{font-size:11px;color:var(--sage);display:flex;align-items:center;gap:5px;font-weight:600;padding-top:9px}
     .status .dot{width:6px;height:6px;border-radius:50%;background:var(--sage);box-shadow:0 0 0 3px var(--sage-soft)}
 
     section#view{padding:4px 20px 0}
-    .view-title{font-size:25px;margin:14px 0 3px;font-weight:800;letter-spacing:-.015em}
+    .view-title{font-size:26px;margin:14px 0 3px;font-weight:800;letter-spacing:-.015em;font-family:"Noto Serif Thai",serif}
     .lead{margin:0 0 18px;color:var(--ink-soft);font-size:13.5px}
 
     .ptr{display:flex;align-items:center;justify-content:center;height:0;overflow:hidden;color:var(--ink-soft);font-size:12px;gap:7px;transition:height .18s ease}
@@ -40,21 +49,27 @@
     .ptr .spinner{width:14px;height:14px;border-radius:50%;border:2px solid var(--line);border-top-color:var(--wine);animation:spin .7s linear infinite}
     @keyframes spin{to{transform:rotate(360deg)}}
 
-    .ledger{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden;margin-bottom:16px}
+    /* ledger: การ์ดสรุปยอดหลัก ทำให้ดูเหมือนปกสมุดบัญชีเก่ามีขอบทองประดับ ไม่ใช่การ์ดแบนทั่วไป */
+    .ledger{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden;margin-bottom:16px;position:relative}
     .ledger-row{display:flex;align-items:center;justify-content:space-between;padding:15px 18px;position:relative}
     .ledger-row+.ledger-row{border-top:1px dashed var(--line-soft)}
     .ledger-row .k{font-size:13px;color:var(--ink-soft);display:flex;align-items:center;gap:8px}
     .ledger-row .k i{width:7px;height:7px;border-radius:2px;display:inline-block}
     .ledger-row .v{font-size:19px;font-weight:800}
-    .ledger-row.balance{background:var(--wine);color:#fff}
+    .ledger-row.balance{background:linear-gradient(150deg,var(--wine) 0%,var(--wine-deep) 120%);color:#fff;position:relative;overflow:hidden}
+    .ledger-row.balance::before{content:"";position:absolute;inset:0;background:
+      radial-gradient(circle at 88% -10%,rgba(228,193,112,.35),transparent 55%);pointer-events:none}
+    .ledger-row.balance::after{content:"";position:absolute;left:0;right:0;bottom:0;height:3px;
+      background:linear-gradient(90deg,transparent,var(--gold-shine) 20%,var(--gold-shine) 80%,transparent)}
     .ledger-row.balance .k{color:#f3d8de}
-    .ledger-row.balance .v{font-size:23px}
+    .ledger-row.balance .v{font-size:25px;font-family:"Noto Serif Thai",serif;position:relative}
     .income .v{color:var(--sage)}
     .expense .v{color:var(--wine)}
 
     .cards{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;margin-bottom:18px}
-    .card{border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--card);padding:12px 11px;box-shadow:var(--shadow);transition:transform .15s}
+    .card{border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--card);padding:12px 11px;box-shadow:var(--shadow);transition:transform .2s var(--ease-spring),box-shadow .2s}
     .card:active{transform:scale(.96)}
+    @media(hover:hover){.card:hover{box-shadow:var(--shadow-lift);transform:translateY(-1px)}}
     .card small{display:block;color:var(--ink-soft);font-size:11px;font-weight:600}
     .card strong{display:block;margin-top:6px;font-size:15px}
 
@@ -64,20 +79,20 @@
     .chart-row,.row{display:flex;align-items:center;justify-content:space-between;gap:12px}
     .chart-row{margin:11px 0;font-size:13px}
     .bar{height:7px;border-radius:99px;background:var(--line-soft);overflow:hidden;flex:1}
-    .bar>i{display:block;height:100%;border-radius:99px;background:var(--wine);transform-origin:left;animation:grow .7s cubic-bezier(.22,1,.36,1) both}
+    .bar>i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,var(--wine),var(--wine-deep));transform-origin:left;animation:grow .7s var(--ease) both}
     @keyframes grow{from{transform:scaleX(0)}}
 
     .row{padding:13px 4px;margin:0;cursor:pointer;border-radius:10px;transition:background .15s,transform .1s;border-bottom:1px solid var(--line-soft)}
     .row:last-child{border-bottom:0}
     .row:active{background:var(--wine-soft);transform:scale(.985)}
-    @media(hover:hover){.row:hover{background:#faf6f0}}
+    @media(hover:hover){.row:hover{background:var(--paper-deep)}}
     .row strong{font-size:14.5px;font-weight:700}
     .meta{font-size:11.5px;color:var(--ink-soft);margin-top:3px}
     .amount{white-space:nowrap;font-weight:800;font-size:14.5px}
     .amount.income{color:var(--sage)}
     .amount.expense{color:var(--wine)}
-    .empty{padding:32px 10px;text-align:center;color:var(--ink-soft);font-size:13.5px}
-    .empty .emoji{font-size:26px;display:block;margin-bottom:8px}
+    .empty{padding:40px 10px;text-align:center;color:var(--ink-soft);font-size:13.5px}
+    .empty .msym{font-size:34px;display:block;margin-bottom:10px;color:var(--line);opacity:.9}
 
     .row-wrap{position:relative;overflow:hidden;border-radius:10px}
     .row-wrap .row-del{position:absolute;inset:0;right:0;width:76px;left:auto;background:var(--wine);color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;border-radius:0 10px 10px 0}
@@ -85,9 +100,9 @@
     .row-wrap.swiped .row{transform:translateX(-76px)}
 
     button{font:inherit;cursor:pointer;-webkit-tap-highlight-color:transparent}
-    .primary,.secondary,.danger{border:0;border-radius:var(--radius-sm);padding:12px 14px;font-weight:700;transition:transform .12s,opacity .12s}
-    .primary{color:#fff;background:var(--wine)}
-    .primary:active{transform:scale(.97)}
+    .primary,.secondary,.danger{border:0;border-radius:var(--radius-sm);padding:12px 14px;font-weight:700;transition:transform .14s var(--ease-spring),opacity .12s,box-shadow .14s}
+    .primary{color:#fff;background:linear-gradient(155deg,var(--wine) 0%,var(--wine-deep) 100%);box-shadow:0 3px 10px -3px rgba(122,43,61,.55)}
+    .primary:active{transform:scale(.96);box-shadow:0 1px 4px -1px rgba(122,43,61,.4)}
     .secondary{color:var(--ink);background:var(--line-soft)}
     .secondary:active{transform:scale(.97)}
     .danger{color:#8a2a2a;background:#fbeceb}
@@ -105,33 +120,35 @@
     .budget-bar>i{display:block;height:100%;border-radius:99px;background:var(--sage);transition:width .5s cubic-bezier(.22,1,.36,1)}
     .budget-bar.over>i{background:var(--wine)}
 
-    .nav{position:fixed;left:50%;bottom:0;transform:translateX(-50%);display:flex;justify-content:space-around;width:min(560px,100%);padding:7px max(8px,calc((100vw - 560px)/2 + 8px)) calc(7px + env(safe-area-inset-bottom));background:var(--card);border-top:1px solid var(--line);z-index:4}
-    .nav button{border:0;background:transparent;color:#a39a8d;font-size:10.5px;padding:6px 4px;min-width:54px;border-radius:10px;transition:color .15s}
-    .nav i{display:block;font-style:normal;font-size:20px;line-height:23px;transition:transform .15s}
+    .nav{position:fixed;left:50%;bottom:0;transform:translateX(-50%);display:flex;justify-content:space-around;width:min(560px,100%);padding:7px max(8px,calc((100vw - 560px)/2 + 8px)) calc(7px + env(safe-area-inset-bottom));background:rgba(255,253,250,.92);backdrop-filter:blur(12px) saturate(1.15);border-top:1px solid var(--line);z-index:4}
+    .nav button{border:0;background:transparent;color:#a89d8b;font-size:10.5px;padding:6px 4px;min-width:54px;border-radius:10px;transition:color .15s;position:relative}
+    .nav .msym{display:block;font-size:22px;line-height:23px;transition:transform .2s var(--ease-spring)}
     .nav button.active{color:var(--wine);font-weight:800}
-    .nav button.active i{transform:translateY(-1px)}
-    .nav button:active i{transform:scale(.85)}
+    .nav button.active .msym{transform:translateY(-1px) scale(1.05);font-variation-settings:'FILL' 1}
+    .nav button:active .msym{transform:scale(.82)}
+    .nav button.active::before{content:"";position:absolute;top:1px;left:50%;transform:translateX(-50%);width:20px;height:3px;border-radius:99px;background:var(--gold-shine)}
 
-    .fab{position:fixed;right:max(18px,calc((100vw - 560px)/2 + 18px));bottom:calc(83px + env(safe-area-inset-bottom));width:56px;height:56px;border:0;border-radius:50%;font-size:30px;line-height:1;color:#fff;background:var(--wine);box-shadow:0 8px 20px -4px rgba(122,43,61,.55);z-index:3;transition:transform .15s}
-    .fab:active{transform:scale(.92) rotate(90deg)}
+    .fab{position:fixed;right:max(18px,calc((100vw - 560px)/2 + 18px));bottom:calc(83px + env(safe-area-inset-bottom));width:58px;height:58px;border:0;border-radius:50%;color:#fff;background:linear-gradient(155deg,var(--wine) 0%,var(--wine-deep) 100%);box-shadow:0 10px 24px -6px rgba(122,43,61,.6),inset 0 1px 1px rgba(255,255,255,.2);z-index:3;transition:transform .18s var(--ease-spring);display:flex;align-items:center;justify-content:center}
+    .fab .msym{font-size:26px}
+    .fab:active{transform:scale(.9) rotate(90deg)}
 
-    .modal{position:fixed;inset:0;display:none;align-items:end;background:rgba(35,31,26,.45);z-index:10;backdrop-filter:blur(2px)}
+    .modal{position:fixed;inset:0;display:none;align-items:end;background:rgba(36,30,25,.5);z-index:10;backdrop-filter:blur(3px)}
     .modal.open{display:flex}
-    .modal.open .sheet{animation:sheet-in .28s cubic-bezier(.22,1,.36,1) both}
-    .modal.closing .sheet{animation:sheet-out .18s cubic-bezier(.4,0,1,1) both}
-    @keyframes sheet-in{from{transform:translateY(24px);opacity:0}}
-    @keyframes sheet-out{to{transform:translateY(24px);opacity:0}}
-    .sheet{width:min(560px,100%);border-radius:22px 22px 0 0;background:var(--card);padding:10px 20px calc(20px + env(safe-area-inset-bottom));max-height:88vh;overflow-y:auto}
+    .modal.open .sheet{animation:sheet-in .32s var(--ease) both}
+    .modal.closing .sheet{animation:sheet-out .2s cubic-bezier(.4,0,1,1) both}
+    @keyframes sheet-in{from{transform:translateY(28px);opacity:0}}
+    @keyframes sheet-out{to{transform:translateY(28px);opacity:0}}
+    .sheet{width:min(560px,100%);border-radius:24px 24px 0 0;background:var(--card);padding:10px 20px calc(20px + env(safe-area-inset-bottom));max-height:88vh;overflow-y:auto;box-shadow:0 -20px 50px -20px rgba(36,30,25,.35)}
     .sheet-grip{width:36px;height:4px;border-radius:99px;background:var(--line);margin:0 auto 14px}
-    .sheet h2{margin:0 0 14px;font-size:18px;font-weight:800}
+    .sheet h2{margin:0 0 14px;font-size:19px;font-weight:800;font-family:"Noto Serif Thai",serif}
     .field{margin:12px 0}
     .field label{display:block;font-size:12.5px;margin-bottom:6px;color:var(--ink-soft);font-weight:600}
     .actions{display:flex;gap:8px;margin-top:19px}
     .actions button{flex:1}
     .notice{padding:12px 14px;background:var(--wine-soft);color:var(--wine-deep);border-radius:var(--radius-sm);font-size:13px;line-height:1.5}
     .hidden{display:none!important}
-    .toast{position:fixed;left:50%;bottom:100px;transform:translateX(-50%) translateY(12px);background:var(--ink);color:#fff;padding:11px 18px;border-radius:99px;font-size:13px;font-weight:600;box-shadow:0 8px 20px -6px rgba(0,0,0,.4);opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;z-index:20}
-    .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+    .toast{position:fixed;left:50%;bottom:100px;transform:translateX(-50%) translateY(12px) scale(.96);background:var(--ink);color:#fff;padding:11px 18px;border-radius:99px;font-size:13px;font-weight:600;box-shadow:0 10px 26px -8px rgba(0,0,0,.45);opacity:0;pointer-events:none;transition:opacity .22s var(--ease),transform .22s var(--ease);z-index:20}
+    .toast.show{opacity:1;transform:translateX(-50%) translateY(0) scale(1)}
 
     @media(max-width:380px){.cards{gap:6px}.card{padding:10px}.card strong{font-size:13px}.budget{grid-template-columns:1fr 84px auto}}
     @media(prefers-reduced-motion:reduce){*{animation-duration:.001ms!important;transition-duration:.001ms!important}}
@@ -175,28 +192,29 @@
     .setting-item:last-child{border-bottom:0}
     .setting-item:active{background:var(--wine-soft);margin:0 -10px;padding:13px 12px;border-radius:10px}
     .setting-item .si-main{display:flex;align-items:center;gap:11px}
-    .setting-item .si-icon{width:32px;height:32px;border-radius:9px;background:var(--wine-soft);color:var(--wine);display:flex;align-items:center;justify-content:center;font-size:15px;flex:none}
+    .setting-item .si-icon{width:33px;height:33px;border-radius:10px;background:var(--wine-soft);color:var(--wine);display:flex;align-items:center;justify-content:center;font-size:15px;flex:none}
     .msym{font-family:'Material Symbols Rounded';font-weight:normal;font-style:normal;line-height:1;display:inline-block;white-space:nowrap;word-wrap:normal;direction:ltr;-webkit-font-smoothing:antialiased;font-size:18px}
     .setting-item .si-text strong{display:block;font-size:14px;font-weight:700}
     .setting-item .si-text span{font-size:11.5px;color:var(--ink-soft)}
     .setting-item .si-right{display:flex;align-items:center;gap:6px;color:var(--ink-soft);font-size:12.5px;font-weight:600}
     .chev{font-size:15px;color:#c9beac}
 
-    .toggle{width:42px;height:24px;border-radius:99px;background:var(--line);position:relative;flex:none;transition:background .2s;border:0;padding:0}
-    .toggle::after{content:"";position:absolute;top:2px;left:2px;width:20px;height:20px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.25);transition:transform .2s cubic-bezier(.4,0,.2,1)}
-    .toggle.on{background:var(--sage)}
+    .toggle{width:44px;height:26px;border-radius:99px;background:var(--line);position:relative;flex:none;transition:background .22s var(--ease);border:0;padding:0}
+    .toggle::after{content:"";position:absolute;top:2px;left:2px;width:22px;height:22px;border-radius:50%;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.3);transition:transform .24s var(--ease-spring)}
+    .toggle.on{background:linear-gradient(135deg,var(--sage),#3c5748)}
     .toggle.on::after{transform:translateX(18px)}
 
-    .pro-banner{background:linear-gradient(120deg,var(--wine) 0%,var(--wine-deep) 100%);border-radius:var(--radius);padding:18px;color:#fff;position:relative;overflow:hidden;box-shadow:var(--shadow)}
-    .pro-banner::before{content:"";position:absolute;top:-30px;right:-30px;width:120px;height:120px;border-radius:50%;background:rgba(255,255,255,.08)}
-    .pro-banner .tag{display:inline-flex;align-items:center;gap:5px;background:var(--gold);color:#3a2c0f;font-size:10.5px;font-weight:800;padding:3px 9px;border-radius:99px;letter-spacing:.03em;text-transform:uppercase}
-    .pro-banner h3{margin:10px 0 4px;font-size:17px;font-weight:800}
-    .pro-banner p{margin:0 0 14px;font-size:12.5px;color:#f3d8de;line-height:1.5}
-    .pro-banner button{background:#fff;color:var(--wine-deep);border:0;padding:10px 16px;border-radius:var(--radius-sm);font-weight:800;font-size:13px}
-    .pro-banner button:active{transform:scale(.96)}
+    .pro-banner{background:linear-gradient(150deg,var(--wine) 0%,var(--wine-deep) 120%);border-radius:var(--radius);padding:20px;color:#fff;position:relative;overflow:hidden;box-shadow:var(--shadow-lift)}
+    .pro-banner::before{content:"";position:absolute;top:-30px;right:-30px;width:130px;height:130px;border-radius:50%;background:radial-gradient(circle,rgba(228,193,112,.28),transparent 70%)}
+    .pro-banner::after{content:"";position:absolute;left:0;right:0;bottom:0;height:3px;background:linear-gradient(90deg,transparent,var(--gold-shine) 20%,var(--gold-shine) 80%,transparent)}
+    .pro-banner .tag{display:inline-flex;align-items:center;gap:5px;background:linear-gradient(135deg,var(--gold-shine),var(--gold));color:#3a2c0f;font-size:10.5px;font-weight:800;padding:3px 10px;border-radius:99px;letter-spacing:.03em;text-transform:uppercase;box-shadow:0 2px 6px -1px rgba(0,0,0,.25)}
+    .pro-banner h3{margin:11px 0 4px;font-size:18px;font-weight:800;font-family:"Noto Serif Thai",serif;position:relative}
+    .pro-banner p{margin:0 0 15px;font-size:12.5px;color:#f3d8de;line-height:1.55;position:relative}
+    .pro-banner button{background:#fff;color:var(--wine-deep);border:0;padding:11px 17px;border-radius:var(--radius-sm);font-weight:800;font-size:13px;box-shadow:0 4px 12px -2px rgba(0,0,0,.25);transition:transform .15s var(--ease-spring)}
+    .pro-banner button:active{transform:scale(.95)}
 
     .pill{font-size:10px;font-weight:800;padding:2px 8px;border-radius:99px;letter-spacing:.02em}
-    .pill.pro{background:var(--gold-soft);color:#7a5c1c}
+    .pill.pro{background:linear-gradient(135deg,var(--gold-soft),#eddcae);color:var(--gold-deep)}
     .pill.free{background:var(--line-soft);color:var(--ink-soft)}
 
     .section-label{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-soft);margin:22px 4px 8px}
@@ -206,9 +224,10 @@
     .radio-item{display:flex;align-items:center;justify-content:space-between;padding:12px 4px;border-radius:10px;transition:background .15s}
     .radio-item:active{background:var(--line-soft)}
     .radio-item span{font-size:13.5px;font-weight:600}
-    .radio-dot{width:19px;height:19px;border-radius:50%;border:2px solid var(--line);position:relative;flex:none}
+    .radio-dot{width:19px;height:19px;border-radius:50%;border:2px solid var(--line);position:relative;flex:none;transition:border-color .15s}
     .radio-dot.checked{border-color:var(--wine)}
-    .radio-dot.checked::after{content:"";position:absolute;inset:3px;border-radius:50%;background:var(--wine)}
+    .radio-dot.checked::after{content:"";position:absolute;inset:3px;border-radius:50%;background:var(--wine);animation:dot-pop .18s var(--ease-spring) both}
+    @keyframes dot-pop{from{transform:scale(0)}}
   </style>
 </head>
 <body>
@@ -223,9 +242,9 @@
     <div class="ptr" id="ptr"><span class="spinner"></span><span id="ptrText">กำลังรีเฟรช…</span></div>
     <section id="view"></section>
   </main>
-  <button class="fab" id="addButton" aria-label="เพิ่มรายการ">+</button>
+  <button class="fab" id="addButton" aria-label="เพิ่มรายการ"><span class="msym">add</span></button>
   <nav class="nav" aria-label="เมนูหลัก" id="mainNav">
-    <button data-page="summary"><i>⌂</i><span data-nav-label>สรุป</span></button><button data-page="analysis"><i>▥</i><span data-nav-label>วิเคราะห์</span></button><button data-page="budgets"><i>◴</i><span data-nav-label>งบ</span></button><button data-page="transactions"><i>☷</i><span data-nav-label>รายการ</span></button><button data-page="settings"><i>⚙</i><span data-nav-label>ตั้งค่า</span></button>
+    <button data-page="summary"><span class="msym">home</span><span data-nav-label>สรุป</span></button><button data-page="analysis"><span class="msym">bar_chart</span><span data-nav-label>วิเคราะห์</span></button><button data-page="budgets"><span class="msym">pie_chart</span><span data-nav-label>งบ</span></button><button data-page="transactions"><span class="msym">receipt_long</span><span data-nav-label>รายการ</span></button><button data-page="settings"><span class="msym">settings</span><span data-nav-label>ตั้งค่า</span></button>
   </nav>
   <div class="modal" id="modal"><form class="sheet" id="transactionForm"><div class="sheet-grip"></div><h2 id="formTitle">เพิ่มรายการ</h2><div class="field"><label for="type" id="formTypeLabel">ประเภท</label><select id="type"><option value="expense" id="formExpenseOpt">รายจ่าย</option><option value="income" id="formIncomeOpt">รายรับ</option></select></div><div class="field"><label for="description" id="formDescLabel">ชื่อรายการ</label><input id="description" required placeholder="เช่น ค่าอาหาร"></div><div class="field"><label for="amount" id="formAmountLabel">จำนวนเงิน (บาท)</label><input id="amount" required type="number" min="0.01" step="0.01"></div><div class="field"><label for="category" id="formCategoryLabel">หมวดหมู่</label><input id="category" required placeholder="เช่น อาหาร" list="catList"><datalist id="catList"></datalist></div><div class="field"><label for="createdAt" id="formDateLabel">วันที่และเวลา</label><input id="createdAt" required type="datetime-local"></div><input id="transactionId" type="hidden"><div class="actions"><button class="danger hidden" id="deleteButton" type="button">ลบ</button><button class="secondary" id="cancelButton" type="button">ยกเลิก</button><button class="primary" type="submit" id="submitButton">บันทึก</button></div></form></div>
   <div class="modal" id="settingsModal"><div class="sheet" id="settingsSheet"></div></div>
@@ -233,7 +252,7 @@
   <script>
     const token=new URLSearchParams(location.search).get('token');const uid=new URLSearchParams(location.search).get('u');const query='?token='+encodeURIComponent(token||'')+'&u='+encodeURIComponent(uid||'');const view=document.getElementById('view');const fmt=n=>new Intl.NumberFormat('th-TH',{style:'currency',currency:'THB',maximumFractionDigits:2}).format(Number(n)||0);const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     let page='summary',filter='all',transactions=[],dashboard=null,budgets={},recurring=[],loaded=false;
-    const PALETTE=['#7a2b3d','#4b6a58','#a6772e','#5c7a9e','#8a5a3f','#6b5490','#a15a6e','#557a6a'];
+    const PALETTE=['#7A2B3D','#4b6a58','#A87C2E','#5c7a9e','#8a5a3f','#6b5490','#a15a6e','#557a6a'];
     const PREFS_KEY='panuan-prefs';
     const prefs=Object.assign({categoryMemory:true,dailyReminder:false,reminderTime:'20:00',language:'ไทย',currency:'บาท (฿)',timezone:'Bangkok (GMT+7)'},JSON.parse(localStorage.getItem(PREFS_KEY)||'{}'));
     function savePrefs(){localStorage.setItem(PREFS_KEY,JSON.stringify(prefs))}
@@ -263,7 +282,7 @@
         loading:'กำลังโหลด…',income:'รายรับ',expense:'รายจ่าย',balance:'คงเหลือสุทธิ',byCategory:'ใช้จ่ายตามหมวด',recentEntries:'รายการล่าสุด',noExpenseThisMonth:'ยังไม่มีรายจ่ายในเดือนนี้',totalLabel:'รวม',categoryPieAria:'สัดส่วนรายจ่ายตามหมวด',
         analysisTitle:'วิเคราะห์',analysisLead:'ดูแนวโน้มรายรับและรายจ่าย 6 เดือนล่าสุด',monthlyTrend:'แนวโน้มรายเดือน',noHistory:'ยังไม่มีข้อมูลย้อนหลัง',trendAria:'เทียบรายรับรายจ่ายย้อนหลัง',observation:'ข้อสังเกต',observationBody:'ข้อมูลจากหน้าเว็บและข้อความที่ส่งให้ LINE ยายจันทร์ จะถูกเก็บในบัญชีเดียวกันทันที',
         budgetsTitle:'หมวดและงบ',budgetsLead:'กำหนดวงเงินรายเดือนแยกตามหมวด',budgetPanelTitle:'งบประมาณ',budgetSpent:'ใช้แล้ว',budgetOf:'จาก',budgetSave:'บันทึก',budgetEmpty:'เพิ่มรายจ่ายก่อน แล้วหมวดจะปรากฏที่นี่',budgetSaved:n=>'บันทึกงบ'+n+'แล้ว',
-        transTitle:'รายการ',transLead:'ปัดซ้ายเพื่อลบ หรือแตะเพื่อแก้ไข',filterAll:'ทั้งหมด',filterExpense:'รายจ่าย',filterIncome:'รายรับ',exportCsv:'⇩ ส่งออก CSV',exportingCsv:'กำลังส่งออก CSV',exportPdf:'📄 รายงาน PDF',exportingPdf:'กำลังสร้างรายงาน PDF...',pdfPremiumRequired:'รายงาน PDF เป็นฟีเจอร์ Pro',pdfMonthLabel:'รายเดือน',pdfYearLabel:'รายปี',pdfSheetTitle:'ส่งออกรายงาน PDF',pdfSheetLead:'เลือกช่วงเวลาที่ต้องการสรุป รายงานจะมีกราฟและตารางรายการครบพร้อมเก็บไว้ยื่นภาษีหรือส่งให้นักบัญชีได้เลย',noEntries:'ยังไม่มีรายการ กด + เพื่อเริ่มบันทึก',noEntriesShort:'ยังไม่มีรายการ',
+        transTitle:'รายการ',transLead:'ปัดซ้ายเพื่อลบ หรือแตะเพื่อแก้ไข',filterAll:'ทั้งหมด',filterExpense:'รายจ่าย',filterIncome:'รายรับ',exportCsv:'⇩ ส่งออก CSV',exportingCsv:'กำลังส่งออก CSV',exportPdf:'⇩ รายงาน PDF',exportingPdf:'กำลังสร้างรายงาน PDF...',pdfPremiumRequired:'รายงาน PDF เป็นฟีเจอร์ Pro',pdfMonthLabel:'รายเดือน',pdfYearLabel:'รายปี',pdfSheetTitle:'ส่งออกรายงาน PDF',pdfSheetLead:'เลือกช่วงเวลาที่ต้องการสรุป รายงานจะมีกราฟและตารางรายการครบพร้อมเก็บไว้ยื่นภาษีหรือส่งให้นักบัญชีได้เลย',noEntries:'ยังไม่มีรายการ กด + เพื่อเริ่มบันทึก',noEntriesShort:'ยังไม่มีรายการ',
         deleteEntryConfirm:'ลบรายการนี้?',entryDeleted:'ลบรายการแล้ว',entrySaved:'บันทึกรายการแล้ว',entryUpdated:'แก้ไขรายการแล้ว',
         recurringSheetTitle:'จดประจำ',recurringEvery:'ทุกวันที่',addRecurringBtn:'+ เพิ่มรายการประจำ',recurringDeleteConfirm:'ลบรายการประจำ?',recurringDeleted:'ลบรายการประจำแล้ว',recurringAdded:'ตั้งรายการประจำแล้ว',recurringEmptySheet:'ยังไม่มีรายการประจำ',
         promptRecurringDesc:'ชื่อรายการประจำ เช่น ค่าเช่า',promptRecurringAmount:'จำนวนเงิน (บาท)',promptRecurringCategory:'หมวดหมู่',promptRecurringCategoryDefault:'อื่น ๆ',promptRecurringDay:'บันทึกทุกวันที่ (1-31)',promptRecurringType:'กด OK = รายรับ, Cancel = รายจ่าย',invalidData:'ข้อมูลไม่ถูกต้อง',
@@ -292,7 +311,7 @@
         loading:'Loading…',income:'Income',expense:'Expense',balance:'Net balance',byCategory:'Spending by category',recentEntries:'Recent entries',noExpenseThisMonth:'No expenses this month yet',totalLabel:'Total',categoryPieAria:'Spending share by category',
         analysisTitle:'Analysis',analysisLead:'View income and expense trends for the last 6 months',monthlyTrend:'Monthly trend',noHistory:'No historical data yet',trendAria:'Income vs expense over time',observation:'Notes',observationBody:'Data from the website and messages sent to ยายจันทร์ on LINE are saved to the same account instantly',
         budgetsTitle:'Categories & Budgets',budgetsLead:'Set a monthly limit for each category',budgetPanelTitle:'Budget',budgetSpent:'Spent',budgetOf:'of',budgetSave:'Save',budgetEmpty:'Add an expense first, and categories will appear here',budgetSaved:n=>'Saved budget for '+n,
-        transTitle:'Entries',transLead:'Swipe left to delete, or tap to edit',filterAll:'All',filterExpense:'Expense',filterIncome:'Income',exportCsv:'⇩ Export CSV',exportingCsv:'Exporting CSV',exportPdf:'📄 PDF report',exportingPdf:'Generating PDF report...',pdfPremiumRequired:'PDF reports are a Pro feature',pdfMonthLabel:'Monthly',pdfYearLabel:'Yearly',pdfSheetTitle:'Export PDF report',pdfSheetLead:'Choose a period to summarize. The report includes charts and a full transaction table — ready to keep for tax filing or send to your accountant.',noEntries:'No entries yet — tap + to start logging',noEntriesShort:'No entries yet',
+        transTitle:'Entries',transLead:'Swipe left to delete, or tap to edit',filterAll:'All',filterExpense:'Expense',filterIncome:'Income',exportCsv:'⇩ Export CSV',exportingCsv:'Exporting CSV',exportPdf:'⇩ PDF report',exportingPdf:'Generating PDF report...',pdfPremiumRequired:'PDF reports are a Pro feature',pdfMonthLabel:'Monthly',pdfYearLabel:'Yearly',pdfSheetTitle:'Export PDF report',pdfSheetLead:'Choose a period to summarize. The report includes charts and a full transaction table — ready to keep for tax filing or send to your accountant.',noEntries:'No entries yet — tap + to start logging',noEntriesShort:'No entries yet',
         deleteEntryConfirm:'Delete this entry?',entryDeleted:'Entry deleted',entrySaved:'Entry saved',entryUpdated:'Entry updated',
         recurringSheetTitle:'Recurring entries',recurringEvery:'Every day',addRecurringBtn:'+ Add recurring entry',recurringDeleteConfirm:'Delete this recurring entry?',recurringDeleted:'Recurring entry deleted',recurringAdded:'Recurring entry set',recurringEmptySheet:'No recurring entries yet',
         promptRecurringDesc:'Recurring entry name, e.g. Rent',promptRecurringAmount:'Amount (THB)',promptRecurringCategory:'Category',promptRecurringCategoryDefault:'Other',promptRecurringDay:'Log on which day each month (1-31)',promptRecurringType:'Click OK = Income, Cancel = Expense',invalidData:'Invalid data',
@@ -335,10 +354,12 @@
       requestAnimationFrame(step);
     }
     function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');clearTimeout(toast._t);toast._t=setTimeout(()=>t.classList.remove('show'),2200)}
+    // เอฟเฟกต์ "ปั๊มตราประทับ" ที่โลโก้มุมบนซ้าย เล่นตอนบันทึก/แก้ไขรายการสำเร็จ ให้ความรู้สึกเหมือนยายจันทร์ประทับตรารับรองรายการ
+    function stampSeal(){const seal=document.getElementById('seal');if(!seal)return;seal.classList.remove('stamp');void seal.offsetWidth;seal.classList.add('stamp');setTimeout(()=>seal.classList.remove('stamp'),650)}
 
     function pieChart(categories){
       const total=categories.reduce((s,x)=>s+x.amount,0);
-      if(!total)return '<div class="empty"><span class="emoji">🌾</span>'+esc(t('noExpenseThisMonth'))+'</div>';
+      if(!total)return '<div class="empty"><span class="msym">eco</span>'+esc(t('noExpenseThisMonth'))+'</div>';
       const r=64,c=2*Math.PI*r;let offset=0;
       const segs=categories.map((x,i)=>{const frac=x.amount/total,dash=Math.max(frac*c,total?0.001:0),seg='<circle class="seg" cx="90" cy="90" r="'+r+'" fill="none" stroke="'+PALETTE[i%PALETTE.length]+'" stroke-width="28" stroke-dasharray="'+dash+' '+(c-dash)+'" stroke-dashoffset="'+(-offset)+'" transform="rotate(-90 90 90)" style="stroke-dasharray:0 '+c+';transition:stroke-dasharray .8s cubic-bezier(.22,1,.36,1) '+(i*70)+'ms" data-final="'+dash+' '+(c-dash)+'"></circle>';offset+=dash;return seg}).join('');
       const svg='<svg viewBox="0 0 180 180" width="146" height="146" role="img" aria-label="'+esc(t('categoryPieAria'))+'">'+segs+'<circle cx="90" cy="90" r="44" fill="var(--card)"></circle><text x="90" y="86" text-anchor="middle" font-size="10" fill="var(--ink-soft)" font-weight="600">'+esc(t('totalLabel'))+'</text><text x="90" y="102" text-anchor="middle" font-size="13" fill="var(--ink)" font-weight="800">'+fmt(total).replace('฿','').trim()+'</text></svg>';
@@ -405,9 +426,9 @@
         +'<section class="panel"><h2>'+esc(t('recentEntries'))+'</h2>'+recentRows(5)+'</section>';
     }
     function analysisPage(){const d=dashboard||{history:[],categories:[]};return '<h1 class="view-title">'+esc(t('analysisTitle'))+'</h1><p class="lead">'+esc(t('analysisLead'))+'</p><section class="panel"><h2>'+esc(t('monthlyTrend'))+'</h2><div class="chart-legend"><span><i class="dot" style="background:#4b6a58"></i>'+esc(t('income'))+'</span><span><i class="dot" style="background:#7a2b3d"></i>'+esc(t('expense'))+'</span></div>'+barChart(d.history)+(d.history||[]).map((x,i)=>'<div class="chart-row stagger" style="animation-delay:'+(i*40)+'ms"><span>'+esc(x.label)+'</span><strong class="income num">+'+fmt(x.income)+'</strong><strong class="expense num">-'+fmt(x.expense)+'</strong></div>').join('')+'</section><section class="panel"><h2>'+esc(t('observation'))+'</h2><div class="notice">'+esc(t('observationBody'))+'</div></section>';}
-    function budgetsPage(){const thisMonth=new Date().toISOString().slice(0,7);const cats=[...new Set(transactions.filter(x=>x.type==='expense').map(x=>x.category).concat(Object.keys(budgets)))].sort();return '<h1 class="view-title">'+esc(t('budgetsTitle'))+'</h1><p class="lead">'+esc(t('budgetsLead'))+'</p><section class="panel"><h2>'+esc(t('budgetPanelTitle'))+'</h2>'+(cats.length?cats.map((c,i)=>{const spent=transactions.filter(x=>x.type==='expense'&&x.category===c&&x.createdAt.slice(0,7)===thisMonth).reduce((s,x)=>s+x.amount,0),limit=budgets[c]||0,pct=limit?Math.min(100,spent/limit*100):0,over=limit>0&&spent>limit;return '<div class="stagger" style="animation-delay:'+(i*35)+'ms"><div class="budget"><div><strong>'+esc(c)+'</strong><div class="meta">'+esc(t('budgetSpent'))+' '+fmt(spent)+(limit?' '+esc(t('budgetOf'))+' '+fmt(limit):'')+'</div></div><input aria-label="'+esc(t('budgetPanelTitle'))+' '+esc(c)+'" data-budget="'+esc(c)+'" type="number" min="0" value="'+limit+'"><button class="primary save-budget" data-category="'+esc(c)+'">'+esc(t('budgetSave'))+'</button></div>'+(limit?'<div class="budget-bar'+(over?' over':'')+'"><i style="width:'+pct+'%"></i></div>':'')+'</div>'}).join(''):'<div class="empty"><span class="emoji">🗂️</span>'+esc(t('budgetEmpty'))+'</div>')+'</section>';}
-    function transactionPage(){const list=transactions.filter(x=>filter==='all'||x.type===filter);return '<h1 class="view-title">'+esc(t('transTitle'))+'</h1><p class="lead">'+esc(t('transLead'))+'</p><div class="toolbar"><button class="'+(filter==='all'?'active':'')+'" data-filter="all">'+esc(t('filterAll'))+'</button><button class="'+(filter==='expense'?'active':'')+'" data-filter="expense">'+esc(t('filterExpense'))+'</button><button class="'+(filter==='income'?'active':'')+'" data-filter="income">'+esc(t('filterIncome'))+'</button><button id="download">'+esc(t('exportCsv'))+'</button><button id="downloadPdf">'+esc(t('exportPdf'))+(subscription.active?'':' 🔒')+'</button></div><section class="panel">'+(list.length?list.map(row).join(''):'<div class="empty"><span class="emoji">📒</span>'+esc(t('noEntries'))+'</div>')+'</section>';}
-    function recentRows(n){return transactions.length?transactions.slice(0,n).map(row).join(''):'<div class="empty"><span class="emoji">📒</span>'+esc(t('noEntriesShort'))+'</div>'}
+    function budgetsPage(){const thisMonth=new Date().toISOString().slice(0,7);const cats=[...new Set(transactions.filter(x=>x.type==='expense').map(x=>x.category).concat(Object.keys(budgets)))].sort();return '<h1 class="view-title">'+esc(t('budgetsTitle'))+'</h1><p class="lead">'+esc(t('budgetsLead'))+'</p><section class="panel"><h2>'+esc(t('budgetPanelTitle'))+'</h2>'+(cats.length?cats.map((c,i)=>{const spent=transactions.filter(x=>x.type==='expense'&&x.category===c&&x.createdAt.slice(0,7)===thisMonth).reduce((s,x)=>s+x.amount,0),limit=budgets[c]||0,pct=limit?Math.min(100,spent/limit*100):0,over=limit>0&&spent>limit;return '<div class="stagger" style="animation-delay:'+(i*35)+'ms"><div class="budget"><div><strong>'+esc(c)+'</strong><div class="meta">'+esc(t('budgetSpent'))+' '+fmt(spent)+(limit?' '+esc(t('budgetOf'))+' '+fmt(limit):'')+'</div></div><input aria-label="'+esc(t('budgetPanelTitle'))+' '+esc(c)+'" data-budget="'+esc(c)+'" type="number" min="0" value="'+limit+'"><button class="primary save-budget" data-category="'+esc(c)+'">'+esc(t('budgetSave'))+'</button></div>'+(limit?'<div class="budget-bar'+(over?' over':'')+'"><i style="width:'+pct+'%"></i></div>':'')+'</div>'}).join(''):'<div class="empty"><span class="msym">category</span>'+esc(t('budgetEmpty'))+'</div>')+'</section>';}
+    function transactionPage(){const list=transactions.filter(x=>filter==='all'||x.type===filter);return '<h1 class="view-title">'+esc(t('transTitle'))+'</h1><p class="lead">'+esc(t('transLead'))+'</p><div class="toolbar"><button class="'+(filter==='all'?'active':'')+'" data-filter="all">'+esc(t('filterAll'))+'</button><button class="'+(filter==='expense'?'active':'')+'" data-filter="expense">'+esc(t('filterExpense'))+'</button><button class="'+(filter==='income'?'active':'')+'" data-filter="income">'+esc(t('filterIncome'))+'</button><button id="download">'+esc(t('exportCsv'))+'</button><button id="downloadPdf">'+esc(t('exportPdf'))+(subscription.active?'':' <span class="msym" style="font-size:12px;vertical-align:-2px">lock</span>')+'</button></div><section class="panel">'+(list.length?list.map(row).join(''):'<div class="empty"><span class="msym">receipt_long</span>'+esc(t('noEntries'))+'</div>')+'</section>';}
+    function recentRows(n){return transactions.length?transactions.slice(0,n).map(row).join(''):'<div class="empty"><span class="msym">receipt_long</span>'+esc(t('noEntriesShort'))+'</div>'}
     function row(x,i){return '<div class="row-wrap" data-wrap-id="'+x.id+'"><div class="row-del" data-del="'+x.id+'">'+esc(t('deleteBtn'))+'</div><article class="row stagger" style="animation-delay:'+((i||0)*30)+'ms" data-id="'+x.id+'"><div><strong>'+esc(x.description)+'</strong><div class="meta">'+new Date(x.createdAt).toLocaleString(prefs.language==='English'?'en-GB':'th-TH',{dateStyle:'short',timeStyle:'short'})+' · '+esc(x.category)+'</div></div><span class="amount num '+x.type+'">'+(x.type==='income'?'+':'-')+fmt(x.amount)+'</span></article></div>'}
 
     function fmtExpiry(iso){if(!iso)return null;try{return new Date(iso).toLocaleDateString(prefs.language==='English'?'en-GB':'th-TH',{day:'numeric',month:'long',year:'numeric'})}catch{return null}}
@@ -644,7 +665,7 @@
     }
     document.getElementById('addButton').onclick=()=>openForm();
     document.getElementById('cancelButton').onclick=()=>modal.classList.remove('open');
-    document.getElementById('transactionForm').onsubmit=async e=>{e.preventDefault();const id=transactionId.value,body={type:type.value,description:description.value.trim(),amount:Number(amount.value),category:category.value.trim(),createdAt:new Date(createdAt.value).toISOString()};await api(id?'/api/transactions/'+id:'/api/transactions',{method:id?'PUT':'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});modal.classList.remove('open');toast(id?t('entryUpdated'):t('entrySaved'));await loadData()};
+    document.getElementById('transactionForm').onsubmit=async e=>{e.preventDefault();const id=transactionId.value,body={type:type.value,description:description.value.trim(),amount:Number(amount.value),category:category.value.trim(),createdAt:new Date(createdAt.value).toISOString()};await api(id?'/api/transactions/'+id:'/api/transactions',{method:id?'PUT':'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});modal.classList.remove('open');toast(id?t('entryUpdated'):t('entrySaved'));stampSeal();await loadData()};
     document.getElementById('deleteButton').onclick=async()=>{if(confirm(t('deleteEntryConfirm'))){await api('/api/transactions/'+transactionId.value,{method:'DELETE'});modal.classList.remove('open');toast(t('entryDeleted'));await loadData()}};
     document.getElementById('settingsModal').addEventListener('click',e=>{if(e.target.id==='settingsModal')closeSettingsSheet()});
     async function addRecurring(){const description=prompt(t('promptRecurringDesc'));if(!description)return;const amount=Number(prompt(t('promptRecurringAmount')));const category=prompt(t('promptRecurringCategory'),t('promptRecurringCategoryDefault'));const day=Number(prompt(t('promptRecurringDay'),String(new Date().getDate())));if(!Number.isFinite(amount)||amount<=0||!category||!Number.isInteger(day)||day<1||day>31)return alert(t('invalidData'));await api('/api/recurring',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({type:confirm(t('promptRecurringType'))?'income':'expense',description,amount,category,day})});toast(t('recurringAdded'))}
