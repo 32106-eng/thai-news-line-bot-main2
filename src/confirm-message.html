@@ -4,24 +4,35 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>ข้อความยืนยัน — ยายจันทร์</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20,500,0,0" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+Thai:wght@600;800&family=Noto+Sans+Thai:wght@400;600;700;800&display=swap">
 <style>
-  @font-face{font-family:"Noto Sans Thai";font-display:swap}
   :root{
-    --paper:#FBF3EC;--card:#FFFDFA;--ink:#2B2320;--ink-soft:#8A8078;--line:#EFE3D8;
+    --paper:#F5F0E4;--card:#FFFDFA;--ink:#241E19;--ink-soft:#7A6F62;--line:#E1D8C6;--line-soft:#EEE6D6;
+    --gold:#A87C2E;--gold-soft:#F6ECD3;--gold-deep:#7A5A1E;--gold-shine:#E4C170;
+    --sage:#4B6A58;--sage-soft:#E7EFE8;
+    /* accent* = สีของ "การ์ดตัวอย่าง" ที่กำลังปรับแต่ง เปลี่ยนตามธีมที่ผู้ใช้เลือก (ดู THEMES ใน JS) — คนละเรื่องกับสีของหน้าเว็บนี้เอง (gold/ink) โดยตั้งใจ ห้ามรวมเป็นตัวเดียวกัน */
     --accent:#D23283;--accent-soft:#FCE4EF;--accent-deep:#B0225F;--cream:#FBF3EC;
     --radius:18px;--radius-sm:12px;
-    --shadow:0 1px 2px rgba(43,35,32,.05),0 10px 28px -14px rgba(43,35,32,.16);
+    --shadow:0 1px 2px rgba(36,30,25,.05),0 10px 28px -14px rgba(36,30,25,.2);
+    --shadow-lift:0 4px 10px rgba(36,30,25,.08),0 22px 44px -20px rgba(36,30,25,.32);
+    --ease:cubic-bezier(.22,1,.36,1);--ease-spring:cubic-bezier(.34,1.56,.64,1);
   }
   *{box-sizing:border-box}
-  body{margin:0;background:var(--paper);color:var(--ink);font-family:"Noto Sans Thai",system-ui,-apple-system,sans-serif;-webkit-font-smoothing:antialiased}
+  ::selection{background:var(--gold-soft);color:var(--gold-deep)}
+  body{margin:0;background:var(--paper);color:var(--ink);font-family:"Noto Sans Thai",system-ui,-apple-system,sans-serif;-webkit-font-smoothing:antialiased;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E")}
   .app{max-width:480px;margin:auto;min-height:100vh;padding:0 0 40px;position:relative}
   .num{font-variant-numeric:tabular-nums}
+  .serif{font-family:"Noto Serif Thai","Noto Sans Thai",serif}
+  .msym{font-family:'Material Symbols Rounded';font-weight:normal;font-style:normal;line-height:1;display:inline-block;white-space:nowrap;word-wrap:normal;direction:ltr;-webkit-font-smoothing:antialiased}
 
   /* ---- top bar ---- */
   .top{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:12px;padding:16px 18px 12px;background:linear-gradient(var(--paper) 70%,transparent)}
-  .back{width:36px;height:36px;border-radius:50%;border:1px solid var(--line);background:var(--card);display:flex;align-items:center;justify-content:center;font-size:17px;color:var(--ink);flex:none;transition:transform .12s,background .15s}
-  .back:active{transform:scale(.9);background:var(--accent-soft)}
-  .top h1{font-size:16px;margin:0;font-weight:800;letter-spacing:-.01em}
+  .back{width:36px;height:36px;border-radius:50%;border:1px solid var(--line);background:var(--card);display:flex;align-items:center;justify-content:center;font-size:17px;color:var(--ink);flex:none;transition:transform .14s var(--ease-spring),background .15s}
+  .back:active{transform:scale(.88);background:var(--gold-soft)}
+  .top h1{font-size:16px;margin:0;font-weight:800;letter-spacing:-.01em;font-family:"Noto Serif Thai",serif}
   .top p{margin:1px 0 0;font-size:11.5px;color:var(--ink-soft)}
 
   /* ---- preview stage ---- */
@@ -32,10 +43,11 @@
   .phone-screen{border-radius:19px;background:#7B7481;background-image:linear-gradient(165deg,#8B8492 0%,#6F6876 100%);padding:16px 10px 14px;min-height:280px;display:flex;flex-direction:column;justify-content:flex-end}
 
   /* ---- the flex card itself (mirrors txFlexMessage bubble) ---- */
-  .bubble{width:220px;margin-left:auto;margin-right:auto;border-radius:14px;overflow:hidden;box-shadow:0 6px 18px -6px rgba(0,0,0,.35);font-size:12px;animation:pop .35s cubic-bezier(.22,1,.36,1) both}
-  @keyframes pop{from{opacity:0;transform:translateY(8px) scale(.97)}}
+  .bubble{width:220px;margin-left:auto;margin-right:auto;border-radius:14px;overflow:hidden;box-shadow:0 6px 18px -6px rgba(0,0,0,.35);font-size:12px;animation:pop .35s var(--ease-spring) both}
+  @keyframes pop{from{opacity:0;transform:translateY(8px) scale(.95)}}
   .bubble-body{padding:14px}
-  .bubble-title{font-size:13px;font-weight:800;color:#3A3540;margin:0 0 9px}
+  .bubble-title{font-size:13px;font-weight:800;color:#3A3540;margin:0 0 9px;display:flex;align-items:center;gap:5px}
+  .bubble-title .msym{font-size:14px;color:var(--sage)}
   .tagrow{display:flex;gap:6px;margin-bottom:9px}
   .tag{border-radius:8px;padding:3px 8px;font-size:9.5px;font-weight:800;color:#fff}
   .tag.soft{color:var(--tag-accent,#D23283);background:var(--tag-accent-soft,#FCE4EF)}
@@ -46,10 +58,11 @@
   .bubble-amt{font-size:19px;font-weight:800;margin:0}
   .bubble-budget-label{display:flex;justify-content:space-between;font-size:9px;color:#9B94A0;margin-bottom:4px}
   .bubble-budget-track{height:5px;border-radius:99px;background:#F1E7DC;overflow:hidden}
-  .bubble-budget-fill{height:100%;border-radius:99px;transition:width .4s cubic-bezier(.22,1,.36,1),background .2s}
+  .bubble-budget-fill{height:100%;border-radius:99px;transition:width .5s var(--ease),background .2s}
   .bubble-over{font-size:8.5px;margin-top:4px;font-weight:700}
   .bubble-footer{display:flex;gap:6px;padding:9px}
-  .bubble-btn{flex:1;text-align:center;font-size:10.5px;font-weight:800;padding:7px 0;border-radius:8px}
+  .bubble-btn{flex:1;text-align:center;font-size:10.5px;font-weight:800;padding:7px 0;border-radius:8px;transition:transform .12s var(--ease-spring)}
+  .bubble-btn:active{transform:scale(.94)}
 
   /* ---- sections ---- */
   .section{padding:22px 18px 0}
@@ -57,41 +70,51 @@
   .panel{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden}
 
   /* toggles */
-  .opt{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:14px 16px}
-  .opt+.opt{border-top:1px dashed var(--line)}
+  .opt{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:14px 16px;transition:background .15s}
+  .opt:active{background:var(--gold-soft)}
+  .opt+.opt{border-top:1px dashed var(--line-soft)}
+  .opt-text{display:flex;align-items:flex-start;gap:11px}
+  .opt-icon{width:32px;height:32px;border-radius:10px;background:var(--gold-soft);color:var(--gold-deep);display:flex;align-items:center;justify-content:center;font-size:15px;flex:none}
   .opt-text strong{display:block;font-size:13.5px;font-weight:700}
   .opt-text span{display:block;font-size:11.5px;color:var(--ink-soft);margin-top:2px;line-height:1.4}
-  .toggle{width:44px;height:26px;border-radius:99px;background:var(--line);position:relative;flex:none;border:0;padding:0;transition:background .2s}
-  .toggle::after{content:"";position:absolute;top:2px;left:2px;width:22px;height:22px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.25);transition:transform .2s cubic-bezier(.4,0,.2,1)}
+  .toggle{width:44px;height:26px;border-radius:99px;background:var(--line);position:relative;flex:none;border:0;padding:0;transition:background .22s var(--ease)}
+  .toggle::after{content:"";position:absolute;top:2px;left:2px;width:22px;height:22px;border-radius:50%;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.3);transition:transform .24s var(--ease-spring)}
   .toggle.on{background:var(--accent)}
   .toggle.on::after{transform:translateX(18px)}
   .toggle:disabled{opacity:.5}
 
   /* theme swatches */
   .swatches{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;padding:16px}
-  .swatch{display:flex;flex-direction:column;align-items:center;gap:8px;padding:12px 6px;border-radius:var(--radius-sm);border:1.5px solid transparent;transition:border-color .15s,background .15s;cursor:pointer}
+  .swatch{display:flex;flex-direction:column;align-items:center;gap:8px;padding:12px 6px;border-radius:var(--radius-sm);border:1.5px solid transparent;transition:border-color .15s,background .15s,transform .14s var(--ease-spring);cursor:pointer}
+  .swatch:active{transform:scale(.94)}
   .swatch.checked{border-color:var(--swatch-color);background:color-mix(in srgb, var(--swatch-color) 8%, transparent)}
-  .swatch-dot{width:30px;height:30px;border-radius:50%;box-shadow:inset 0 -3px 0 rgba(0,0,0,.15),0 2px 6px -2px rgba(0,0,0,.25);position:relative}
-  .swatch-dot::after{content:"✓";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#fff;font-size:14px;font-weight:800;opacity:0;transition:opacity .15s}
-  .swatch.checked .swatch-dot::after{opacity:1}
+  .swatch-dot{width:30px;height:30px;border-radius:50%;box-shadow:inset 0 -3px 0 rgba(0,0,0,.15),0 2px 6px -2px rgba(0,0,0,.25);position:relative;transition:transform .18s var(--ease-spring)}
+  .swatch.checked .swatch-dot{transform:scale(1.08)}
+  .swatch-dot .msym{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#fff;font-size:15px;opacity:0;transition:opacity .15s}
+  .swatch.checked .swatch-dot .msym{opacity:1}
   .swatch span{font-size:11.5px;font-weight:700;color:var(--ink)}
 
   /* save bar */
   .savebar{position:sticky;bottom:0;padding:16px 18px calc(16px + env(safe-area-inset-bottom));background:linear-gradient(transparent,var(--paper) 30%)}
-  .save-btn{width:100%;border:0;border-radius:var(--radius-sm);padding:15px;font-size:14.5px;font-weight:800;color:#fff;background:var(--accent);box-shadow:0 10px 22px -10px color-mix(in srgb, var(--accent) 70%, transparent);transition:transform .12s,opacity .15s}
-  .save-btn:active{transform:scale(.98)}
+  .save-btn{width:100%;border:0;border-radius:var(--radius-sm);padding:15px;font-size:14.5px;font-weight:800;color:#fff;background:var(--accent);box-shadow:0 10px 22px -10px color-mix(in srgb, var(--accent) 70%, transparent);transition:transform .14s var(--ease-spring),opacity .15s,box-shadow .14s}
+  .save-btn:active{transform:scale(.97)}
   .save-btn:disabled{opacity:.55;box-shadow:none}
-  .save-btn.saved{background:#4B6A58}
+  .save-btn.saved{background:linear-gradient(155deg,var(--sage),#33493C)}
 
-  .notice{margin:14px 18px 0;padding:14px 16px;border-radius:var(--radius-sm);background:var(--accent-soft);color:var(--accent-deep);font-size:12.5px;line-height:1.55}
+  .notice{margin:14px 18px 0;padding:14px 16px;border-radius:var(--radius-sm);background:var(--gold-soft);color:var(--gold-deep);font-size:12.5px;line-height:1.55}
   .notice.error{background:#FBEAEA;color:#7A2B3D}
 
   .hidden{display:none!important}
-  .skel{background:linear-gradient(100deg,var(--line) 30%,#faf6ef 50%,var(--line) 70%);background-size:200% 100%;animation:shimmer 1.3s ease infinite;border-radius:8px}
+  .skel{background:linear-gradient(100deg,var(--line-soft) 30%,#faf6ef 50%,var(--line-soft) 70%);background-size:200% 100%;animation:shimmer 1.3s ease infinite;border-radius:8px}
   @keyframes shimmer{to{background-position:-200% 0}}
 
-  .toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(14px);background:var(--ink);color:#fff;padding:11px 20px;border-radius:99px;font-size:13px;font-weight:600;box-shadow:0 10px 24px -8px rgba(0,0,0,.4);opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;z-index:20}
-  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  .toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(14px) scale(.96);background:var(--ink);color:#fff;padding:11px 20px;border-radius:99px;font-size:13px;font-weight:600;box-shadow:0 10px 24px -8px rgba(0,0,0,.4);opacity:0;pointer-events:none;transition:opacity .22s var(--ease),transform .22s var(--ease);z-index:20}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0) scale(1)}
+
+  .fade-in{animation:fade-in .4s var(--ease) both}
+  @keyframes fade-in{from{opacity:0;transform:translateY(6px)}}
+  .stagger{animation:row-in .3s var(--ease) both}
+  @keyframes row-in{from{opacity:0;transform:translateY(5px)}}
 
   @media(prefers-reduced-motion:reduce){*{animation-duration:.001ms!important;transition-duration:.001ms!important}}
 </style>
@@ -140,10 +163,10 @@
   };
 
   const OPTIONS = [
-    { key:'showBudgetBar',   icon:'📊', title:'แถบงบประมาณคงเหลือ', sub:'โชว์ยอดใช้ไป/งบที่ตั้งไว้ของหมวดนั้น' },
-    { key:'showAuthorName',  icon:'🙋', title:'ชื่อผู้จด',           sub:'โชว์ว่าใครในกลุ่มเป็นคนจดรายการนี้', groupOnly:true },
-    { key:'showEditButton',  icon:'✏️', title:'ปุ่มแก้ไข',           sub:'ปุ่มเปิดหน้าเว็บเพื่อแก้ไขรายการ' },
-    { key:'showDeleteButton',icon:'🗑️', title:'ปุ่มลบ',             sub:'ปุ่มลบรายการนี้ทันทีจากในแชท' }
+    { key:'showBudgetBar',   icon:'bar_chart', title:'แถบงบประมาณคงเหลือ', sub:'โชว์ยอดใช้ไป/งบที่ตั้งไว้ของหมวดนั้น' },
+    { key:'showAuthorName',  icon:'person',    title:'ชื่อผู้จด',           sub:'โชว์ว่าใครในกลุ่มเป็นคนจดรายการนี้', groupOnly:true },
+    { key:'showEditButton',  icon:'edit',      title:'ปุ่มแก้ไข',           sub:'ปุ่มเปิดหน้าเว็บเพื่อแก้ไขรายการ' },
+    { key:'showDeleteButton',icon:'delete',    title:'ปุ่มลบ',             sub:'ปุ่มลบรายการนี้ทันทีจากในแชท' }
   ];
 
   let state = { showBudgetBar:true, showAuthorName:true, showEditButton:true, showDeleteButton:true, theme:'pink' };
@@ -176,7 +199,7 @@
     return `
       <div class="bubble">
         <div class="bubble-body" style="background:${th.cream}">
-          <p class="bubble-title">จดสำเร็จ ✅</p>
+          <p class="bubble-title"><span class="msym">check_circle</span>จดสำเร็จ</p>
           <div class="tagrow">
             <span class="tag" style="background:${th.accent}">รายจ่าย</span>
             <span class="tag soft" style="--tag-accent:${th.accent};--tag-accent-soft:${th.accentSoft}">${esc(SAMPLE_TX.category)}</span>
@@ -195,15 +218,15 @@
   function renderSwatches(){
     return Object.entries(THEMES).map(([id, th]) => `
       <div class="swatch ${state.theme===id?'checked':''}" style="--swatch-color:${th.accent}" data-theme="${id}">
-        <div class="swatch-dot" style="background:${th.accent}"></div>
+        <div class="swatch-dot" style="background:${th.accent}"><span class="msym">check</span></div>
         <span>${th.label}</span>
       </div>`).join('');
   }
 
   function renderOptions(){
-    return OPTIONS.filter(o => !o.groupOnly || isGroup).map(o => `
-      <div class="opt">
-        <div class="opt-text"><strong>${o.icon} ${esc(o.title)}</strong><span>${esc(o.sub)}</span></div>
+    return OPTIONS.filter(o => !o.groupOnly || isGroup).map((o, i) => `
+      <div class="opt stagger" style="animation-delay:${i*30}ms">
+        <div class="opt-text"><div class="opt-icon"><span class="msym">${o.icon}</span></div><div><strong>${esc(o.title)}</strong><span>${esc(o.sub)}</span></div></div>
         <button class="toggle ${state[o.key]?'on':''}" data-key="${o.key}" role="switch" aria-checked="${!!state[o.key]}" aria-label="${esc(o.title)}"></button>
       </div>`).join('');
   }
@@ -339,4 +362,5 @@
 </script>
 </body>
 </html>
+
 
