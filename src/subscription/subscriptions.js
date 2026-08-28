@@ -40,10 +40,12 @@ export function createSubscriptionService({ subscriptions, FieldValue, db }, aud
 
   /**
    * เปิด/ต่ออายุ Premium แบบ atomic ผ่าน Firestore transaction
-   * renewal rule (spec §14): ถ้ายัง ACTIVE อยู่ -> expiry เดิม + 1 เดือน, ไม่งั้น -> ตอนนี้ + 1 เดือน
+   * renewal rule (spec §14): ถ้ายัง ACTIVE อยู่ -> expiry เดิม + months, ไม่งั้น -> ตอนนี้ + months
+   * months มาจากแผนที่จ่ายจริง (ดู PLAN_CATALOG ใน paymentSessions.js) ค่าเริ่มต้น 1 เดือน
+   * เพื่อไม่ให้โค้ดเก่าที่เรียกไม่ส่ง months มา (ถ้ามี) พังไป
    * เรียกได้เฉพาะตอน payment ผ่านการ verify แล้วเท่านั้น (ดู paymentTransactions.js)
    */
-  async function activateOrRenew({ userId, paymentTransactionId }) {
+  async function activateOrRenew({ userId, paymentTransactionId, months = 1 }) {
     const ref = subscriptions.doc(String(userId));
     const result = await db.runTransaction(async (tx) => {
       const snap = await tx.get(ref);
@@ -51,7 +53,7 @@ export function createSubscriptionService({ subscriptions, FieldValue, db }, aud
       const currentExpiry = current ? toDate(current.expiresAt) : null;
       const stillActive = current?.status === SUB_STATUS.ACTIVE && currentExpiry && !isExpired(currentExpiry);
       const base = stillActive ? currentExpiry : now();
-      const newExpiry = addMonths(base, 1);
+      const newExpiry = addMonths(base, months);
       const wasRenewal = Boolean(stillActive);
       tx.set(ref, {
         plan: PLAN.PREMIUM,
@@ -124,4 +126,5 @@ export function createSubscriptionService({ subscriptions, FieldValue, db }, aud
 
   return { getRaw, isPremium, getStatusView, activateOrRenew, adminCancel, markExpiredIfNeeded, sweepExpired };
 }
+
 
