@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <title>ยายจันทร์ — สมุดบัญชี</title>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20,500,0,0" />
   <style>
     @font-face{font-family:"Noto Sans Thai";font-display:swap}
     :root{
@@ -175,6 +176,7 @@
     .setting-item:active{background:var(--wine-soft);margin:0 -10px;padding:13px 12px;border-radius:10px}
     .setting-item .si-main{display:flex;align-items:center;gap:11px}
     .setting-item .si-icon{width:32px;height:32px;border-radius:9px;background:var(--wine-soft);color:var(--wine);display:flex;align-items:center;justify-content:center;font-size:15px;flex:none}
+    .msym{font-family:'Material Symbols Rounded';font-weight:normal;font-style:normal;line-height:1;display:inline-block;white-space:nowrap;word-wrap:normal;direction:ltr;-webkit-font-smoothing:antialiased;font-size:18px}
     .setting-item .si-text strong{display:block;font-size:14px;font-weight:700}
     .setting-item .si-text span{font-size:11.5px;color:var(--ink-soft)}
     .setting-item .si-right{display:flex;align-items:center;gap:6px;color:var(--ink-soft);font-size:12.5px;font-weight:600}
@@ -241,7 +243,7 @@
     const I18N={
       'ไทย':{
         settingsTitle:'ตั้งค่า',settingsLead:'จัดการรายการประจำ และปรับแต่งการใช้งาน',
-        proTag:'✦ Pro',proTitle:'ปลดล็อกทุกลูกเล่น',proDesc:'ไม่มีโฆษณาก่อนเข้าแดชบอร์ด จัดหมวดด้วย AI และแจ้งเตือนไม่จำกัด',proTitleActive:'คุณเป็นสมาชิก Pro อยู่แล้ว',proDescActive:'ขอบคุณที่อุดหนุนยายจันทร์นะคะ ✦',upgradeBtn:'อัปเกรดเป็น Pro',manageBtn:'จัดการสมาชิก',
+        proTag:'Pro',proTitle:'ปลดล็อกทุกลูกเล่น',proDesc:'ไม่มีโฆษณาก่อนเข้าแดชบอร์ด จัดหมวดด้วย AI และแจ้งเตือนไม่จำกัด',proTitleActive:'คุณเป็นสมาชิก Pro อยู่แล้ว',proDescActive:'ขอบคุณที่อุดหนุนยายจันทร์นะคะ',upgradeBtn:'อัปเกรดเป็น Pro',manageBtn:'จัดการสมาชิก',
         sectionCategory:'หมวดและงบ',categoryMemoryTitle:'จัดหมวดด้วยความจำ',categoryMemoryOn:'จำหมวดจากชื่อรายการที่เคยพิมพ์',categoryMemoryOff:'ปิดอยู่ — พิมพ์หมวดเองทุกครั้ง',
         recurringTitle:'จดประจำ',recurringCount:n=>n+' รายการที่ตั้งไว้',recurringEmpty:'ยังไม่มีรายการประจำ',
         sectionNotify:'การแจ้งเตือน',dailyReminderTitle:'เตือนจดประจำวัน',dailyReminderOn:time=>'แจ้งเตือนทุกวัน '+time+' น.',dailyReminderOff:'ปิดอยู่',reminderTimeRow:'เวลาแจ้งเตือน',reminderSheetTitle:'ตั้งเวลาแจ้งเตือน',reminderSheetLead:'ยายจันทร์จะทักในแชท LINE ตามเวลานี้ทุกวัน ถ้าวันนั้นยังไม่ได้จดอะไรเลย',reminderSave:'บันทึกเวลา',toastReminderSaved:'บันทึกเวลาแจ้งเตือนแล้ว',
@@ -270,7 +272,7 @@
       },
       'English':{
         settingsTitle:'Settings',settingsLead:'Manage recurring entries and customize your experience',
-        proTag:'✦ Pro',proTitle:'Unlock everything',proDesc:'No ads before the dashboard, AI category matching, and unlimited reminders',proTitleActive:'You already have Pro',proDescActive:'Thank you for supporting ยายจันทร์ ✦',upgradeBtn:'Upgrade to Pro',manageBtn:'Manage membership',
+        proTag:'Pro',proTitle:'Unlock everything',proDesc:'No ads before the dashboard, AI category matching, and unlimited reminders',proTitleActive:'You already have Pro',proDescActive:'Thank you for supporting ยายจันทร์',upgradeBtn:'Upgrade to Pro',manageBtn:'Manage membership',
         sectionCategory:'Categories & Budgets',categoryMemoryTitle:'Smart category memory',categoryMemoryOn:'Remembers categories from past entries',categoryMemoryOff:'Off — you\u2019ll type the category every time',
         recurringTitle:'Recurring entries',recurringCount:n=>n+' entries set',recurringEmpty:'No recurring entries yet',
         sectionNotify:'Notifications',dailyReminderTitle:'Daily logging reminder',dailyReminderOn:time=>'Reminds you every day at '+time,dailyReminderOff:'Off',reminderTimeRow:'Reminder time',reminderSheetTitle:'Set reminder time',reminderSheetLead:'ยายจันทร์ will message you on LINE at this time each day if you haven\u2019t logged anything yet',reminderSave:'Save time',toastReminderSaved:'Reminder time saved',
@@ -418,30 +420,30 @@
       +banner
       +'<div class="section-label">'+esc(t('sectionCategory'))+'</div>'
       +'<section class="panel" style="padding:6px 17px">'
-        +settingRow({icon:'✨',title:t('categoryMemoryTitle'),sub:prefs.categoryMemory?t('categoryMemoryOn'):t('categoryMemoryOff'),right:'toggle',id:'categoryMemory',pro:true})
-        +settingRow({icon:'⟳',title:t('recurringTitle'),sub:(recurring&&recurring.length?t('recurringCount')(recurring.length):t('recurringEmpty')),right:'chevron',id:'recurring'})
+        +settingRow({icon:'auto_awesome',title:t('categoryMemoryTitle'),sub:prefs.categoryMemory?t('categoryMemoryOn'):t('categoryMemoryOff'),right:'toggle',id:'categoryMemory',pro:true})
+        +settingRow({icon:'autorenew',title:t('recurringTitle'),sub:(recurring&&recurring.length?t('recurringCount')(recurring.length):t('recurringEmpty')),right:'chevron',id:'recurring'})
       +'</section>'
       +'<div class="section-label">'+esc(t('sectionNotify'))+'</div>'
       +'<section class="panel" style="padding:6px 17px">'
-        +settingRow({icon:'🔔',title:t('dailyReminderTitle'),sub:prefs.dailyReminder?t('dailyReminderOn')(prefs.reminderTime):t('dailyReminderOff'),right:'toggle',id:'dailyReminder',pro:true})
-        +(prefs.dailyReminder&&subscription.active?settingRow({icon:'⏰',title:t('reminderTimeRow'),sub:'',right:'value',id:'reminderTime',value:prefs.reminderTime}):'')
+        +settingRow({icon:'notifications',title:t('dailyReminderTitle'),sub:prefs.dailyReminder?t('dailyReminderOn')(prefs.reminderTime):t('dailyReminderOff'),right:'toggle',id:'dailyReminder',pro:true})
+        +(prefs.dailyReminder&&subscription.active?settingRow({icon:'schedule',title:t('reminderTimeRow'),sub:'',right:'value',id:'reminderTime',value:prefs.reminderTime}):'')
       +'</section>'
       // เมนู "ข้อความยืนยัน" ใช้ได้ทั้งแชทกลุ่มและแชทส่วนตัว 1:1 (ฟีเจอร์ Premium) — เปิดเป็นหน้าเว็บแยกต่างหากที่มีตัวอย่างการ์ดจริงให้ดูสด ๆ (ดู /confirm-message)
       +'<div class="section-label">'+esc(t('sectionConfirmMsg'))+'</div>'
       +'<p class="lead" style="margin-top:-4px">'+esc(t('confirmMsgLead'))+'</p>'
       +'<section class="panel" style="padding:6px 17px">'
-        +settingRow({icon:'💬',title:t('confirmMsgRowTitle'),sub:t('confirmMsgRowSub'),right:'chevron',id:'confirmMessagePage',pro:true})
+        +settingRow({icon:'chat_bubble',title:t('confirmMsgRowTitle'),sub:t('confirmMsgRowSub'),right:'chevron',id:'confirmMessagePage',pro:true})
       +'</section>'
       +'<div class="section-label">'+esc(t('sectionMember'))+'</div>'
       +'<section class="panel" style="padding:6px 17px">'
-        +settingRow({icon:'👑',title:t('planTitle'),sub:t('planSub'),right:'pill',id:'plan',pillState:isPremium?'premium':'free'})
-        +settingRow({icon:'🧾',title:t('billingTitle'),sub:t('billingSub'),right:'chevron',id:'billing'})
+        +settingRow({icon:'workspace_premium',title:t('planTitle'),sub:t('planSub'),right:'pill',id:'plan',pillState:isPremium?'premium':'free'})
+        +settingRow({icon:'receipt_long',title:t('billingTitle'),sub:t('billingSub'),right:'chevron',id:'billing'})
       +'</section>'
       +'<div class="section-label">'+esc(t('sectionGeneral'))+'</div>'
       +'<section class="panel" style="padding:6px 17px">'
-        +settingRow({icon:'🌐',title:t('languageTitle'),sub:'',right:'value',id:'language',value:prefs.language})
+        +settingRow({icon:'language',title:t('languageTitle'),sub:'',right:'value',id:'language',value:prefs.language})
         +settingRow({icon:'฿',title:t('currencyTitle'),sub:'',right:'value',id:'currency',value:prefs.currency})
-        +settingRow({icon:'🕐',title:t('timezoneTitle'),sub:'',right:'value',id:'timezone',value:prefs.timezone})
+        +settingRow({icon:'schedule',title:t('timezoneTitle'),sub:'',right:'value',id:'timezone',value:prefs.timezone})
       +'</section>'
       +'<div class="section-label">'+esc(t('sectionLine'))+'</div>'
       +'<section class="panel"><div class="notice">'+esc(t('lineNotice'))+'</div></section>';
@@ -452,7 +454,7 @@
         : right==='chevron' ? '<span class="chev">›</span>'
         : right==='pill' ? '<span class="pill '+(o.pillState==='premium'?'pro':'free')+'">'+esc(o.pillState==='premium'?t('pillPro'):t('pillFree'))+'</span><span class="chev">›</span>'
         : '<span class="si-right">'+esc(value)+'<span class="chev">›</span></span>';
-      return '<div class="setting-item" data-setting="'+id+'"><div class="si-main"><span class="si-icon">'+icon+'</span><div class="si-text"><strong>'+esc(title)+(pro?' <span class="pill pro">'+esc(t('pillPro'))+'</span>':'')+'</strong>'+(sub?'<span>'+esc(sub)+'</span>':'')+'</div></div>'+rightHtml+'</div>';
+      return '<div class="setting-item" data-setting="'+id+'"><div class="si-main"><span class="si-icon"><span class="msym">'+icon+'</span></span><div class="si-text"><strong>'+esc(title)+(pro?' <span class="pill pro">'+esc(t('pillPro'))+'</span>':'')+'</strong>'+(sub?'<span>'+esc(sub)+'</span>':'')+'</div></div>'+rightHtml+'</div>';
     }
     function openSettingsSheet(html,title){
       const sheet=document.getElementById('settingsSheet');
@@ -500,7 +502,7 @@
           if(id==='confirmMessagePage')return void(location.href='/confirm-message'+query);
           if(id==='recurring')return openRecurringSheet();
           if(id==='plan')return goToProPage();
-          if(id==='billing')return openSettingsSheet('<div class="empty"><span class="emoji">🧾</span>'+esc(t('billingEmpty'))+'</div>',t('billingHeaderTitle'));
+          if(id==='billing')return openSettingsSheet('<div class="empty"><span class="msym" style="font-size:26px;display:block;margin-bottom:8px">receipt_long</span>'+esc(t('billingEmpty'))+'</div>',t('billingHeaderTitle'));
         };
       });
     }
@@ -617,6 +619,19 @@
         Promise.all([api('/api/dashboard'),api('/api/transactions').then(x=>x.transactions),api('/api/budgets').then(x=>x.budgets),api('/api/recurring').then(x=>x.recurring).catch(()=>[]),api('/api/subscription').catch(()=>subscription)]).then(r=>{[dashboard,transactions,budgets,recurring,subscription]=r})
       ]);
       if(reminderPrefs){prefs.dailyReminder=Boolean(reminderPrefs.dailyReminder);prefs.reminderTime=reminderPrefs.reminderTime||prefs.reminderTime;savePrefs()}
+      // Pro หมดอายุแล้วแต่ prefs (เก็บใน localStorage ฝั่ง client) ยังจำค่า "เปิด" ค้างไว้จากตอนที่ยังเป็น Premium อยู่
+      // เกิดจาก settingsPage() render toggle ตาม prefs[id] เฉย ๆ โดยไม่เคยเช็คย้อนว่า subscription.active หมดไปหรือยัง
+      // ต้องบังคับปิดตรงนี้ทุกครั้งที่โหลดข้อมูลสด (ไม่ใช่แค่ตอน toggle) ไม่งั้นฟีเจอร์ Pro จะดูเหมือน "เปิดค้าง" ใช้งานต่อได้ทั้งที่หมดอายุแล้ว
+      if(!subscription.active){
+        let changed=false;
+        for(const id of PRO_TOGGLES){ if(prefs[id]){ prefs[id]=false; changed=true; } }
+        if(changed){
+          savePrefs();
+          // dailyReminder ผูกกับ cron ฝั่งเซิร์ฟเวอร์ (ส่ง push แจ้งเตือนจริง) ต้องปิดที่ server ด้วย ไม่ใช่แค่ local state
+          // ไม่รอผลลัพธ์ (fire-and-forget) เพราะเป็นแค่ housekeeping ถ้าพลาดครั้งนี้ยังมีโอกาสปิดซ้ำตอนโหลดครั้งถัดไป
+          api('/api/reminder',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({enabled:false,time:prefs.reminderTime})}).catch(()=>{});
+        }
+      }
       loaded=true;render();
     }
     function categorySuggestions(){
@@ -648,6 +663,7 @@
   </script>
 </body>
 </html>
+
 
 
 
