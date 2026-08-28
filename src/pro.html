@@ -37,27 +37,12 @@
   .hero h1 em{font-style:normal;color:var(--wine)}
   .hero p{font-size:13.5px;color:var(--ink-soft);line-height:1.6;margin:0 auto;max-width:320px}
 
-  /* ---- signature element: before/after receipt slips ---- */
-  .compare{padding:6px 20px 8px;display:flex;justify-content:center;gap:14px;align-items:flex-end}
-  .slip{width:132px;border-radius:12px;background:#fff;box-shadow:0 10px 24px -12px rgba(35,31,26,.28);padding:12px 12px 14px;position:relative;transform:rotate(var(--tilt,0deg))}
-  .slip.free{--tilt:-3deg;opacity:.72;transform-origin:bottom left}
-  .slip.pro{--tilt:2.5deg;transform-origin:bottom right;box-shadow:0 16px 32px -12px rgba(122,43,61,.35);border:1px solid var(--gold-soft)}
-  .slip-tag{font-size:8.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-soft);margin-bottom:8px}
-  .slip.pro .slip-tag{color:var(--gold-deep)}
-  .slip-line{height:6px;border-radius:3px;background:var(--line-soft);margin-bottom:6px}
-  .slip-line.short{width:60%}
-  .slip.pro .slip-line{background:var(--gold-soft)}
-  .slip-badge{position:absolute;top:-9px;right:-8px;background:var(--gold);color:#3A2C0F;font-size:8.5px;font-weight:800;padding:3px 8px;border-radius:99px;box-shadow:0 4px 10px -3px rgba(166,119,46,.6)}
-  .slip-amt{font-size:15px;font-weight:800;margin-top:8px;color:var(--wine)}
-  .slip-check{display:flex;align-items:center;gap:5px;font-size:9px;color:var(--sage);margin-top:6px;font-weight:700}
-  .compare-arrow{font-size:16px;color:var(--ink-soft);padding-bottom:22px}
-
   /* ---- sections ---- */
   .section{padding:26px 20px 0}
   .section-title{font-size:11px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-soft);margin:0 4px 12px;display:flex;align-items:center;gap:8px}
   .section-title::after{content:"";flex:1;height:1px;background:var(--line)}
 
-  /* ---- feature ledger ---- */
+  /* ---- feature ledger (active-page recap list, unchanged) ---- */
   .ledger{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden}
   .entry{display:flex;gap:13px;padding:15px 16px;align-items:flex-start}
   .entry+.entry{border-top:1px dashed var(--line-soft)}
@@ -65,8 +50,39 @@
   .entry-text strong{display:block;font-size:13.5px;font-weight:700;margin-bottom:2px}
   .entry-text span{display:block;font-size:12px;color:var(--ink-soft);line-height:1.5}
 
-  /* ---- price card ---- */
-  .price-card{margin:26px 20px 0;border-radius:var(--radius);background:linear-gradient(155deg,var(--wine) 0%,var(--wine-deep) 100%);color:#fff;padding:22px;position:relative;overflow:hidden;box-shadow:var(--shadow)}
+  /* ---- feature comparison table (Free vs Pro) ---- */
+  .cmp{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden}
+  .cmp-head{display:flex;align-items:center;padding:14px 16px 12px;border-bottom:1px solid var(--line-soft)}
+  .cmp-head .cmp-label{flex:1;font-size:13px;font-weight:800}
+  .cmp-head .cmp-col{width:56px;text-align:center;font-size:12.5px;font-weight:800;color:var(--ink-soft)}
+  .cmp-head .cmp-col.pro{color:var(--wine)}
+  .cmp-row{display:flex;align-items:center;padding:13px 16px}
+  .cmp-row+.cmp-row{border-top:1px dashed var(--line-soft)}
+  .cmp-row .cmp-icon{width:30px;height:30px;border-radius:9px;background:var(--wine-soft);color:var(--wine);display:flex;align-items:center;justify-content:center;font-size:14px;flex:none;margin-right:12px}
+  .cmp-row .cmp-info{flex:1;min-width:0}
+  .cmp-row .cmp-info strong{display:block;font-size:12.5px;font-weight:700;line-height:1.35}
+  .cmp-row .cmp-info span{display:block;font-size:10.5px;color:var(--ink-soft);line-height:1.4;margin-top:1px}
+  .cmp-row .cmp-col{width:56px;text-align:center;font-size:15px;flex:none}
+  .cmp-mark{color:var(--sage);font-weight:800}
+  .cmp-mark.pro{color:var(--wine)}
+  .cmp-dash{color:var(--line);font-weight:800}
+
+  /* ---- plan toggle (monthly / yearly) ---- */
+  .plans{display:flex;gap:10px;margin:26px 20px 0}
+  .plan-opt{flex:1;position:relative;border:1.5px solid var(--line);border-radius:var(--radius-sm);background:var(--card);padding:14px 14px 13px;text-align:left;transition:border-color .15s,background .15s,transform .12s}
+  .plan-opt:active{transform:scale(.98)}
+  .plan-opt.selected{border-color:var(--wine);background:var(--wine-soft)}
+  .plan-badge{position:absolute;top:-9px;right:10px;background:var(--gold);color:#3A2C0F;font-size:8.5px;font-weight:800;padding:3px 8px;border-radius:99px;box-shadow:0 4px 10px -3px rgba(166,119,46,.6)}
+  .plan-name{font-size:11.5px;font-weight:800;color:var(--ink-soft);margin-bottom:6px}
+  .plan-opt.selected .plan-name{color:var(--wine)}
+  .plan-price{font-size:20px;font-weight:800;letter-spacing:-.02em;color:var(--ink)}
+  .plan-price small{font-size:11px;font-weight:700;color:var(--ink-soft)}
+  .plan-sub{font-size:10.5px;color:var(--ink-soft);margin-top:3px;line-height:1.4}
+  .plan-radio{position:absolute;top:12px;right:12px;width:17px;height:17px;border-radius:50%;border:1.5px solid var(--line);background:#fff}
+  .plan-opt.selected .plan-radio{border-color:var(--wine);background:var(--wine);box-shadow:inset 0 0 0 3px #fff}
+
+  /* ---- price card (checkout summary strip) ---- */
+  .price-card{margin:18px 20px 0;border-radius:var(--radius);background:linear-gradient(155deg,var(--wine) 0%,var(--wine-deep) 100%);color:#fff;padding:22px;position:relative;overflow:hidden;box-shadow:var(--shadow)}
   .price-card::before{content:"";position:absolute;top:-40px;right:-40px;width:150px;height:150px;border-radius:50%;background:rgba(255,255,255,.07)}
   .price-card::after{content:"";position:absolute;bottom:-50px;left:-30px;width:130px;height:130px;border-radius:50%;background:rgba(255,255,255,.05)}
   .price-row{display:flex;align-items:baseline;gap:6px;position:relative}
@@ -145,19 +161,30 @@
   const money = n => new Intl.NumberFormat('th-TH', { maximumFractionDigits: 2 }).format(Number(n) || 0);
   const fmtExpiry = iso => { if (!iso) return null; try { return new Date(iso).toLocaleDateString('th-TH', { day:'numeric', month:'long', year:'numeric' }); } catch { return null; } };
 
+  // icon: อักษร/สัญลักษณ์ตัวเดียวแทนไอคอน (คงธีม "ตราประทับ" เดิมของหน้านี้ ไม่ใช้ไลบรารีไอคอนภายนอก)
+  // free:true = มีให้ใช้ในแผนฟรีด้วย (โชว์ติ๊กสีเขียวในคอลัมน์ Free), false = มีเฉพาะ Pro (โชว์ขีดในคอลัมน์ Free)
   const FEATURES = [
-    { mark:'01', title:'อ่านใบเสร็จอัตโนมัติ', sub:'ถ่ายรูปสลิปส่งมา ยายจันทร์อ่านยอดเงินกับร้านค้าให้เอง ไม่ต้องพิมพ์เอง' },
-    { mark:'02', title:'จดบัญชีกลุ่ม', sub:'ชวนยายจันทร์เข้ากลุ่ม จดกองกลางร่วมกับเพื่อนหรือครอบครัวได้' },
-    { mark:'03', title:'ไม่มีโฆษณาคั่น', sub:'กดเข้าแดชบอร์ดได้ทันที ไม่ต้องรอดูโฆษณาก่อน' },
-    { mark:'04', title:'เตือนจดประจำวัน', sub:'ตั้งเวลาที่อยากให้ยายจันทร์ทักให้เอง ไม่พลาดทุกวัน' },
-    { mark:'05', title:'รายงาน PDF', sub:'สรุปรายเดือน/รายปีพร้อมกราฟ เก็บไว้ยื่นภาษีหรือส่งนักบัญชีได้เลย' },
-    { mark:'06', title:'ปรับแต่งการ์ดจดสำเร็จ', sub:'เลือกธีมสี ซ่อน/โชว์ปุ่มต่าง ๆ ให้เข้ากับสไตล์ของคุณ' },
-    { mark:'07', title:'จดจำหมวดหมู่', sub:'พิมพ์ชื่อรายการที่เคยจด ยายจันทร์เติมหมวดให้อัตโนมัติ' }
+    { icon:'📷', title:'อ่านใบเสร็จอัตโนมัติ', sub:'ถ่ายรูปสลิปส่งมา ยายจันทร์อ่านยอดเงินให้เอง', free:false },
+    { icon:'👥', title:'จดบัญชีกลุ่ม', sub:'จดกองกลางร่วมกับเพื่อนหรือครอบครัวได้', free:false },
+    { icon:'🚫', title:'ไม่มีโฆษณาคั่น', sub:'กดเข้าแดชบอร์ดได้ทันที ไม่ต้องรอดูโฆษณา', free:false },
+    { icon:'⏰', title:'เตือนจดประจำวัน', sub:'ตั้งเวลาที่อยากให้ยายจันทร์ทักให้เอง', free:false },
+    { icon:'📄', title:'รายงาน PDF', sub:'สรุปรายเดือน/รายปีพร้อมกราฟ ส่งนักบัญชีได้เลย', free:false },
+    { icon:'🎨', title:'ปรับแต่งการ์ดจดสำเร็จ', sub:'เลือกธีมสี ให้เข้ากับสไตล์ของคุณ', free:false },
+    { icon:'🏷️', title:'จดจำหมวดหมู่', sub:'พิมพ์ชื่อรายการเดิม ยายจันทร์เติมหมวดให้เอง', free:false },
+    { icon:'✏️', title:'จดด้วยข้อความ', sub:'พิมพ์บอกรายรับ-รายจ่ายในแชทได้ตามปกติ', free:true }
   ];
+
+  // ต้องตรงกับ PLAN_CATALOG ฝั่ง server (src/subscription/paymentSessions.js) — client ใช้แค่ "โชว์ราคา" เท่านั้น
+  // ราคาจริงที่ตัดเงินคำนวณที่ server เสมอ ห้ามเชื่อค่าจาก client (ดู /api/premium/checkout ใน index.js)
+  const PLAN_CATALOG = {
+    MONTHLY: { amount: 50, months: 1, label: 'รายเดือน', sub: 'จ่ายทุกเดือน ยกเลิกเมื่อไหร่ก็ได้' },
+    YEARLY:  { amount: 370, months: 12, label: 'รายปี', sub: 'เฉลี่ยเดือนละ ~31 บาท', badge: 'คุ้มที่สุด' }
+  };
 
   let subscription = { active:false, expiresAt:null, plan:'FREE', lineOaLink:null };
   let allowedFlag = false;
   let checkoutSession = null;
+  let selectedPlan = 'YEARLY'; // ค่าเริ่มต้นชี้ไปแผนที่คุ้มกว่าไว้ก่อน ผู้ใช้สลับเป็นรายเดือนได้จากหน้าอัพเซล
 
   function toast(msg){
     const el = document.getElementById('toast');
@@ -172,11 +199,41 @@
   }
 
   function renderFeatureLedger(){
-    return `<div class="ledger">${FEATURES.map(f => `
+    return `<div class="ledger">${FEATURES.map((f, i) => `
       <div class="entry">
-        <div class="entry-stamp">${f.mark}</div>
+        <div class="entry-stamp">${String(i + 1).padStart(2, '0')}</div>
         <div class="entry-text"><strong>${esc(f.title)}</strong><span>${esc(f.sub)}</span></div>
       </div>`).join('')}</div>`;
+  }
+
+  // ตาราง Free vs Pro แบบเทียบคอลัมน์ (เห็นชัดว่าจ่ายแล้วได้อะไรเพิ่มจากของฟรี)
+  function renderComparisonTable(){
+    return `<div class="cmp">
+      <div class="cmp-head">
+        <div class="cmp-label">ทำอะไรได้บ้าง</div>
+        <div class="cmp-col">Free</div>
+        <div class="cmp-col pro">Pro</div>
+      </div>
+      ${FEATURES.map(f => `
+        <div class="cmp-row">
+          <div class="cmp-icon">${f.icon}</div>
+          <div class="cmp-info"><strong>${esc(f.title)}</strong><span>${esc(f.sub)}</span></div>
+          <div class="cmp-col">${f.free ? '<span class="cmp-mark">✓</span>' : '<span class="cmp-dash">–</span>'}</div>
+          <div class="cmp-col"><span class="cmp-mark pro">✓</span></div>
+        </div>`).join('')}
+    </div>`;
+  }
+
+  // การ์ดเลือกแผนรายเดือน/รายปี — แตะเพื่อสลับ selectedPlan แล้ว re-render การ์ดราคาด้านล่างให้ตรงกัน
+  function renderPlanToggle(){
+    return `<div class="plans">${Object.entries(PLAN_CATALOG).map(([key, p]) => `
+      <button class="plan-opt${selectedPlan === key ? ' selected' : ''}" data-plan="${key}" type="button">
+        ${p.badge ? `<span class="plan-badge">${esc(p.badge)}</span>` : ''}
+        <span class="plan-radio"></span>
+        <div class="plan-name">${esc(p.label)}</div>
+        <div class="plan-price num">฿${money(p.amount)}</div>
+        <div class="plan-sub">${esc(p.sub)}</div>
+      </button>`).join('')}</div>`;
   }
 
   function renderActivePage(){
@@ -210,46 +267,60 @@
         <p>ปลดล็อกลูกเล่นที่ช่วยให้จดง่ายขึ้น เร็วขึ้น และดูภาพรวมการเงินได้ชัดเจนขึ้น</p>
       </div>
 
-      <div class="compare fade-in" style="animation-delay:.05s">
-        <div class="slip free">
-          <div class="slip-tag">ฟรี</div>
-          <div class="slip-line"></div>
-          <div class="slip-line short"></div>
-          <div class="slip-amt" style="color:var(--ink-soft)">พิมพ์เอง</div>
-        </div>
-        <div class="compare-arrow">→</div>
-        <div class="slip pro">
-          <div class="slip-badge">PRO</div>
-          <div class="slip-tag">ถ่ายรูปสลิป</div>
-          <div class="slip-line"></div>
-          <div class="slip-line short"></div>
-          <div class="slip-amt">อ่านให้อัตโนมัติ</div>
-          <div class="slip-check">✓ ยายจันทร์อ่านให้เสร็จ</div>
-        </div>
-      </div>
-
       <div class="section">
-        <div class="section-title">Pro ทำอะไรให้ได้บ้าง</div>
-        ${renderFeatureLedger()}
+        <div class="section-title">เทียบ Free กับ Pro</div>
+        ${renderComparisonTable()}
       </div>
 
-      <div class="price-card fade-in" style="animation-delay:.1s">
-        <div class="price-row"><span class="price-amt num">฿${money(checkoutSession?.amount ?? 50)}</span><span class="price-unit">/ เดือน</span></div>
-        <p class="price-note">จ่ายผ่าน PromptPay ครั้งเดียวต่อเดือน ยกเลิกเมื่อไหร่ก็ได้ ไม่ผูกมัด</p>
+      <div class="section" style="padding-bottom:0">
+        <div class="section-title" style="margin-bottom:0">เลือกรอบบิล</div>
       </div>
+      <div id="planToggle">${renderPlanToggle()}</div>
+
+      <div class="price-card fade-in" id="priceCard" style="animation-delay:.1s"></div>
 
       <div class="actionbar">
         <button class="primary" id="startCheckoutBtn">สมัคร Pro เลย</button>
       </div>
     `;
+    renderPriceSummary();
+    rewirePlanToggle();
     document.getElementById('startCheckoutBtn').onclick = startCheckout;
+  }
+
+  // ผูก onclick ใหม่ทุกครั้งหลัง re-render #planToggle (innerHTML แทนที่ node เดิม ทำให้ event handler เก่าหลุดไปด้วย)
+  function rewirePlanToggle(){
+    document.querySelectorAll('.plan-opt').forEach(btn => {
+      btn.onclick = () => {
+        selectedPlan = btn.dataset.plan;
+        document.getElementById('planToggle').innerHTML = renderPlanToggle();
+        rewirePlanToggle();
+        renderPriceSummary();
+      };
+    });
+  }
+
+  function renderPriceSummary(){
+    const p = PLAN_CATALOG[selectedPlan];
+    const unit = selectedPlan === 'YEARLY' ? '/ ปี' : '/ เดือน';
+    const note = selectedPlan === 'YEARLY'
+      ? 'จ่ายผ่าน PromptPay ครั้งเดียวต่อปี คุ้มกว่ารายเดือนกว่า 200 บาท'
+      : 'จ่ายผ่าน PromptPay ครั้งเดียวต่อเดือน ยกเลิกเมื่อไหร่ก็ได้ ไม่ผูกมัด';
+    document.getElementById('priceCard').innerHTML = `
+      <div class="price-row"><span class="price-amt num">฿${money(p.amount)}</span><span class="price-unit">${unit}</span></div>
+      <p class="price-note">${esc(note)}</p>
+    `;
   }
 
   async function startCheckout(){
     const root = document.getElementById('root');
     root.innerHTML = `<div class="hero"><div class="seal-wrap"><div class="seal">จ</div></div><p style="color:var(--ink-soft);font-size:13px">กำลังสร้างรายการชำระเงิน…</p></div>`;
     try {
-      const res = await api('/api/premium/checkout', { method:'POST' });
+      const res = await api('/api/premium/checkout', {
+        method:'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ plan: selectedPlan })
+      });
       if (res.alreadyPremium) {
         subscription.active = true;
         subscription.expiresAt = res.expiresAt;
@@ -287,6 +358,7 @@
         </div>
         <div class="qr-frame"><img src="${esc(s.qrImageUrl + query)}" alt="PromptPay QR" width="220" height="220"></div>
         <div class="qr-meta">
+          <div class="row"><span>แผน</span><strong>${esc(PLAN_CATALOG[s.plan]?.label || (s.months === 12 ? 'รายปี' : 'รายเดือน'))}</strong></div>
           <div class="row"><span>จำนวนเงิน</span><strong class="num">${money(s.amount)} บาท</strong></div>
           <div class="row"><span>เลขอ้างอิง</span><strong>${esc(s.referenceId)}</strong></div>
           <div class="row"><span>หมดอายุ</span><strong>${esc(fmtExpiry(s.expiresAt) || '-')}</strong></div>
@@ -412,4 +484,5 @@
 </script>
 </body>
 </html>
+
 
