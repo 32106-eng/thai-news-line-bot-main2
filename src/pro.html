@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>สมัคร Pro — ยายจันทร์</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20,500,0,0" />
 <style>
   @font-face{font-family:"Noto Sans Thai";font-display:swap}
   :root{
@@ -59,6 +60,8 @@
   .cmp-row{display:flex;align-items:center;padding:13px 16px}
   .cmp-row+.cmp-row{border-top:1px dashed var(--line-soft)}
   .cmp-row .cmp-icon{width:30px;height:30px;border-radius:9px;background:var(--wine-soft);color:var(--wine);display:flex;align-items:center;justify-content:center;font-size:14px;flex:none;margin-right:12px}
+  .cmp-row .cmp-icon .msym{font-size:17px}
+  .msym{font-family:'Material Symbols Rounded';font-weight:normal;font-style:normal;line-height:1;display:inline-block;white-space:nowrap;word-wrap:normal;direction:ltr;-webkit-font-smoothing:antialiased}
   .cmp-row .cmp-info{flex:1;min-width:0}
   .cmp-row .cmp-info strong{display:block;font-size:12.5px;font-weight:700;line-height:1.35}
   .cmp-row .cmp-info span{display:block;font-size:10.5px;color:var(--ink-soft);line-height:1.4;margin-top:1px}
@@ -164,14 +167,14 @@
   // icon: อักษร/สัญลักษณ์ตัวเดียวแทนไอคอน (คงธีม "ตราประทับ" เดิมของหน้านี้ ไม่ใช้ไลบรารีไอคอนภายนอก)
   // free:true = มีให้ใช้ในแผนฟรีด้วย (โชว์ติ๊กสีเขียวในคอลัมน์ Free), false = มีเฉพาะ Pro (โชว์ขีดในคอลัมน์ Free)
   const FEATURES = [
-    { icon:'📷', title:'อ่านใบเสร็จอัตโนมัติ', sub:'ถ่ายรูปสลิปส่งมา ยายจันทร์อ่านยอดเงินให้เอง', free:false },
-    { icon:'👥', title:'จดบัญชีกลุ่ม', sub:'จดกองกลางร่วมกับเพื่อนหรือครอบครัวได้', free:false },
-    { icon:'🚫', title:'ไม่มีโฆษณาคั่น', sub:'กดเข้าแดชบอร์ดได้ทันที ไม่ต้องรอดูโฆษณา', free:false },
-    { icon:'⏰', title:'เตือนจดประจำวัน', sub:'ตั้งเวลาที่อยากให้ยายจันทร์ทักให้เอง', free:false },
-    { icon:'📄', title:'รายงาน PDF', sub:'สรุปรายเดือน/รายปีพร้อมกราฟ ส่งนักบัญชีได้เลย', free:false },
-    { icon:'🎨', title:'ปรับแต่งการ์ดจดสำเร็จ', sub:'เลือกธีมสี ให้เข้ากับสไตล์ของคุณ', free:false },
-    { icon:'🏷️', title:'จดจำหมวดหมู่', sub:'พิมพ์ชื่อรายการเดิม ยายจันทร์เติมหมวดให้เอง', free:false },
-    { icon:'✏️', title:'จดด้วยข้อความ', sub:'พิมพ์บอกรายรับ-รายจ่ายในแชทได้ตามปกติ', free:true }
+    { icon:'photo_camera', title:'อ่านใบเสร็จอัตโนมัติ', sub:'ถ่ายรูปสลิปส่งมา ยายจันทร์อ่านยอดเงินให้เอง', free:false },
+    { icon:'group', title:'จดบัญชีกลุ่ม', sub:'จดกองกลางร่วมกับเพื่อนหรือครอบครัวได้', free:false },
+    { icon:'block', title:'ไม่มีโฆษณาคั่น', sub:'กดเข้าแดชบอร์ดได้ทันที ไม่ต้องรอดูโฆษณา', free:false },
+    { icon:'schedule', title:'เตือนจดประจำวัน', sub:'ตั้งเวลาที่อยากให้ยายจันทร์ทักให้เอง', free:false },
+    { icon:'description', title:'รายงาน PDF', sub:'สรุปรายเดือน/รายปีพร้อมกราฟ ส่งนักบัญชีได้เลย', free:false },
+    { icon:'palette', title:'ปรับแต่งการ์ดจดสำเร็จ', sub:'เลือกธีมสี ให้เข้ากับสไตล์ของคุณ', free:false },
+    { icon:'sell', title:'จดจำหมวดหมู่', sub:'พิมพ์ชื่อรายการเดิม ยายจันทร์เติมหมวดให้เอง', free:false },
+    { icon:'edit', title:'จดด้วยข้อความ', sub:'พิมพ์บอกรายรับ-รายจ่ายในแชทได้ตามปกติ', free:true }
   ];
 
   // ต้องตรงกับ PLAN_CATALOG ฝั่ง server (src/subscription/paymentSessions.js) — client ใช้แค่ "โชว์ราคา" เท่านั้น
@@ -216,7 +219,7 @@
       </div>
       ${FEATURES.map(f => `
         <div class="cmp-row">
-          <div class="cmp-icon">${f.icon}</div>
+          <div class="cmp-icon"><span class="msym">${esc(f.icon)}</span></div>
           <div class="cmp-info"><strong>${esc(f.title)}</strong><span>${esc(f.sub)}</span></div>
           <div class="cmp-col">${f.free ? '<span class="cmp-mark">✓</span>' : '<span class="cmp-dash">–</span>'}</div>
           <div class="cmp-col"><span class="cmp-mark pro">✓</span></div>
