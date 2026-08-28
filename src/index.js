@@ -253,13 +253,17 @@ function qrImageMessage(url) { return { type: "image", originalContentUrl: url, 
 
 // ชุดธีมสีของการ์ด "จดสำเร็จ" — ปรับได้จากหน้าตั้งค่า (ดู /api/confirm-message-prefs), ค่า default คือ "pink" (สีเดิมของการ์ดก่อนมีฟีเจอร์นี้)
 // accent = สีหลัก (แท็กประเภท/ตัวเลขเงิน/แถบงบ), accentSoft = พื้นหลังแท็กหมวดหมู่, accentDeep = สีแถบงบตอนเกินงบ, cream = พื้นหลังการ์ด
+// พื้นหลังการ์ด (cream) ใช้สีเดียวกันทุกธีมเสมอ — เปลี่ยนธีมมีผลแค่สีข้อความ/แท็ก/ปุ่ม (accent, accentSoft, accentDeep) เท่านั้น
+// ไม่แตะพื้นหลัง เพื่อให้การ์ดยังคงอ่านง่ายสม่ำเสมอไม่ว่าจะเลือกธีมไหน (เดิมแต่ละธีมมี cream เป็นสีของตัวเอง ทำให้พื้นหลังเปลี่ยนเฉด
+// เล็กน้อยตามธีมไปด้วย ซึ่งไม่ใช่พฤติกรรมที่ต้องการ)
+const CARD_CREAM = "#FBF3EC";
 const CONFIRM_MESSAGE_THEMES = {
-  pink: { accent: "#D23283", accentSoft: "#FCE4EF", accentDeep: "#B0225F", cream: "#FBF3EC" },
-  green: { accent: "#4B6A58", accentSoft: "#E7EFE8", accentDeep: "#33493C", cream: "#F3F7F1" },
-  brown: { accent: "#8A5A3B", accentSoft: "#F1E4D8", accentDeep: "#623F29", cream: "#FBF4EC" },
-  gold: { accent: "#A6772E", accentSoft: "#F5ECD9", accentDeep: "#7A5820", cream: "#FBF6EA" },
-  purple: { accent: "#7B5AA6", accentSoft: "#EAE3F5", accentDeep: "#5A3F80", cream: "#F6F3FB" },
-  orange: { accent: "#D2662E", accentSoft: "#FCE6D8", accentDeep: "#A8501F", cream: "#FDF3EC" }
+  pink: { accent: "#D23283", accentSoft: "#FCE4EF", accentDeep: "#B0225F", cream: CARD_CREAM },
+  green: { accent: "#4B6A58", accentSoft: "#E7EFE8", accentDeep: "#33493C", cream: CARD_CREAM },
+  brown: { accent: "#8A5A3B", accentSoft: "#F1E4D8", accentDeep: "#623F29", cream: CARD_CREAM },
+  gold: { accent: "#A6772E", accentSoft: "#F5ECD9", accentDeep: "#7A5820", cream: CARD_CREAM },
+  purple: { accent: "#7B5AA6", accentSoft: "#EAE3F5", accentDeep: "#5A3F80", cream: CARD_CREAM },
+  orange: { accent: "#D2662E", accentSoft: "#FCE6D8", accentDeep: "#A8501F", cream: CARD_CREAM }
 };
 function confirmMessageTheme(name) { return CONFIRM_MESSAGE_THEMES[name] ?? CONFIRM_MESSAGE_THEMES.pink; }
 
