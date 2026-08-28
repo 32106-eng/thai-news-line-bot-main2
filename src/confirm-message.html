@@ -126,14 +126,17 @@
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const money = n => new Intl.NumberFormat('th-TH', { maximumFractionDigits: 2 }).format(Number(n) || 0);
 
-  // Mirrors CONFIRM_MESSAGE_THEMES in src/index.js exactly.
+  // Mirrors CONFIRM_MESSAGE_THEMES in src/index.js exactly. Card background (cream) is intentionally the
+  // SAME across every theme — switching themes only changes text/tag/button colors (accent, accentSoft,
+  // accentDeep), never the background.
+  const CARD_CREAM = '#FBF3EC';
   const THEMES = {
-    pink:   { accent:'#D23283', accentSoft:'#FCE4EF', accentDeep:'#B0225F', label:'ชมพู'   },
-    green:  { accent:'#4B6A58', accentSoft:'#E7EFE8', accentDeep:'#33493C', label:'เขียว'   },
-    brown:  { accent:'#8A5A3B', accentSoft:'#F1E4D8', accentDeep:'#623F29', label:'น้ำตาล' },
-    gold:   { accent:'#A6772E', accentSoft:'#F5ECD9', accentDeep:'#7A5820', label:'ทอง'     },
-    purple: { accent:'#7B5AA6', accentSoft:'#EAE3F5', accentDeep:'#5A3F80', label:'ม่วง'     },
-    orange: { accent:'#D2662E', accentSoft:'#FCE6D8', accentDeep:'#A8501F', label:'ส้ม'     }
+    pink:   { accent:'#D23283', accentSoft:'#FCE4EF', accentDeep:'#B0225F', cream:CARD_CREAM, label:'ชมพู'   },
+    green:  { accent:'#4B6A58', accentSoft:'#E7EFE8', accentDeep:'#33493C', cream:CARD_CREAM, label:'เขียว'   },
+    brown:  { accent:'#8A5A3B', accentSoft:'#F1E4D8', accentDeep:'#623F29', cream:CARD_CREAM, label:'น้ำตาล' },
+    gold:   { accent:'#A6772E', accentSoft:'#F5ECD9', accentDeep:'#7A5820', cream:CARD_CREAM, label:'ทอง'     },
+    purple: { accent:'#7B5AA6', accentSoft:'#EAE3F5', accentDeep:'#5A3F80', cream:CARD_CREAM, label:'ม่วง'     },
+    orange: { accent:'#D2662E', accentSoft:'#FCE6D8', accentDeep:'#A8501F', cream:CARD_CREAM, label:'ส้ม'     }
   };
 
   const OPTIONS = [
@@ -168,11 +171,11 @@
     const footerBtns = [];
     if (state.showEditButton) footerBtns.push(`<div class="bubble-btn" style="background:#F1E7DC;color:#3A3540">แก้ไข</div>`);
     if (state.showDeleteButton) footerBtns.push(`<div class="bubble-btn" style="background:${th.accentSoft};color:${th.accent}">ลบ</div>`);
-    const footerHtml = footerBtns.length ? `<div class="bubble-footer" style="background:${th.accent === '#D23283' ? '#FBF3EC' : '#FBF3EC'}">${footerBtns.join('')}</div>` : '';
+    const footerHtml = footerBtns.length ? `<div class="bubble-footer" style="background:${th.cream}">${footerBtns.join('')}</div>` : '';
 
     return `
       <div class="bubble">
-        <div class="bubble-body" style="background:#FBF3EC">
+        <div class="bubble-body" style="background:${th.cream}">
           <p class="bubble-title">จดสำเร็จ ✅</p>
           <div class="tagrow">
             <span class="tag" style="background:${th.accent}">รายจ่าย</span>
