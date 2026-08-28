@@ -87,6 +87,8 @@ export function createPaymentTransactionService({ paymentTransactions, FieldValu
         paymentSessionId: paymentSession.id,
         transactionReference: refKey,
         amount: ocrData.amount,
+        // เก็บ months จาก session ไว้ตั้งแต่ตอนเข้า PENDING_REVIEW เพราะตอน adminApprove ทีหลังจะไม่มี paymentSession ในมือ (ดู finalizeVerified/adminApprove)
+        months: paymentSession.months ?? 1,
         status: TX_STATUS.PENDING_REVIEW,
         ocrExtracted: ocrData,
         reviewReason: reason,
@@ -135,6 +137,9 @@ export function createPaymentTransactionService({ paymentTransactions, FieldValu
         paymentSessionId: paymentSession.id,
         transactionReference,
         amount: verification.amount ?? ocrData.amount,
+        // เก็บ months ติดไว้กับ transaction ตอนสร้าง เพราะ adminApprove (แก้ทีหลังจาก PENDING_REVIEW) ไม่มี paymentSession
+        // ในมือ มีแต่ transaction doc นี้ — ถ้าไม่เก็บไว้ตรงนี้ ตอน admin approve จะไม่รู้ว่าต้องต่ออายุกี่เดือน
+        months: paymentSession.months ?? 1,
         status: TX_STATUS.VERIFIED,
         ocrExtracted: ocrData,
         providerVerification: { providerRef: verification.providerRef ?? null },
@@ -148,7 +153,8 @@ export function createPaymentTransactionService({ paymentTransactions, FieldValu
       return { outcome: TX_STATUS.DUPLICATE };
     }
     await auditLog({ userId, eventType: AUDIT_EVENTS.PAYMENT_VERIFIED, paymentSessionId: paymentSession.id, transactionReference });
-    await subscriptionService.activateOrRenew({ userId, paymentTransactionId: transactionReference });
+    // months มาจาก session ที่จ่ายจริง (แผนรายเดือน=1, รายปี=12) — เผื่อ session เก่าก่อนมีระบบแผนไม่มี field นี้ ให้ fallback เป็น 1 เดือนเหมือนพฤติกรรมเดิม
+    await subscriptionService.activateOrRenew({ userId, paymentTransactionId: transactionReference, months: paymentSession.months ?? 1 });
     return { outcome: TX_STATUS.VERIFIED, transactionReference };
   }
 
@@ -161,11 +167,11 @@ export function createPaymentTransactionService({ paymentTransactions, FieldValu
       const data = snap.data();
       if (data.status !== TX_STATUS.PENDING_REVIEW) return { ok: false, reason: "NOT_PENDING", currentStatus: data.status };
       tx.set(ref, { status: TX_STATUS.VERIFIED, verifiedAt: FieldValue.serverTimestamp(), reviewedBy: adminUsername, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
-      return { ok: true, userId: data.userId };
+      return { ok: true, userId: data.userId, months: data.months ?? 1 };
     });
     if (!result.ok) return result;
     await auditLog({ userId: result.userId, eventType: AUDIT_EVENTS.ADMIN_APPROVED, transactionReference, metadata: { adminUsername } });
-    await subscriptionService.activateOrRenew({ userId: result.userId, paymentTransactionId: transactionReference });
+    await subscriptionService.activateOrRenew({ userId: result.userId, paymentTransactionId: transactionReference, months: result.months });
     return { ok: true };
   }
 
@@ -191,3 +197,4 @@ export function createPaymentTransactionService({ paymentTransactions, FieldValu
 
   return { submitAndVerify, adminApprove, adminReject, listPendingReview };
 }
+
