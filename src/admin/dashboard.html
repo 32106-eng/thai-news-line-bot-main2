@@ -239,18 +239,28 @@ function renderNameCheck(r) {
   const accountName = r.accountDisplayName;
   const senderName = r.ocrExtracted?.senderName;
   const receiverName = r.ocrExtracted?.receiverName;
+  const slipImage = r.ocrExtracted?.slipImageBase64;
   const match = namesLikelyMatch(accountName, senderName);
   const cls = match === false ? 'namecheck mismatch' : 'namecheck';
   const flagHtml = match === false
     ? `<div class="flag">⚠ ชื่อบัญชีกับชื่อผู้โอนดูไม่ตรงกัน — ตรวจสอบก่อนอนุมัติ</div>`
     : match === true
       ? `<div class="ok">✓ ชื่อตรงกับบัญชีที่สมัคร</div>`
-      : `<div style="color:var(--grey);font-size:12px;margin-top:4px">อ่านชื่อได้ไม่ครบ กรุณาตรวจสอบด้วยตาจากรูปสลิป</div>`;
+      : `<div style="color:var(--grey);font-size:12px;margin-top:4px">อ่านชื่อได้ไม่ครบ กรุณาตรวจสอบด้วยตาจากรูปสลิปด้านล่าง</div>`;
+  // รูปสลิปที่แนบมาด้วยเสมอ (ถ้าย่อขนาดสำเร็จ) ให้แอดมินดูเองเป็น fallback เวลา AI อ่านชื่อผิด/อ่านไม่ได้เลย
+  // ไม่ใช่แค่โชว์ตอนอ่านชื่อไม่ได้เท่านั้น เพราะ AI อ่านผิดแบบเงียบ ๆ (เช่นสลับชื่อผู้โอน-ผู้รับ) ก็เป็นไปได้เหมือนกัน
+  const slipImageHtml = slipImage
+    ? `<div style="margin-top:10px">
+        <div style="font-size:11px;color:var(--grey);margin-bottom:4px">รูปสลิปที่ส่งมา (ย่อขนาดแล้ว)</div>
+        <a href="${slipImage}" target="_blank" rel="noopener"><img src="${slipImage}" alt="รูปสลิป" style="max-width:220px;max-height:220px;border-radius:8px;border:1px solid var(--line);display:block"></a>
+      </div>`
+    : `<div style="font-size:11.5px;color:var(--grey);margin-top:8px">ไม่มีรูปสลิปแนบมา (อาจเป็นรายการเก่าก่อนเพิ่มฟีเจอร์นี้ หรือย่อขนาดไม่สำเร็จ)</div>`;
   return `<div class="${cls}">
     <div class="row"><span>ชื่อบัญชีที่สมัคร (LINE)</span><b>${esc(accountName) || '(ดึงชื่อไม่ได้)'}</b></div>
     <div class="row"><span>ชื่อผู้โอน (อ่านจากสลิป)</span><b>${esc(senderName) || '(อ่านไม่ได้)'}</b></div>
     <div class="row"><span>ชื่อผู้รับ (อ่านจากสลิป)</span><b>${esc(receiverName) || '(อ่านไม่ได้)'}</b></div>
     ${flagHtml}
+    ${slipImageHtml}
   </div>`;
 }
 
