@@ -138,7 +138,7 @@ const INCOME_PREFIX = /^(?:\+|รับ)\s*(?=[0-9])|^จดรับ\s*(?=[0-9]
 
 // confirmMessagePrefs: ปรับแต่งการ์ด "จดสำเร็จ" (txFlexMessage) — ฟีเจอร์ Premium ใช้ได้ทั้งกลุ่มและแชทส่วนตัว 1:1 (ดู /api/confirm-message-prefs)
 // ค่า default ทุกตัว = พฤติกรรมเดิมของการ์ด (เปิดหมด, ธีมชมพู) เพื่อไม่กระทบผู้ใช้เก่าที่ยังไม่เคยตั้งค่า
-function defaultConfirmMessagePrefs() { return { showBudgetBar: true, showAuthorName: true, showEditButton: true, showDeleteButton: true, theme: "pink" }; }
+function defaultConfirmMessagePrefs() { return { showBudgetBar: true, showAuthorName: true, showEditButton: true, showDeleteButton: true, showAiPickButton: true, theme: "pink" }; }
 function emptyUser() { return { transactions: [], recurring: [], budgets: {}, dailyReminder: false, reminderTime: "20:00", confirmMessagePrefs: defaultConfirmMessagePrefs() }; }
 async function getUser(uid) {
   const snap = await usersCol.doc(String(uid)).get();
@@ -399,11 +399,10 @@ function txFlexMessage(tx, opts = {}) {
   };
 }
 // การ์ด Flex Message ถามยืนยันประเภท "รายรับ/รายจ่าย" หลังอ่านสลิปเสร็จ — ยังไม่บันทึกจริงจนกว่าจะกดปุ่ม
-// receipt: { merchant, amount } จาก readReceipt, meta: { authorId } (มีเฉพาะในกลุ่ม)
+// receipt: { merchant, amount } จาก readReceipt, meta: { authorId, theme } (theme มีเฉพาะตอนผู้เป็น Premium ตั้งธีมไว้ที่หน้า confirm-message)
 // ข้อมูลที่ต้องใช้ต่อถูกเข้ารหัสไว้ใน postback data ตรง ๆ (ไม่ผ่าน session ฝั่งเซิร์ฟเวอร์) เพราะเป็นข้อมูลเล็กและอายุสั้น
 function receiptConfirmFlexMessage(receipt, meta = {}) {
-  const pink = "#D23283";
-  const cream = "#FBF3EC";
+  const { accent: pink, cream } = confirmMessageTheme(meta.theme);
   const merchant = String(receipt.merchant ?? "อื่น ๆ").slice(0, 60); // ใช้ตัวเต็มแค่ตอนแสดงผลในการ์ด
   // LINE postback data จำกัดไม่เกิน 300 ตัวอักษร ภาษาไทย 1 ตัวอักษร URL-encode แล้วกินพื้นที่ ~9 ไบต์
   // ตัด merchant เหลือ 15 ตัวในพารามิเตอร์ m (คนละตัวกับ merchant ด้านบนที่ใช้แสดงผล) กันเกิน limit ตอนรวมกับ slip_step/aid/c (เพิ่มมาใหม่)
@@ -448,8 +447,7 @@ function receiptConfirmFlexMessage(receipt, meta = {}) {
 // ให้ categoryFor()/enrichWithAi ตัดสินหมวดเอาเองทั้งหมด ตอนนี้เปิดให้ผู้ใช้เลือกเองก่อนได้ ลดโอกาสตกไปเป็น "อื่น ๆ" ผิด ๆ)
 // เลือก "ให้ยายเลือกให้" ได้ ถ้าไม่อยากเลือกเอง -> ทำงานเหมือนพฤติกรรมเดิมทุกอย่าง (keyword match + AI ช่วยตัดสินตอน "อื่น ๆ")
 function categoryPickerFlexMessage(merchant, amount, meta = {}) {
-  const pink = "#D23283";
-  const cream = "#FBF3EC";
+  const { accent: pink, cream } = confirmMessageTheme(meta.theme);
   const displayMerchant = String(merchant ?? "อื่น ๆ").slice(0, 60); // ใช้ตัวเต็มแค่ตอนแสดงผลในการ์ด
   // ตัด merchant ให้สั้นลงเหลือ 15 ตัวอักษรตอนใส่ใน postback data เท่านั้น (คนละตัวกับ displayMerchant ด้านบน, เท่ากับ limit ที่ใช้ใน receiptConfirmFlexMessage)
   // เพราะภาษาไทย 1 ตัวอักษร URL-encode แล้วกินพื้นที่ ~9 ไบต์ ถ้าปล่อยยาวเกินไปรวมกับ slip_step/c/aid จะเกิน 300 ตัวอักษรที่ LINE postback data รับได้
@@ -488,12 +486,16 @@ function categoryPickerFlexMessage(merchant, amount, meta = {}) {
           }
         ]
       },
-      footer: {
-        type: "box", layout: "vertical", paddingAll: "12px", backgroundColor: cream,
-        contents: [
-          { type: "button", style: "primary", height: "sm", color: pink, action: { type: "postback", label: "ให้ยายเลือกให้ 👵", data: payload(""), displayText: "ให้ยายเลือกให้" } }
-        ]
-      }
+      // ปุ่ม "ให้ยายเลือกให้" ปิดได้จาก confirmMessagePrefs.showAiPickButton (ดู confirmMessagePrefsInput) — คนที่อยากบังคับตัวเองเลือกหมวดเองทุกครั้งจะได้ไม่เผลอกดข้าม
+      // ถ้าปิดไว้และไม่มีปุ่มหมวดไหนเข้าเกณฑ์เลย ก็จะไม่มี footer เลย (การ์ดยังใช้งานได้ปกติ แค่ไม่มีทางลัด)
+      ...(meta.showAiPickButton === false ? {} : {
+        footer: {
+          type: "box", layout: "vertical", paddingAll: "12px", backgroundColor: cream,
+          contents: [
+            { type: "button", style: "primary", height: "sm", color: pink, action: { type: "postback", label: "ให้ยายเลือกให้ 👵", data: payload(""), displayText: "ให้ยายเลือกให้" } }
+          ]
+        }
+      })
     }
   };
 }
@@ -513,9 +515,9 @@ async function saveConfirmedSlipTx({ userId, type, merchant, amount, category, a
 }
 // การ์ด Flex Message สำหรับคำสั่ง "เว็บ" — สรุปยอดเดือนนี้แบบย่อ + ปุ่มใหญ่กดเข้าแดชบอร์ด
 // แทนที่ข้อความ text ธรรมดา + ลิงก์ยาว ๆ แบบเดิม ให้ธีมตรงกับ txFlexMessage/receiptConfirmFlexMessage
+// user.confirmMessagePrefs.theme ใช้ธีมเดียวกับการ์ด "จดสำเร็จ" ทุกครั้ง ไม่ต้องตั้งแยก ให้ทุกการ์ดที่ยายจันทร์ส่งดูเป็นชุดเดียวกัน
 function dashboardFlexMessage(user, { isGroupChat, dashboardUrl } = {}) {
-  const pink = "#D23283";
-  const cream = "#FBF3EC";
+  const { accent: pink, cream } = confirmMessageTheme(user?.confirmMessagePrefs?.theme);
   const gold = "#C79A46";
   const month = user.transactions.filter((tx) => sameMonth(tx.createdAt));
   const t = totals(month);
@@ -946,7 +948,7 @@ function reminderInput(body) {
   if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) return null;
   return { dailyReminder: enabled, reminderTime: time };
 }
-// ตั้งค่าการ์ด "จดสำเร็จ" (ดู txFlexMessage/CONFIRM_MESSAGE_THEMES ด้านบน) — ฟีเจอร์ Premium เฉพาะแชทกลุ่ม
+// ตั้งค่าการ์ด "จดสำเร็จ" และการ์ดยืนยันสลิป/เลือกหมวด (ดู txFlexMessage/categoryPickerFlexMessage/CONFIRM_MESSAGE_THEMES ด้านบน) — ฟีเจอร์ Premium ใช้ได้ทั้งกลุ่มและแชทส่วนตัว
 function confirmMessagePrefsInput(body) {
   if (typeof body?.theme !== "undefined" && !(body.theme in CONFIRM_MESSAGE_THEMES)) return null;
   return {
@@ -954,6 +956,8 @@ function confirmMessagePrefsInput(body) {
     showAuthorName: Boolean(body?.showAuthorName),
     showEditButton: Boolean(body?.showEditButton),
     showDeleteButton: Boolean(body?.showDeleteButton),
+    // ปุ่ม "ให้ยายเลือกให้" บนการ์ดเลือกหมวดหมู่ (ดู categoryPickerFlexMessage) — ปิดได้สำหรับคนที่อยากบังคับตัวเองเลือกหมวดทุกครั้ง ไม่ยอมให้ AI เดาแทน
+    showAiPickButton: body?.showAiPickButton === undefined ? true : Boolean(body.showAiPickButton),
     theme: body?.theme in CONFIRM_MESSAGE_THEMES ? body.theme : "pink"
   };
 }
@@ -1286,7 +1290,8 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
           if (!Number.isFinite(amount) || amount <= 0) message = "ข้อมูลสลิปหมดอายุแล้ว ลองส่งรูปใหม่อีกครั้ง";
           else if (step === "category") {
             // ปุ่ม "รายจ่าย" ถูกกด -> ยังไม่บันทึก แสดงการ์ดเลือกหมวดหมู่ต่อก่อน (ดู categoryPickerFlexMessage)
-            message = categoryPickerFlexMessage(merchant, amount, { authorId });
+            const pbUser = await getUser(pbUserId);
+            message = categoryPickerFlexMessage(merchant, amount, { authorId, theme: pbUser.confirmMessagePrefs?.theme, showAiPickButton: pbUser.confirmMessagePrefs?.showAiPickButton });
           } else {
             const category = decodeURIComponent(params.get("c") ?? ""); // ว่างได้ถ้ากด "ให้ยายเลือกให้" หรือเป็นรายรับ (ไม่มี c เลย)
             const { user, tx } = await saveConfirmedSlipTx({ userId: pbUserId, type, merchant, amount, category, authorId, isGroupChat: pbIsGroupChat });
@@ -1332,7 +1337,8 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
             const result = await readReceipt(mime, base64);
             if (result.error === "system") message = noticeFlexMessage("ตอนนี้ระบบอ่านภาพขัดข้องชั่วคราว ไม่เกี่ยวกับความชัดของรูปเลย ลองส่งรูปเดิมอีกครั้งใน 1-2 นาที หรือพิมพ์รายการเองแทนได้เลย เช่น /บอท กาแฟ 60", "error");
             else if (result.error === "unreadable") message = noticeFlexMessage("อ่านยอดเงินจากใบเสร็จนี้ไม่ได้ ลองถ่ายให้เห็นยอดรวมชัด ๆ อีกครั้ง หรือพิมพ์รายการเองแทนได้ เช่น /บอท กาแฟ 60", "error");
-            else message = receiptConfirmFlexMessage(result.receipt, { authorId }); // ยังไม่บันทึก รอผู้ใช้กดยืนยันรายรับ/รายจ่ายก่อน (ดู postback handler)
+            // ธีมสีของกลุ่มผูกกับ confirmMessagePrefs ของตัวกลุ่มเอง (userId ที่นี่คือ groupId) เหมือนกับที่หน้า confirm-message ใช้ isGroup เช็ค
+            else message = receiptConfirmFlexMessage(result.receipt, { authorId, theme: (await getUser(userId)).confirmMessagePrefs?.theme }); // ยังไม่บันทึก รอผู้ใช้กดยืนยันรายรับ/รายจ่ายก่อน (ดู postback handler)
           } catch (error) { console.error("Receipt read failed", error.message); message = noticeFlexMessage("ระบบประมวลผลภาพใช้เวลานานกว่าปกติ กรุณาลองใหม่อีกครั้ง", "error"); }
           try { await push(userId, message); } catch (error) { console.error("Could not push", error.message); }
           continue;
@@ -1363,7 +1369,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
               const result = await readReceipt(mime, base64);
               if (result.error === "system") message = noticeFlexMessage("ตอนนี้ระบบอ่านภาพขัดข้องชั่วคราว ไม่เกี่ยวกับความชัดของรูปเลย ลองส่งรูปเดิมอีกครั้งใน 1-2 นาที หรือพิมพ์รายการเองแทนได้เลย เช่น กาแฟ 60", "error");
               else if (result.error === "unreadable") message = noticeFlexMessage("อ่านยอดเงินจากใบเสร็จนี้ไม่ได้ ลองถ่ายให้เห็นยอดรวมชัด ๆ อีกครั้ง หรือพิมพ์รายการเองแทนได้ เช่น กาแฟ 60", "error");
-              else message = receiptConfirmFlexMessage(result.receipt); // ยังไม่บันทึก รอผู้ใช้กดยืนยันรายรับ/รายจ่ายก่อน (ดู postback handler)
+              else message = receiptConfirmFlexMessage(result.receipt, { theme: (await getUser(userId)).confirmMessagePrefs?.theme }); // ยังไม่บันทึก รอผู้ใช้กดยืนยันรายรับ/รายจ่ายก่อน (ดู postback handler)
             } catch (error) { console.error("Receipt read failed", error.message); message = noticeFlexMessage("ระบบประมวลผลภาพใช้เวลานานกว่าปกติ กรุณาลองใหม่อีกครั้ง", "error"); }
           }
         }
