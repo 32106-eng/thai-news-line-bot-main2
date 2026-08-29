@@ -86,7 +86,8 @@ const subLineHandlers = createSubscriptionLineHandlers({
   ai,
   visionModel,
   buildQrImageUrl,
-  getLineDisplayName
+  getLineDisplayName,
+  makeSlipThumbnail
 });
 const adminAuth = createAdminAuth(subCollections);
 app.use("/admin", createAdminRouter({ collections: subCollections, adminAuth, subscriptionService, paymentTransactionService }));
@@ -847,7 +848,22 @@ async function downloadLineImage(messageId) {
     .resize({ width: 1600, height: 1600, fit: "inside", withoutEnlargement: true })
     .jpeg({ quality: 82 })
     .toBuffer();
-  return { mime: "image/jpeg", base64: resized.toString("base64") };
+  return { mime: "image/jpeg", base64: resized.toString("base64"), _rawBuffer: buffer };
+}
+// รูปย่อขนาดเล็กมาก (~500px, quality ต่ำ) สำหรับเก็บติดไปกับ transaction doc ใน Firestore เพื่อให้แอดมินดูสลิปจริงตอนตรวจสอบด้วยตา
+// คนละตัวกับรูปที่ส่งให้ AI อ่าน (1600px/quality 82) — อันนั้นใหญ่เกินกว่าจะเก็บใน Firestore ได้ทุกครั้ง (limit 1MB ต่อ document รวมทุก field)
+// ใช้เฉพาะตอนที่ AI อ่านชื่อผู้โอน/ผู้รับจากสลิปไม่ได้เท่านั้น (ดู lineHandlers.js handleSlipImage) เป็น fallback ให้แอดมินเช็คเอง ไม่ใช่ให้ AI อ่านซ้ำ
+async function makeSlipThumbnail(rawBuffer) {
+  try {
+    const thumb = await sharp(rawBuffer)
+      .rotate()
+      .resize({ width: 500, height: 500, fit: "inside", withoutEnlargement: true })
+      .jpeg({ quality: 55 })
+      .toBuffer();
+    // เพดานกันเหนียว 350KB (ทางปฏิบัติแทบไม่ถึงด้วยขนาด/quality นี้ แต่ถ้าเป็นภาพซับซ้อนผิดปกติ ให้ข้ามไปเลยดีกว่าเก็บครึ่ง ๆ กลาง ๆ)
+    if (thumb.length > 350_000) return null;
+    return `data:image/jpeg;base64,${thumb.toString("base64")}`;
+  } catch (error) { console.warn("Slip thumbnail generation failed:", error.message); return null; }
 }
 // คืนค่า { receipt } ถ้าอ่านสำเร็จ, { error: "system" } ถ้า provider/AI พัง (ไม่เกี่ยวกับภาพ), { error: "unreadable" } ถ้าอ่านได้แต่ไม่เจอยอดเงินที่สมเหตุสมผล
 // แยกสองเคสนี้ออกจากกัน เพราะข้อความที่ควรบอกผู้ใช้ต่างกันมาก — เดิมรวมเป็น null เดียวกันหมด ทำให้ปัญหาฝั่งระบบ (เช่น provider error 500)
