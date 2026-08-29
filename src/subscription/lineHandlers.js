@@ -3,12 +3,32 @@ import { readSlip } from "./ocr.js";
 import { TX_STATUS } from "./paymentTransactions.js";
 import { AUDIT_EVENTS } from "./auditLog.js";
 
+// ตัวช่วยฟอร์แมตจำนวนเงินในไฟล์นี้เอง (ไม่ import จาก index.js เพราะ index.js เป็นฝั่งที่ import ไฟล์นี้อยู่แล้ว — import ย้อนกลับจะเกิด circular import)
+function money(value) { return new Intl.NumberFormat("th-TH", { maximumFractionDigits: 2 }).format(value); }
+const PLAN_LABEL = { MONTHLY: "เดือน", YEARLY: "ปี" }; // ใช้แสดงในข้อความ "Premium ราคา X บาท / <label>"
+
+// เทียบชื่อบัญชี LINE กับชื่อผู้โอนที่อ่านได้จากสลิปแบบหยาบ ๆ (เหมือนกับที่ src/admin/dashboard.html ใช้เตือนแอดมิน)
+// จุดประสงค์คือให้ผู้ใช้เองก็เห็นทันทีในแชทถ้าโอนผิดบัญชี/สลิปคนละคน ไม่ต้องรอแอดมินตรวจแล้วมาทักทีหลัง
+function normalizeName(s) {
+  return String(s ?? "")
+    .replace(/^(นาย|นาง|นางสาว|น\.ส\.|ด\.ช\.|ด\.ญ\.|mr\.?|mrs\.?|ms\.?|miss)\s*/i, "")
+    .replace(/\s+/g, "")
+    .toLowerCase();
+}
+function namesLikelyMatch(a, b) {
+  if (!a || !b) return null;
+  const na = normalizeName(a), nb = normalizeName(b);
+  if (!na || !nb) return null;
+  return na === nb || na.includes(nb) || nb.includes(na);
+}
+
 const MSG = {
   alreadyPremium: (sub) =>
     `Premium ของคุณยังใช้งานได้ ✅\n\nเริ่มใช้งาน:\n${formatThaiDate(sub.startedAt)}\n\nหมดอายุ:\n${formatThaiDate(sub.expiresAt)}\n(เหลืออีก ${daysRemaining(sub.expiresAt)} วัน)`,
   qrUnavailable: (note) => `ยังไม่สามารถสร้าง QR ชำระเงินได้ในขณะนี้\n(${note})\nกรุณาติดต่อผู้ดูแลระบบ`,
-  qrCreated: (session) =>
-    `Premium ราคา 50 บาท / เดือน 💳\n\nเลขอ้างอิง: ${session.referenceId}\n\nกรุณาชำระเงินตาม QR ด้านบน\n\nหลังชำระเงินแล้วพิมพ์:\n"ส่งสลิป"\n\n(ลิงก์/QR นี้จะหมดอายุใน 20 นาที)`,
+  // planLabel/unitLabel มาจาก plan ที่เลือกจริง (ดู PLAN_CATALOG ใน paymentSessions.js) ไม่ hardcode "50 บาท/เดือน" ตายตัวอีกต่อไป เพราะตอนนี้ขายได้ทั้งรายเดือน/รายปี
+  qrCreated: (session, planLabel) =>
+    `Premium ราคา ${money(session.amount)} บาท / ${planLabel} 💳\n\nเลขอ้างอิง: ${session.referenceId}\n\nกรุณาชำระเงินตาม QR ด้านบน\n\nหลังชำระเงินแล้วพิมพ์:\n"ส่งสลิป"\n\n(ลิงก์/QR นี้จะหมดอายุใน 20 นาที)`,
   askForSlip: "กรุณาส่งรูปสลิปการชำระเงิน 🧾",
   noActiveSession: "ยังไม่มีรายการรอชำระเงิน กรุณาพิมพ์ \"สมัครพรีเมียม\" ก่อน",
   sessionExpired: "รายการชำระเงินหมดอายุแล้ว กรุณาพิมพ์ \"สมัครพรีเมียม\" ใหม่อีกครั้ง",
@@ -35,21 +55,40 @@ export function createSubscriptionLineHandlers({
   auditLog,
   ai,
   visionModel,
-  buildQrImageUrl
+  buildQrImageUrl,
+  getLineDisplayName
 }) {
+  // คืนบรรทัดเสริมท้ายข้อความแจ้งผล (ว่างเปล่าถ้าข้อมูลไม่พอเทียบ เพื่อไม่ให้ข้อความรกเกินจำเป็นตอนอ่านสลิปไม่ครบ)
+  async function buildNameCheckLine(userId, senderName) {
+    if (!getLineDisplayName || !senderName) return "";
+    const accountName = await getLineDisplayName(userId).catch(() => null);
+    const match = namesLikelyMatch(accountName, senderName);
+    if (match === false) return `\n\n⚠ ชื่อบัญชี LINE ของคุณ (${accountName}) กับชื่อผู้โอนในสลิป (${senderName}) ดูไม่ตรงกัน ถ้าโอนจากบัญชีคนอื่นให้แจ้งเจ้าหน้าที่ด้วยนะ ไม่งั้นอาจไม่ผ่านการตรวจสอบ`;
+    if (match === true) return `\n\nชื่อผู้โอน (${senderName}) ตรงกับบัญชีที่สมัคร ✅`;
+    return ""; // match === null: ข้อมูลไม่พอเทียบ ไม่ต้องพูดอะไรเพิ่ม กันข้อความดูน่ากังวลเกินจริงทั้งที่แค่อ่านชื่อไม่ครบ
+  }
+
+  // เดิม handleSubscribeCommand สร้าง session รายเดือนทันที ตอนนี้แยกเป็น 2 ขั้น:
+  // 1) handleSubscribeCommand แค่เช็คว่า active อยู่แล้วหรือยัง ถ้ายัง -> ให้ index.js โชว์การ์ดเลือกแผน (planPickerFlexMessage)
+  // 2) handlePlanSelected สร้าง session จริงหลังผู้ใช้กดเลือกแผนจากการ์ด (ดู postback handler ใน index.js)
   async function handleSubscribeCommand(userId) {
     const status = await subscriptionService.getStatusView(userId);
     await auditLog({ userId, eventType: AUDIT_EVENTS.PREMIUM_REQUESTED });
+    if (status.active) return { alreadyPremium: true, text: MSG.alreadyPremium(status) };
+    return { alreadyPremium: false };
+  }
+
+  async function handlePlanSelected(userId, planKey) {
+    const status = await subscriptionService.getStatusView(userId);
     if (status.active) return { text: MSG.alreadyPremium(status) };
 
-    const { session } = await paymentSessionService.createOrReuse(userId);
+    const { session } = await paymentSessionService.createOrReuse(userId, planKey);
     const qr = qrService.generateForSession(session);
     if (!qr.available) return { text: MSG.qrUnavailable(qr.note) };
-    await auditLog({ userId, eventType: AUDIT_EVENTS.QR_CREATED, paymentSessionId: session.id, metadata: { referenceId: session.referenceId } });
-    // ส่ง Image Message ที่ render จาก qr.payload เป็นภาพ QR จริง (ผ่าน /qr/:sessionId.png ใน index.js)
-    // ร่วมกับข้อความนี้ — ถ้าไม่ได้ตั้ง PUBLIC_BASE_URL จะไม่มี qrImageUrl ให้ และข้อความอย่างเดียวจะถูกส่งไปแทน
+    await auditLog({ userId, eventType: AUDIT_EVENTS.QR_CREATED, paymentSessionId: session.id, metadata: { referenceId: session.referenceId, plan: session.plan } });
     const qrImageUrl = buildQrImageUrl ? buildQrImageUrl(session.id) : null;
-    return { text: MSG.qrCreated(session), qrImageUrl };
+    const planLabel = PLAN_LABEL[session.plan] ?? PLAN_LABEL.MONTHLY;
+    return { text: MSG.qrCreated(session, planLabel), qrImageUrl };
   }
 
   async function handleSendSlipCommand(userId) {
@@ -116,7 +155,11 @@ export function createSubscriptionLineHandlers({
       [TX_STATUS.REJECTED]: MSG.rejected,
       [TX_STATUS.DUPLICATE]: MSG.duplicate
     };
-    const message = messages[result.outcome] ?? MSG.rejected;
+    let message = messages[result.outcome] ?? MSG.rejected;
+    // ต่อท้ายด้วยผลเทียบชื่อบัญชี LINE กับชื่อผู้โอนในสลิป เฉพาะตอนที่ยืนยัน/รอตรวจสอบ (REJECTED/DUPLICATE ไม่เกี่ยวกับชื่อ ไม่ต้องแปะ)
+    if (result.outcome === TX_STATUS.VERIFIED || result.outcome === TX_STATUS.PENDING_REVIEW) {
+      message += await buildNameCheckLine(userId, ocrData.senderName);
+    }
 
     if (result.outcome === TX_STATUS.VERIFIED) {
       await richMenuService.switchTo(userId, "PREMIUM");
@@ -125,5 +168,6 @@ export function createSubscriptionLineHandlers({
     return { type: "slip", message };
   }
 
-  return { handleSubscribeCommand, handleSendSlipCommand, handleReceiptOrSlipImage, MSG };
+  return { handleSubscribeCommand, handlePlanSelected, handleSendSlipCommand, handleReceiptOrSlipImage, MSG };
 }
+
