@@ -14,7 +14,7 @@ import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { buildSubscriptionCollections } from "./subscription/db.js";
 import { createAuditLogger } from "./subscription/auditLog.js";
 import { createSubscriptionService, PLAN } from "./subscription/subscriptions.js";
-import { createPaymentSessionService } from "./subscription/paymentSessions.js";
+import { createPaymentSessionService, PLAN_CATALOG } from "./subscription/paymentSessions.js";
 import { createUploadSessionService } from "./subscription/uploadSessions.js";
 import { createPaymentTransactionService, TX_STATUS } from "./subscription/paymentTransactions.js";
 import { getPaymentProvider } from "./subscription/paymentProvider.js";
@@ -85,7 +85,8 @@ const subLineHandlers = createSubscriptionLineHandlers({
   auditLog,
   ai,
   visionModel,
-  buildQrImageUrl
+  buildQrImageUrl,
+  getLineDisplayName
 });
 const adminAuth = createAdminAuth(subCollections);
 app.use("/admin", createAdminRouter({ collections: subCollections, adminAuth, subscriptionService, paymentTransactionService }));
@@ -527,6 +528,45 @@ async function saveConfirmedSlipTx({ userId, type, merchant, amount, category, a
   await saveUser(userId, user);
   return { user, tx };
 }
+// การ์ดเลือกแผนสมัครพรีเมียม (รายเดือน/รายปี) — โผล่ตอนพิมพ์ "สมัครพรีเมียม" แทนที่จะสร้าง QR ทันทีแบบเดิม (เดิมขายได้แค่รายเดือน)
+// ใช้ PLAN_CATALOG จาก paymentSessions.js เป็นแหล่งราคาเดียว ไม่ hardcode ราคาซ้ำที่นี่ กันราคาไม่ตรงกันระหว่างการ์ดนี้กับตอนสร้าง session จริง
+function planPickerFlexMessage(planCatalog) {
+  const pink = "#7A2B3D";
+  const cream = "#FBF3EC";
+  return {
+    type: "flex",
+    altText: "เลือกแผนสมัคร Premium — รายเดือนหรือรายปี",
+    contents: {
+      type: "bubble",
+      size: "kilo",
+      body: {
+        type: "box",
+        layout: "vertical",
+        backgroundColor: cream,
+        paddingAll: "20px",
+        contents: [
+          { type: "text", text: "สมัคร Premium", size: "lg", weight: "bold", color: "#3A3540" },
+          { type: "text", text: "เลือกรอบบิลที่สะดวก", size: "sm", color: "#9B94A0", margin: "xs" },
+          { type: "separator", margin: "lg", color: "#EFE3D8" },
+          {
+            type: "box", layout: "vertical", margin: "lg", spacing: "sm",
+            contents: [
+              { type: "text", text: `รายเดือน ${money(planCatalog.MONTHLY.amount)} บาท/เดือน`, size: "sm", color: "#3A3540" },
+              { type: "text", text: `รายปี ${money(planCatalog.YEARLY.amount)} บาท/ปี (เฉลี่ย ~${money(Math.round(planCatalog.YEARLY.amount / 12))} บาท/เดือน คุ้มกว่า)`, size: "sm", color: "#3A3540" }
+            ]
+          }
+        ]
+      },
+      footer: {
+        type: "box", layout: "horizontal", spacing: "sm", paddingAll: "12px", backgroundColor: cream,
+        contents: [
+          { type: "button", style: "secondary", height: "sm", color: "#F1E7DC", action: { type: "postback", label: "รายเดือน", data: "pn_plan=MONTHLY", displayText: "รายเดือน" } },
+          { type: "button", style: "primary", height: "sm", color: pink, action: { type: "postback", label: "รายปี (คุ้มกว่า)", data: "pn_plan=YEARLY", displayText: "รายปี" } }
+        ]
+      }
+    }
+  };
+}
 // การ์ด Flex Message สำหรับคำสั่ง "เว็บ" — สรุปยอดเดือนนี้แบบย่อ + ปุ่มใหญ่กดเข้าแดชบอร์ด
 // แทนที่ข้อความ text ธรรมดา + ลิงก์ยาว ๆ แบบเดิม ให้ธีมตรงกับ txFlexMessage/receiptConfirmFlexMessage
 // user.confirmMessagePrefs.theme ใช้ธีมเดียวกับการ์ด "จดสำเร็จ" ทุกครั้ง ไม่ต้องตั้งแยก ให้ทุกการ์ดที่ยายจันทร์ส่งดูเป็นชุดเดียวกัน
@@ -741,6 +781,16 @@ function budgetProgressFor(user, tx) {
 function dashboardEditUrl(userId) {
   const base = process.env.PUBLIC_BASE_URL?.replace(/\/$/, "");
   return base ? `${base}/dashboard-gate?token=${perUserToken(userId)}&u=${encodeURIComponent(userId)}` : null;
+}
+// ดึงชื่อโปรไฟล์ LINE ของ user 1:1 (คนละตัวกับ getGroupMemberName ด้านล่างซึ่งต้องมี groupId ด้วย)
+// ใช้เทียบกับชื่อผู้โอนที่อ่านได้จากสลิป (ocrData.senderName) ตอนแจ้งผลใน MSG.verified/pendingReview ให้ผู้ใช้เห็นเองในแชทด้วย ไม่ต้องรอเช็คที่แอดมินอย่างเดียว
+async function getLineDisplayName(userId) {
+  try {
+    const r = await fetch(`https://api.line.me/v2/bot/profile/${userId}`, { headers: { authorization: `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}` } });
+    if (!r.ok) return null;
+    const profile = await r.json();
+    return profile.displayName ?? null;
+  } catch (error) { console.warn("LINE profile fetch failed:", error.message); return null; }
 }
 // ดึงชื่อสมาชิกกลุ่ม (ใช้แสดง "ใครจดอะไรบ้าง" ในกองกลาง) — ใช้ได้เฉพาะ userId ที่เคยส่งข้อความในกลุ่มนี้มาก่อน
 // (ข้อจำกัดของ LINE: ดึงรายชื่อสมาชิกกลุ่มทั้งหมดล่วงหน้าไม่ได้ ต้องรู้ userId ก่อนถึงจะสอบถามโปรไฟล์ได้)
@@ -1281,6 +1331,23 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
     if (event.type === "postback") {
       const data = event.postback?.data ?? "";
       const params = new URLSearchParams(data);
+      // --- ปุ่มเลือกแผนสมัคร Premium (รายเดือน/รายปี) บนการ์ด planPickerFlexMessage ---
+      if (params.has("pn_plan")) {
+        const planKey = params.get("pn_plan") === "YEARLY" ? "YEARLY" : "MONTHLY";
+        const pbSourceType = event.source?.type;
+        const pbUserId = pbSourceType === "group" || pbSourceType === "room" ? null : event.source?.userId;
+        const messages = [];
+        if (!pbUserId) messages.push({ type: "text", text: "สมัคร Premium ทำได้เฉพาะแชทส่วนตัวกับยายจันทร์เท่านั้นนะ" });
+        else {
+          let result;
+          try { result = await subLineHandlers.handlePlanSelected(pbUserId, planKey); }
+          catch (error) { console.error("Plan selected postback failed", error.message); result = { text: "เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง" }; }
+          if (result.qrImageUrl) messages.push(qrImageMessage(result.qrImageUrl));
+          messages.push({ type: "text", text: result.text.slice(0, 4900) });
+        }
+        try { await replyMessages(event.replyToken, messages); } catch (error) { console.error("Could not reply", error.message); }
+        continue;
+      }
       // --- ปุ่ม "ลบ" บนการ์ดจดสำเร็จ (ดู txFlexMessage) — ลบรายการทันที ไม่ถามยืนยันซ้ำ ---
       if (params.has("delete_tx")) {
         const txId = params.get("delete_tx");
@@ -1437,10 +1504,12 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
     if (!isGroupChat && text === "สมัครพรีเมียม") {
       let result;
       try { result = await subLineHandlers.handleSubscribeCommand(userId); }
-      catch (error) { console.error("Subscribe command failed", error.message); result = { text: "เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง" }; }
+      catch (error) { console.error("Subscribe command failed", error.message); result = { alreadyPremium: false, error: true }; }
       const messages = [];
-      if (result.qrImageUrl) messages.push(qrImageMessage(result.qrImageUrl));
-      messages.push({ type: "text", text: result.text.slice(0, 4900) });
+      if (result.error) messages.push({ type: "text", text: "เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง" });
+      else if (result.alreadyPremium) messages.push({ type: "text", text: result.text.slice(0, 4900) });
+      // ยังไม่ active -> โชว์การ์ดเลือกแผน (รายเดือน/รายปี) ก่อน ยังไม่สร้าง session ตรงนี้ (สร้างตอนกดเลือกแผนจากปุ่ม ดู pn_plan postback ด้านล่าง)
+      else messages.push(planPickerFlexMessage(PLAN_CATALOG));
       try { await replyMessages(event.replyToken, messages); } catch (error) { console.error("Could not reply", error.message); }
       continue;
     }
