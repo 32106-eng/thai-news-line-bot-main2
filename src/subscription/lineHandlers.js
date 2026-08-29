@@ -56,7 +56,8 @@ export function createSubscriptionLineHandlers({
   ai,
   visionModel,
   buildQrImageUrl,
-  getLineDisplayName
+  getLineDisplayName,
+  makeSlipThumbnail
 }) {
   // คืนบรรทัดเสริมท้ายข้อความแจ้งผล (ว่างเปล่าถ้าข้อมูลไม่พอเทียบ เพื่อไม่ให้ข้อความรกเกินจำเป็นตอนอ่านสลิปไม่ครบ)
   async function buildNameCheckLine(userId, senderName) {
@@ -132,8 +133,14 @@ export function createSubscriptionLineHandlers({
 
     let ocrData = null;
     try {
-      const { mime, base64 } = await downloadImage();
+      const { mime, base64, _rawBuffer } = await downloadImage();
       ocrData = await readSlip(ai, visionModel, mime, base64);
+      // แนบรูปสลิปย่อขนาดเล็กติดไปกับ ocrData เสมอเมื่อทำได้ (ไม่ใช่แค่ตอนอ่านชื่อไม่ได้) เพราะ "อ่านได้" ของ AI ก็ยังผิดได้
+      // (เช่นอ่านชื่อเพี้ยน/สลับชื่อผู้โอน-ผู้รับ) แอดมินควรมีรูปจริงเทียบได้เสมอ ไม่ใช่เชื่อ AI 100% แล้วไม่มีทางตรวจสอบย้อนกลับ
+      // ocrData อาจเป็น null ถ้า readSlip อ่านไม่สำเร็จเลย (ดูเงื่อนไข !ocrData ด้านล่าง) เลยต้องเช็คก่อนแนบ ไม่งั้น .slipImageBase64 = ... จะ throw
+      if (ocrData && makeSlipThumbnail && _rawBuffer) {
+        ocrData.slipImageBase64 = await makeSlipThumbnail(_rawBuffer);
+      }
     } catch (error) {
       console.error("Slip image download/OCR failed:", error.message);
       await uploadSessionService.reopen(uploadSession.id);
@@ -170,4 +177,3 @@ export function createSubscriptionLineHandlers({
 
   return { handleSubscribeCommand, handlePlanSelected, handleSendSlipCommand, handleReceiptOrSlipImage, MSG };
 }
-
