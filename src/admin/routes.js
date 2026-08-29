@@ -87,16 +87,18 @@ export function createAdminRouter({ collections, adminAuth, subscriptionService,
 
   router.get("/api/reviews", requireAdmin, async (_req, res) => {
     const list = await paymentTransactionService.listPendingReview();
-    res.json({
-      reviews: list.map((item) => ({
-        transactionReference: item.transactionReference,
-        userId: item.userId,
-        amount: item.amount,
-        reviewReason: item.reviewReason,
-        ocrExtracted: item.ocrExtracted,
-        createdAt: item.createdAt ? formatThaiDateTime(item.createdAt) : null
-      }))
-    });
+    // ดึงชื่อโปรไฟล์ LINE ของเจ้าของบัญชีที่ขอสมัคร (คนละอย่างกับ senderName ใน ocrExtracted ซึ่งเป็นชื่อที่อ่านได้จากสลิปตอนโอน)
+    // แอดมินต้องเทียบ 2 ชื่อนี้เอง — ถ้าไม่ตรงกันอาจเป็นสลิปของคนอื่น/สลิปเก่าที่เอามาส่งซ้ำ ไม่ใช่หลักฐานการจ่ายเงินของบัญชีนี้จริง ๆ
+    const withNames = await Promise.all(list.map(async (item) => ({
+      transactionReference: item.transactionReference,
+      userId: item.userId,
+      accountDisplayName: await getLineDisplayName(item.userId), // null ถ้าดึงไม่ได้ (เช่น เป็น groupId หรือ user บล็อกบอทไปแล้ว) — ฝั่งหน้าเว็บ fallback โชว์ userId แทน
+      amount: item.amount,
+      reviewReason: item.reviewReason,
+      ocrExtracted: item.ocrExtracted,
+      createdAt: item.createdAt ? formatThaiDateTime(item.createdAt) : null
+    })));
+    res.json({ reviews: withNames });
   });
 
   router.post("/api/reviews/:transactionReference/approve", requireAdmin, async (req, res) => {
@@ -176,4 +178,5 @@ export function createAdminRouter({ collections, adminAuth, subscriptionService,
 
   return router;
 }
+
 
