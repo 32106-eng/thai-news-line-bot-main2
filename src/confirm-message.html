@@ -168,8 +168,12 @@
     { key:'showEditButton',  icon:'edit',      title:'ปุ่มแก้ไข',           sub:'ปุ่มเปิดหน้าเว็บเพื่อแก้ไขรายการ' },
     { key:'showDeleteButton',icon:'delete',    title:'ปุ่มลบ',             sub:'ปุ่มลบรายการนี้ทันทีจากในแชท' }
   ];
+  // ตัวเลือกสำหรับการ์ด "เลือกหมวดหมู่" ที่โผล่หลังถ่ายรูปสลิป (คนละการ์ดกับ "จดสำเร็จ" ด้านบน — ดู categoryPickerFlexMessage ใน index.js)
+  const CATEGORY_CARD_OPTIONS = [
+    { key:'showAiPickButton', icon:'auto_awesome', title:'ปุ่ม "ให้ยายเลือกให้"', sub:'ปุ่มลัดให้ AI เดาหมวดแทน เผื่อไม่อยากเลือกเอง ปิดไว้ถ้าอยากบังคับตัวเองเลือกหมวดทุกครั้ง' }
+  ];
 
-  let state = { showBudgetBar:true, showAuthorName:true, showEditButton:true, showDeleteButton:true, theme:'pink' };
+  let state = { showBudgetBar:true, showAuthorName:true, showEditButton:true, showDeleteButton:true, showAiPickButton:true, theme:'pink' };
   let saved = { ...state };
   let isGroup = false;
   let allowedFlag = false;
@@ -177,6 +181,7 @@
 
   const SAMPLE_TX = { description:'กาแฟ', amount:65, category:'อาหาร', type:'expense', authorName:'พลอย' };
   const SAMPLE_BUDGET = { limit:1500, spent:1180 };
+  const SAMPLE_CATEGORIES = ['อาหาร','เดินทาง','ช้อปปิ้ง','บันเทิง'];
 
   function dirty(){ return JSON.stringify(state) !== JSON.stringify(saved); }
 
@@ -215,6 +220,31 @@
       </div>`;
   }
 
+  // การ์ด "เลือกหมวดหมู่" — โผล่หลังถ่ายรูปสลิปแล้วกดปุ่ม "รายจ่าย" บนการ์ดยืนยัน (คนละขั้นตอนกับการ์ด "จดสำเร็จ" ด้านบน)
+  function renderCategoryBubble(){
+    const th = THEMES[state.theme];
+    const pairs = []; for (let i=0;i<SAMPLE_CATEGORIES.length;i+=2) pairs.push(SAMPLE_CATEGORIES.slice(i,i+2));
+    return `
+      <div class="bubble">
+        <div class="bubble-body" style="background:${th.cream}">
+          <p class="bubble-desc" style="margin-bottom:0">ร้านกาแฟดอยตุง</p>
+          <p class="bubble-amt" style="color:${th.accent};font-size:16px;margin:2px 0 8px">65 บาท</p>
+          <div class="bubble-sep"></div>
+          <p style="font-size:10.5px;color:#9B94A0;margin:8px 0 6px">รายจ่ายนี้เป็นหมวดไหน?</p>
+          ${pairs.map(row => `<div style="display:flex;gap:6px;margin-bottom:6px">${row.map(c => `<div class="bubble-btn" style="background:#F1E7DC;color:#3A3540;flex:1">${esc(c)}</div>`).join('')}</div>`).join('')}
+        </div>
+        ${state.showAiPickButton ? `<div class="bubble-footer" style="background:${th.cream};padding-top:0"><div class="bubble-btn" style="background:${th.accent};color:#fff;flex:1">ให้ยายเลือกให้</div></div>` : ''}
+      </div>`;
+  }
+
+  function renderCategoryOptions(){
+    return CATEGORY_CARD_OPTIONS.map((o, i) => `
+      <div class="opt stagger" style="animation-delay:${i*30}ms">
+        <div class="opt-text"><div class="opt-icon"><span class="msym">${o.icon}</span></div><div><strong>${esc(o.title)}</strong><span>${esc(o.sub)}</span></div></div>
+        <button class="toggle ${state[o.key]?'on':''}" data-key="${o.key}" role="switch" aria-checked="${!!state[o.key]}" aria-label="${esc(o.title)}"></button>
+      </div>`).join('');
+  }
+
   function renderSwatches(){
     return Object.entries(THEMES).map(([id, th]) => `
       <div class="swatch ${state.theme===id?'checked':''}" style="--swatch-color:${th.accent}" data-theme="${id}">
@@ -243,7 +273,7 @@
 
     document.getElementById('root').innerHTML = `
       <div class="stage">
-        <div class="stage-label">ตัวอย่างการ์ด</div>
+        <div class="stage-label">การ์ด "จดสำเร็จ"</div>
         <div class="phone"><div class="phone-screen" id="bubbleSlot">${renderBubble()}</div></div>
       </div>
 
@@ -255,6 +285,16 @@
       <div class="section">
         <div class="section-title">แสดงในการ์ด</div>
         <div class="panel" id="optList">${renderOptions()}</div>
+      </div>
+
+      <div class="stage" style="padding-top:8px">
+        <div class="stage-label">การ์ด "เลือกหมวดหมู่"</div>
+        <div class="phone"><div class="phone-screen" id="categoryBubbleSlot">${renderCategoryBubble()}</div></div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">ตั้งค่าการ์ดเลือกหมวดหมู่</div>
+        <div class="panel" id="categoryOptList">${renderCategoryOptions()}</div>
       </div>
 
       <div class="savebar">
@@ -286,6 +326,8 @@
   function updateBubble(){
     const slot = document.getElementById('bubbleSlot');
     if (slot) slot.innerHTML = renderBubble();
+    const catSlot = document.getElementById('categoryBubbleSlot');
+    if (catSlot) catSlot.innerHTML = renderCategoryBubble();
   }
 
   function updateSaveBtn(){
@@ -349,6 +391,7 @@
         showAuthorName: Boolean(prefsRes.showAuthorName),
         showEditButton: Boolean(prefsRes.showEditButton),
         showDeleteButton: Boolean(prefsRes.showDeleteButton),
+        showAiPickButton: prefsRes.showAiPickButton === undefined ? true : Boolean(prefsRes.showAiPickButton),
         theme: prefsRes.theme in THEMES ? prefsRes.theme : 'pink'
       };
       saved = { ...state };
@@ -362,5 +405,4 @@
 </script>
 </body>
 </html>
-
 
