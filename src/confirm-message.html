@@ -172,8 +172,14 @@
   const CATEGORY_CARD_OPTIONS = [
     { key:'showAiPickButton', icon:'auto_awesome', title:'ปุ่ม "ให้ยายเลือกให้"', sub:'ปุ่มลัดให้ AI เดาหมวดแทน เผื่อไม่อยากเลือกเอง ปิดไว้ถ้าอยากบังคับตัวเองเลือกหมวดทุกครั้ง' }
   ];
+  // ตัวเลือกสำหรับการ์ด "เว็บ" ที่ส่งตอนพิมพ์ "เว็บ" (ดู dashboardFlexMessage ใน index.js) — ใช้สีธีมเดียวกับการ์ด "จดสำเร็จ" (state.theme) ไม่มีสีแยก
+  const DASHBOARD_CARD_OPTIONS = [
+    { key:'dashboardShowSummary',  icon:'account_balance_wallet', title:'สรุปรายรับ/รายจ่าย/คงเหลือ', sub:'แถวตัวเลขสรุปย่อ 3 ช่องด้านบนการ์ด' },
+    { key:'dashboardShowRatioBar', icon:'monitoring',  title:'แถบสัดส่วนรายจ่าย', sub:'แถบสีบาง ๆ เทียบรายจ่ายกับรายรับเดือนนี้' },
+    { key:'dashboardShowTip',      icon:'lightbulb',   title:'ข้อความแนะนำท้ายการ์ด', sub:'ประโยคชวนเปิดเว็บดูกราฟ/ประวัติแบบเต็ม' }
+  ];
 
-  let state = { showBudgetBar:true, showAuthorName:true, showEditButton:true, showDeleteButton:true, showAiPickButton:true, theme:'pink' };
+  let state = { showBudgetBar:true, showAuthorName:true, showEditButton:true, showDeleteButton:true, showAiPickButton:true, theme:'pink', categoryTheme:'pink', dashboardShowSummary:true, dashboardShowRatioBar:true, dashboardShowTip:true, dashboardCtaLabel:'เปิดแดชบอร์ด' };
   let saved = { ...state };
   let isGroup = false;
   let allowedFlag = false;
@@ -182,6 +188,7 @@
   const SAMPLE_TX = { description:'กาแฟ', amount:65, category:'อาหาร', type:'expense', authorName:'พลอย' };
   const SAMPLE_BUDGET = { limit:1500, spent:1180 };
   const SAMPLE_CATEGORIES = ['อาหาร','เดินทาง','ช้อปปิ้ง','บันเทิง'];
+  const SAMPLE_DASHBOARD = { income:18500, expense:12300, ratioLabel:'ใช้ไป 66% ของรายรับเดือนนี้' };
 
   function dirty(){ return JSON.stringify(state) !== JSON.stringify(saved); }
 
@@ -220,9 +227,9 @@
       </div>`;
   }
 
-  // การ์ด "เลือกหมวดหมู่" — โผล่หลังถ่ายรูปสลิปแล้วกดปุ่ม "รายจ่าย" บนการ์ดยืนยัน (คนละขั้นตอนกับการ์ด "จดสำเร็จ" ด้านบน)
+  // การ์ด "เลือกหมวดหมู่" — โผล่หลังถ่ายรูปสลิปแล้วกดปุ่ม "รายจ่าย" บนการ์ดยืนยัน (คนละขั้นตอนกับการ์ด "จดสำเร็จ" ด้านบน) ใช้ categoryTheme แยกอิสระจาก theme
   function renderCategoryBubble(){
-    const th = THEMES[state.theme];
+    const th = THEMES[state.categoryTheme];
     const pairs = []; for (let i=0;i<SAMPLE_CATEGORIES.length;i+=2) pairs.push(SAMPLE_CATEGORIES.slice(i,i+2));
     return `
       <div class="bubble">
@@ -245,9 +252,57 @@
       </div>`).join('');
   }
 
-  function renderSwatches(){
+  // การ์ด "เว็บ" — ส่งตอนพิมพ์ "เว็บ" ในแชท (mirror ของ dashboardFlexMessage ใน index.js) ใช้สีธีมเดียวกับการ์ด "จดสำเร็จ" (state.theme)
+  function renderDashboardBubble(){
+    const th = THEMES[state.theme];
+    const balance = SAMPLE_DASHBOARD.income - SAMPLE_DASHBOARD.expense;
+    const ratio = Math.min(SAMPLE_DASHBOARD.expense / SAMPLE_DASHBOARD.income, 1) * 100;
+    return `
+      <div class="bubble" style="width:230px">
+        <div class="bubble-body" style="background:${th.cream}">
+          <div style="display:flex;align-items:center;gap:8px">
+            <div style="width:26px;height:26px;border-radius:50%;background:${th.accent};display:flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:800">จ</div>
+            <div><p style="margin:0;font-size:12.5px;font-weight:800;color:#3A3540">แดชบอร์ด</p><p style="margin:0;font-size:8.5px;color:#9B94A0">ของคุณเดือนนี้</p></div>
+          </div>
+          <div class="bubble-sep" style="margin-top:10px"></div>
+          ${state.dashboardShowSummary ? `
+          <div style="display:flex;margin-top:10px">
+            <div style="flex:1"><p style="margin:0;font-size:8px;color:#9B94A0">รายรับ</p><p class="num" style="margin:2px 0 0;font-size:11.5px;font-weight:800;color:#4B7A63">${money(SAMPLE_DASHBOARD.income)}</p></div>
+            <div style="flex:1;text-align:center"><p style="margin:0;font-size:8px;color:#9B94A0">รายจ่าย</p><p class="num" style="margin:2px 0 0;font-size:11.5px;font-weight:800;color:${th.accent}">${money(SAMPLE_DASHBOARD.expense)}</p></div>
+            <div style="flex:1;text-align:right"><p style="margin:0;font-size:8px;color:#9B94A0">คงเหลือ</p><p class="num" style="margin:2px 0 0;font-size:11.5px;font-weight:800;color:#3A3540">${money(balance)}</p></div>
+          </div>` : ''}
+          ${state.dashboardShowRatioBar ? `
+          <div style="height:5px;border-radius:3px;background:#F1E7DC;margin-top:9px;overflow:hidden;display:flex">
+            <div style="width:${ratio}%;background:${gold_color()}"></div>
+          </div>
+          <p style="margin:5px 0 0;font-size:8.5px;color:#9B94A0">${esc(SAMPLE_DASHBOARD.ratioLabel)}</p>` : ''}
+          ${state.dashboardShowTip ? `<div class="bubble-sep"></div><p style="margin:8px 0 0;font-size:8.5px;color:#9B94A0;line-height:1.5">เปิดเว็บดูกราฟ ประวัติย้อนหลัง และตั้งงบประมาณแบบเต็ม ๆ ได้เลย</p>` : ''}
+        </div>
+        <div class="bubble-footer" style="background:${th.cream}"><div class="bubble-btn" style="background:${th.accent};color:#fff;flex:1">${esc(state.dashboardCtaLabel || 'เปิดแดชบอร์ด')}</div></div>
+      </div>`;
+  }
+  function gold_color(){ return '#C79A46'; }
+
+  function renderDashboardOptions(){
+    const toggles = DASHBOARD_CARD_OPTIONS.map((o, i) => `
+      <div class="opt stagger" style="animation-delay:${i*30}ms">
+        <div class="opt-text"><div class="opt-icon"><span class="msym">${o.icon}</span></div><div><strong>${esc(o.title)}</strong><span>${esc(o.sub)}</span></div></div>
+        <button class="toggle ${state[o.key]?'on':''}" data-key="${o.key}" role="switch" aria-checked="${!!state[o.key]}" aria-label="${esc(o.title)}"></button>
+      </div>`).join('');
+    // ช่องพิมพ์ข้อความปุ่ม CTA แยกจาก toggle เพราะเป็น text input ไม่ใช่ on/off — จำกัด 20 ตัวอักษรให้ตรงกับ limit ฝั่ง server (ดู confirmMessagePrefsInput)
+    return toggles + `
+      <div class="opt" style="align-items:center">
+        <div class="opt-text"><div class="opt-icon"><span class="msym">smart_button</span></div><div><strong>ข้อความปุ่ม</strong><span>คำในปุ่มกดเปิดเว็บ (สูงสุด 20 ตัวอักษร)</span></div></div>
+      </div>
+      <div style="padding:0 16px 14px">
+        <input type="text" id="ctaLabelInput" maxlength="20" value="${esc(state.dashboardCtaLabel || '')}" placeholder="เปิดแดชบอร์ด"
+          style="width:100%;box-sizing:border-box;border:1px solid var(--line);border-radius:10px;padding:10px 12px;font:inherit;font-size:13px;background:var(--card);color:var(--ink)">
+      </div>`;
+  }
+
+  function renderSwatches(field = 'theme'){
     return Object.entries(THEMES).map(([id, th]) => `
-      <div class="swatch ${state.theme===id?'checked':''}" style="--swatch-color:${th.accent}" data-theme="${id}">
+      <div class="swatch ${state[field]===id?'checked':''}" style="--swatch-color:${th.accent}" data-theme-field="${field}" data-theme="${id}">
         <div class="swatch-dot" style="background:${th.accent}"><span class="msym">check</span></div>
         <span>${th.label}</span>
       </div>`).join('');
@@ -293,8 +348,23 @@
       </div>
 
       <div class="section">
+        <div class="section-title">ธีมสีการ์ดเลือกหมวดหมู่</div>
+        <div class="panel"><div class="swatches" id="categorySwatchGrid">${renderSwatches('categoryTheme')}</div></div>
+      </div>
+
+      <div class="section">
         <div class="section-title">ตั้งค่าการ์ดเลือกหมวดหมู่</div>
         <div class="panel" id="categoryOptList">${renderCategoryOptions()}</div>
+      </div>
+
+      <div class="stage" style="padding-top:8px">
+        <div class="stage-label">การ์ด "เว็บ"</div>
+        <div class="phone"><div class="phone-screen" id="dashboardBubbleSlot">${renderDashboardBubble()}</div></div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">ตั้งค่าการ์ดเว็บ</div>
+        <div class="panel" id="dashboardOptList">${renderDashboardOptions()}</div>
       </div>
 
       <div class="savebar">
@@ -306,9 +376,11 @@
 
   function bindRoot(){
     document.querySelectorAll('[data-theme]').forEach(el => el.onclick = () => {
-      state.theme = el.dataset.theme;
+      const field = el.dataset.themeField || 'theme';
+      state[field] = el.dataset.theme;
       updateBubble();
-      document.querySelectorAll('[data-theme]').forEach(s => s.classList.toggle('checked', s.dataset.theme === state.theme));
+      // อัปเดตเฉพาะ swatch กลุ่มเดียวกัน (data-theme-field ตรงกัน) ไม่ให้ไปเปลี่ยนสถานะ checked ของอีกกลุ่มที่ไม่เกี่ยวข้อง
+      document.querySelectorAll(`[data-theme-field="${field}"]`).forEach(s => s.classList.toggle('checked', s.dataset.theme === state[field]));
       updateSaveBtn();
     });
     document.querySelectorAll('[data-key]').forEach(btn => btn.onclick = () => {
@@ -319,6 +391,12 @@
       updateBubble();
       updateSaveBtn();
     });
+    const ctaInput = document.getElementById('ctaLabelInput');
+    if (ctaInput) ctaInput.oninput = () => {
+      state.dashboardCtaLabel = ctaInput.value.slice(0, 20);
+      updateBubble();
+      updateSaveBtn();
+    };
     document.getElementById('saveBtn').onclick = onSave;
     updateSaveBtn();
   }
@@ -328,6 +406,8 @@
     if (slot) slot.innerHTML = renderBubble();
     const catSlot = document.getElementById('categoryBubbleSlot');
     if (catSlot) catSlot.innerHTML = renderCategoryBubble();
+    const dashSlot = document.getElementById('dashboardBubbleSlot');
+    if (dashSlot) dashSlot.innerHTML = renderDashboardBubble();
   }
 
   function updateSaveBtn(){
@@ -392,7 +472,12 @@
         showEditButton: Boolean(prefsRes.showEditButton),
         showDeleteButton: Boolean(prefsRes.showDeleteButton),
         showAiPickButton: prefsRes.showAiPickButton === undefined ? true : Boolean(prefsRes.showAiPickButton),
-        theme: prefsRes.theme in THEMES ? prefsRes.theme : 'pink'
+        theme: prefsRes.theme in THEMES ? prefsRes.theme : 'pink',
+        categoryTheme: prefsRes.categoryTheme in THEMES ? prefsRes.categoryTheme : 'pink',
+        dashboardShowSummary: prefsRes.dashboardShowSummary === undefined ? true : Boolean(prefsRes.dashboardShowSummary),
+        dashboardShowRatioBar: prefsRes.dashboardShowRatioBar === undefined ? true : Boolean(prefsRes.dashboardShowRatioBar),
+        dashboardShowTip: prefsRes.dashboardShowTip === undefined ? true : Boolean(prefsRes.dashboardShowTip),
+        dashboardCtaLabel: typeof prefsRes.dashboardCtaLabel === 'string' && prefsRes.dashboardCtaLabel ? prefsRes.dashboardCtaLabel.slice(0, 20) : 'เปิดแดชบอร์ด'
       };
       saved = { ...state };
     } catch (e) {
@@ -405,4 +490,5 @@
 </script>
 </body>
 </html>
+
 
