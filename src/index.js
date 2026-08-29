@@ -138,7 +138,21 @@ const INCOME_PREFIX = /^(?:\+|รับ)\s*(?=[0-9])|^จดรับ\s*(?=[0-9]
 
 // confirmMessagePrefs: ปรับแต่งการ์ด "จดสำเร็จ" (txFlexMessage) — ฟีเจอร์ Premium ใช้ได้ทั้งกลุ่มและแชทส่วนตัว 1:1 (ดู /api/confirm-message-prefs)
 // ค่า default ทุกตัว = พฤติกรรมเดิมของการ์ด (เปิดหมด, ธีมชมพู) เพื่อไม่กระทบผู้ใช้เก่าที่ยังไม่เคยตั้งค่า
-function defaultConfirmMessagePrefs() { return { showBudgetBar: true, showAuthorName: true, showEditButton: true, showDeleteButton: true, showAiPickButton: true, theme: "pink" }; }
+function defaultConfirmMessagePrefs() {
+  return {
+    showBudgetBar: true, showAuthorName: true, showEditButton: true, showDeleteButton: true,
+    showAiPickButton: true,
+    theme: "pink",
+    // categoryTheme: สีของการ์ด "เลือกหมวดหมู่" (categoryPickerFlexMessage) แยกอิสระจาก theme ด้านบนซึ่งคุมทั้งการ์ด "จดสำเร็จ" และการ์ด "เว็บ"
+    // ตั้งใจแยกเพราะการ์ดนี้เป็นขั้นตอนกลางทาง (ถามก่อนบันทึกจริง) บางคนอยากให้สีต่างจากการ์ดผลลัพธ์สุดท้ายเพื่อแยกความรู้สึก "ยังไม่เสร็จ" ออกจาก "เสร็จแล้ว"
+    categoryTheme: "pink",
+    // ตั้งค่าการ์ด "เว็บ" (dashboardFlexMessage ที่ส่งตอนพิมพ์ "เว็บ") — ใช้ theme เดียวกับการ์ดจดสำเร็จเสมอ (ไม่แยก) แต่เปิด/ปิดส่วนประกอบและข้อความปุ่มได้อิสระ
+    dashboardShowSummary: true,
+    dashboardShowRatioBar: true,
+    dashboardShowTip: true,
+    dashboardCtaLabel: "เปิดแดชบอร์ด"
+  };
+}
 function emptyUser() { return { transactions: [], recurring: [], budgets: {}, dailyReminder: false, reminderTime: "20:00", confirmMessagePrefs: defaultConfirmMessagePrefs() }; }
 async function getUser(uid) {
   const snap = await usersCol.doc(String(uid)).get();
@@ -447,7 +461,7 @@ function receiptConfirmFlexMessage(receipt, meta = {}) {
 // ให้ categoryFor()/enrichWithAi ตัดสินหมวดเอาเองทั้งหมด ตอนนี้เปิดให้ผู้ใช้เลือกเองก่อนได้ ลดโอกาสตกไปเป็น "อื่น ๆ" ผิด ๆ)
 // เลือก "ให้ยายเลือกให้" ได้ ถ้าไม่อยากเลือกเอง -> ทำงานเหมือนพฤติกรรมเดิมทุกอย่าง (keyword match + AI ช่วยตัดสินตอน "อื่น ๆ")
 function categoryPickerFlexMessage(merchant, amount, meta = {}) {
-  const { accent: pink, cream } = confirmMessageTheme(meta.theme);
+  const { accent: pink, cream } = confirmMessageTheme(meta.categoryTheme);
   const displayMerchant = String(merchant ?? "อื่น ๆ").slice(0, 60); // ใช้ตัวเต็มแค่ตอนแสดงผลในการ์ด
   // ตัด merchant ให้สั้นลงเหลือ 15 ตัวอักษรตอนใส่ใน postback data เท่านั้น (คนละตัวกับ displayMerchant ด้านบน, เท่ากับ limit ที่ใช้ใน receiptConfirmFlexMessage)
   // เพราะภาษาไทย 1 ตัวอักษร URL-encode แล้วกินพื้นที่ ~9 ไบต์ ถ้าปล่อยยาวเกินไปรวมกับ slip_step/c/aid จะเกิน 300 ตัวอักษรที่ LINE postback data รับได้
@@ -519,6 +533,7 @@ async function saveConfirmedSlipTx({ userId, type, merchant, amount, category, a
 function dashboardFlexMessage(user, { isGroupChat, dashboardUrl } = {}) {
   const { accent: pink, cream } = confirmMessageTheme(user?.confirmMessagePrefs?.theme);
   const gold = "#C79A46";
+  const prefs = { ...defaultConfirmMessagePrefs(), ...(user?.confirmMessagePrefs ?? {}) };
   const month = user.transactions.filter((tx) => sameMonth(tx.createdAt));
   const t = totals(month);
   const balance = t.income - t.expense;
@@ -559,8 +574,8 @@ function dashboardFlexMessage(user, { isGroupChat, dashboardUrl } = {}) {
             ]
           },
           { type: "separator", margin: "lg", color: "#EFE3D8" },
-          // สรุปรายรับ/รายจ่าย/คงเหลือ แบบย่อ
-          {
+          // สรุปรายรับ/รายจ่าย/คงเหลือ แบบย่อ — ปิดได้จาก confirmMessagePrefs.dashboardShowSummary
+          ...(prefs.dashboardShowSummary ? [{
             type: "box",
             layout: "horizontal",
             margin: "lg",
@@ -578,25 +593,29 @@ function dashboardFlexMessage(user, { isGroupChat, dashboardUrl } = {}) {
                 { type: "text", text: money(balance), size: "md", weight: "bold", color: "#3A3540", align: "end", margin: "xs" }
               ] }
             ]
-          },
-          // แถบสัดส่วนรายจ่ายเทียบรายรับเดือนนี้ (เส้นบาง ๆ โทนทอง)
-          {
-            type: "box", layout: "horizontal", height: "6px", cornerRadius: "3px", margin: "md",
-            contents: [
-              { type: "box", layout: "vertical", flex: Math.max(Math.round(ratio * 100), ratio > 0 ? 3 : 0), backgroundColor: overspending ? pink : gold, contents: [] },
-              { type: "box", layout: "vertical", flex: Math.max(100 - Math.round(ratio * 100), 0), backgroundColor: "#F1E7DC", contents: [] }
-            ]
-          },
-          { type: "text", text: overspending ? "เดือนนี้ใช้เกินรายรับแล้วนะ" : `ใช้ไป ${Math.round(ratio * 100)}% ของรายรับเดือนนี้`, size: "xxs", color: overspending ? pink : "#9B94A0", margin: "sm" },
+          }] : []),
+          // แถบสัดส่วนรายจ่ายเทียบรายรับเดือนนี้ (เส้นบาง ๆ โทนทอง) — ปิดได้จาก confirmMessagePrefs.dashboardShowRatioBar
+          ...(prefs.dashboardShowRatioBar ? [
+            {
+              type: "box", layout: "horizontal", height: "6px", cornerRadius: "3px", margin: "md",
+              contents: [
+                { type: "box", layout: "vertical", flex: Math.max(Math.round(ratio * 100), ratio > 0 ? 3 : 0), backgroundColor: overspending ? pink : gold, contents: [] },
+                { type: "box", layout: "vertical", flex: Math.max(100 - Math.round(ratio * 100), 0), backgroundColor: "#F1E7DC", contents: [] }
+              ]
+            },
+            { type: "text", text: overspending ? "เดือนนี้ใช้เกินรายรับแล้วนะ" : `ใช้ไป ${Math.round(ratio * 100)}% ของรายรับเดือนนี้`, size: "xxs", color: overspending ? pink : "#9B94A0", margin: "sm" }
+          ] : []),
           { type: "separator", margin: "lg", color: "#EFE3D8" },
-          { type: "text", text: "เปิดเว็บดูกราฟ ประวัติย้อนหลัง และตั้งงบประมาณแบบเต็ม ๆ ได้เลย", size: "xs", color: "#9B94A0", margin: "lg", wrap: true }
+          // ข้อความคำแนะนำท้ายการ์ด — ปิดได้จาก confirmMessagePrefs.dashboardShowTip
+          ...(prefs.dashboardShowTip ? [{ type: "text", text: "เปิดเว็บดูกราฟ ประวัติย้อนหลัง และตั้งงบประมาณแบบเต็ม ๆ ได้เลย", size: "xs", color: "#9B94A0", margin: "lg", wrap: true }] : [])
         ]
       },
       footer: dashboardUrl
         ? {
             type: "box", layout: "vertical", paddingAll: "12px", backgroundColor: cream,
             contents: [
-              { type: "button", style: "primary", height: "sm", color: pink, action: { type: "uri", label: "เปิดแดชบอร์ด", uri: dashboardUrl } }
+              // ข้อความปุ่มตั้งเองได้จาก confirmMessagePrefs.dashboardCtaLabel (ค่าเริ่มต้น "เปิดแดชบอร์ด")
+              { type: "button", style: "primary", height: "sm", color: pink, action: { type: "uri", label: prefs.dashboardCtaLabel || "เปิดแดชบอร์ด", uri: dashboardUrl } }
             ]
           }
         : {
@@ -948,9 +967,12 @@ function reminderInput(body) {
   if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) return null;
   return { dailyReminder: enabled, reminderTime: time };
 }
-// ตั้งค่าการ์ด "จดสำเร็จ" และการ์ดยืนยันสลิป/เลือกหมวด (ดู txFlexMessage/categoryPickerFlexMessage/CONFIRM_MESSAGE_THEMES ด้านบน) — ฟีเจอร์ Premium ใช้ได้ทั้งกลุ่มและแชทส่วนตัว
+// ตั้งค่าการ์ด "จดสำเร็จ", การ์ดยืนยันสลิป/เลือกหมวด, และการ์ด "เว็บ" (ดู txFlexMessage/categoryPickerFlexMessage/dashboardFlexMessage/CONFIRM_MESSAGE_THEMES ด้านบน) — ฟีเจอร์ Premium ใช้ได้ทั้งกลุ่มและแชทส่วนตัว
 function confirmMessagePrefsInput(body) {
   if (typeof body?.theme !== "undefined" && !(body.theme in CONFIRM_MESSAGE_THEMES)) return null;
+  if (typeof body?.categoryTheme !== "undefined" && !(body.categoryTheme in CONFIRM_MESSAGE_THEMES)) return null;
+  // จำกัดความยาวข้อความปุ่ม CTA กันคนพิมพ์ยาวเกินจนล้นปุ่มใน LINE (ปุ่ม Flex Message แถวเดียวจะเริ่มตัดคำ/ล้นถ้ายาวเกิน ~20 ตัวอักษร)
+  const ctaLabel = typeof body?.dashboardCtaLabel === "string" ? body.dashboardCtaLabel.trim().slice(0, 20) : "";
   return {
     showBudgetBar: Boolean(body?.showBudgetBar),
     showAuthorName: Boolean(body?.showAuthorName),
@@ -958,7 +980,12 @@ function confirmMessagePrefsInput(body) {
     showDeleteButton: Boolean(body?.showDeleteButton),
     // ปุ่ม "ให้ยายเลือกให้" บนการ์ดเลือกหมวดหมู่ (ดู categoryPickerFlexMessage) — ปิดได้สำหรับคนที่อยากบังคับตัวเองเลือกหมวดทุกครั้ง ไม่ยอมให้ AI เดาแทน
     showAiPickButton: body?.showAiPickButton === undefined ? true : Boolean(body.showAiPickButton),
-    theme: body?.theme in CONFIRM_MESSAGE_THEMES ? body.theme : "pink"
+    theme: body?.theme in CONFIRM_MESSAGE_THEMES ? body.theme : "pink",
+    categoryTheme: body?.categoryTheme in CONFIRM_MESSAGE_THEMES ? body.categoryTheme : "pink",
+    dashboardShowSummary: body?.dashboardShowSummary === undefined ? true : Boolean(body.dashboardShowSummary),
+    dashboardShowRatioBar: body?.dashboardShowRatioBar === undefined ? true : Boolean(body.dashboardShowRatioBar),
+    dashboardShowTip: body?.dashboardShowTip === undefined ? true : Boolean(body.dashboardShowTip),
+    dashboardCtaLabel: ctaLabel || "เปิดแดชบอร์ด"
   };
 }
 function applyRecurring(user) {
@@ -1291,7 +1318,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
           else if (step === "category") {
             // ปุ่ม "รายจ่าย" ถูกกด -> ยังไม่บันทึก แสดงการ์ดเลือกหมวดหมู่ต่อก่อน (ดู categoryPickerFlexMessage)
             const pbUser = await getUser(pbUserId);
-            message = categoryPickerFlexMessage(merchant, amount, { authorId, theme: pbUser.confirmMessagePrefs?.theme, showAiPickButton: pbUser.confirmMessagePrefs?.showAiPickButton });
+            message = categoryPickerFlexMessage(merchant, amount, { authorId, categoryTheme: pbUser.confirmMessagePrefs?.categoryTheme, showAiPickButton: pbUser.confirmMessagePrefs?.showAiPickButton });
           } else {
             const category = decodeURIComponent(params.get("c") ?? ""); // ว่างได้ถ้ากด "ให้ยายเลือกให้" หรือเป็นรายรับ (ไม่มี c เลย)
             const { user, tx } = await saveConfirmedSlipTx({ userId: pbUserId, type, merchant, amount, category, authorId, isGroupChat: pbIsGroupChat });
