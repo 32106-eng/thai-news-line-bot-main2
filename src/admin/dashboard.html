@@ -30,6 +30,16 @@
   .review .meta{font-size:13px;color:var(--grey);line-height:1.7}
   .review .ref{font-weight:700;color:var(--pink-dark);font-size:14px}
   .review .amount{font-weight:700;font-size:15px}
+  /* เทียบชื่อเจ้าของบัญชี (LINE) กับชื่อผู้โอนที่อ่านได้จากสลิป — จุดสำคัญที่สุดของการตรวจสอบ ต้องเด่นกว่าข้อมูลอื่นในการ์ด */
+  .namecheck{background:#fafafa;border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin:8px 0;font-size:13px}
+  .namecheck .row{display:flex;justify-content:space-between;gap:12px;padding:3px 0}
+  .namecheck .row b{color:var(--dark)}
+  .namecheck.mismatch{background:#fdecec;border-color:var(--danger)}
+  .namecheck.mismatch .row b{color:var(--danger)}
+  .namecheck .flag{display:inline-flex;align-items:center;gap:5px;color:var(--danger);font-weight:700;font-size:12px;margin-top:4px}
+  .namecheck .ok{display:inline-flex;align-items:center;gap:5px;color:var(--ok);font-weight:700;font-size:12px;margin-top:4px}
+  .review .slip-link{font-size:12.5px;color:var(--pink-dark);text-decoration:none;font-weight:600}
+  .review .slip-link:hover{text-decoration:underline}
   .actions{display:flex;gap:8px}
   button.approve, button.reject{border:none;padding:8px 16px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer}
   button.approve{background:var(--pink);color:#fff}
@@ -210,6 +220,40 @@ async function cancelPremium(userId, displayName) {
   } catch (e) { alert(e.message); }
 }
 
+// เทียบชื่อแบบหยาบ ๆ พอให้เตือนแอดมิน ไม่ใช่การตัดสินขั้นสุดท้าย (แอดมินต้องดูเองเสมอ)
+// ตัดคำนำหน้า/ช่องว่าง/ตัวพิมพ์เล็กใหญ่ออกก่อนเทียบ เพราะสลิปธนาคารมักมีคำนำหน้าที่ display name ของ LINE ไม่มี (เช่น "น.ส." "นาย")
+function normalizeName(s) {
+  return String(s ?? '')
+    .replace(/^(นาย|นาง|นางสาว|น\.ส\.|ด\.ช\.|ด\.ญ\.|mr\.?|mrs\.?|ms\.?|miss)\s*/i, '')
+    .replace(/\s+/g, '')
+    .toLowerCase();
+}
+function namesLikelyMatch(a, b) {
+  if (!a || !b) return null; // ไม่มีข้อมูลพอจะเทียบ (เช่น อ่านสลิปไม่ได้ หรือดึงชื่อ LINE ไม่ได้) — แสดงเป็น "ตรวจสอบเองด้วย" ไม่ใช่ mismatch แดง
+  const na = normalizeName(a), nb = normalizeName(b);
+  if (!na || !nb) return null;
+  return na === nb || na.includes(nb) || nb.includes(na); // includes กันเคสชื่อเล่น/ชื่อเต็มไม่ตรงเป๊ะแต่เป็นคนเดียวกัน (ผ่อนปรนไว้ก่อน ให้แอดมินตัดสินใจสุดท้าย)
+}
+
+function renderNameCheck(r) {
+  const accountName = r.accountDisplayName;
+  const senderName = r.ocrExtracted?.senderName;
+  const receiverName = r.ocrExtracted?.receiverName;
+  const match = namesLikelyMatch(accountName, senderName);
+  const cls = match === false ? 'namecheck mismatch' : 'namecheck';
+  const flagHtml = match === false
+    ? `<div class="flag">⚠ ชื่อบัญชีกับชื่อผู้โอนดูไม่ตรงกัน — ตรวจสอบก่อนอนุมัติ</div>`
+    : match === true
+      ? `<div class="ok">✓ ชื่อตรงกับบัญชีที่สมัคร</div>`
+      : `<div style="color:var(--grey);font-size:12px;margin-top:4px">อ่านชื่อได้ไม่ครบ กรุณาตรวจสอบด้วยตาจากรูปสลิป</div>`;
+  return `<div class="${cls}">
+    <div class="row"><span>ชื่อบัญชีที่สมัคร (LINE)</span><b>${esc(accountName) || '(ดึงชื่อไม่ได้)'}</b></div>
+    <div class="row"><span>ชื่อผู้โอน (อ่านจากสลิป)</span><b>${esc(senderName) || '(อ่านไม่ได้)'}</b></div>
+    <div class="row"><span>ชื่อผู้รับ (อ่านจากสลิป)</span><b>${esc(receiverName) || '(อ่านไม่ได้)'}</b></div>
+    ${flagHtml}
+  </div>`;
+}
+
 async function loadReviews() {
   const d = await api('/api/reviews');
   $('#reviewCount').textContent = d.reviews.length;
@@ -217,14 +261,16 @@ async function loadReviews() {
   if (!d.reviews.length) { el.innerHTML = '<div class="empty">ไม่มีรายการรอตรวจสอบ 🎉</div>'; return; }
   el.innerHTML = d.reviews.map(r => `
     <div class="review" data-ref="${r.transactionReference}">
-      <div>
+      <div style="flex:1;min-width:240px">
         <div class="ref">Ref: ${r.transactionReference}</div>
         <div class="meta">
-          ผู้ใช้: ${r.userId}<br/>
           จำนวนที่อ่านได้: <span class="amount">${r.amount ?? '-'} บาท</span><br/>
-          เหตุผลที่ต้องตรวจสอบ: ${r.reviewReason ?? '-'}<br/>
+          เลขอ้างอิงในสลิป: ${esc(r.ocrExtracted?.transactionReference) || '-'}<br/>
+          เวลาที่โอนตามสลิป: ${esc(r.ocrExtracted?.paidAt) || '-'}<br/>
+          เหตุผลที่ต้องตรวจสอบ: ${esc(r.reviewReason) || '-'}<br/>
           ส่งเมื่อ: ${r.createdAt ?? '-'}
         </div>
+        ${renderNameCheck(r)}
       </div>
       <div class="actions">
         <button class="approve">อนุมัติ</button>
@@ -277,5 +323,6 @@ api('/api/overview').then(showApp).catch(showLogin);
 </script>
 </body>
 </html>
+
 
 
