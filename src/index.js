@@ -36,26 +36,16 @@ const app = express();
 // data now lives in Firestore instead of a local file, so it survives every redeploy
 const firebaseApp = initializeApp({ credential: cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)) });
 const usersCol = getFirestore(firebaseApp).collection("panuan_users");
-// NVIDIA keys normally start with nvapi-. Accept one accidentally placed in OPENAI_API_KEY so an
-// existing Render deployment is not sent to api.openai.com with an NVIDIA-only model name.
-const misplacedNvidiaApiKey = process.env.OPENAI_API_KEY?.startsWith("nvapi-") ? process.env.OPENAI_API_KEY : undefined;
-const nvidiaApiKey = process.env.NVIDIA_API_KEY ?? misplacedNvidiaApiKey;
-const groqApiKey = process.env.GROQ_API_KEY;
-const aiProvider = groqApiKey ? "groq" : nvidiaApiKey ? "nvidia" : process.env.OPENAI_API_KEY ? "openai" : process.env.OPENROUTER_API_KEY ? "openrouter" : null;
-const aiKey = groqApiKey ?? nvidiaApiKey ?? process.env.OPENAI_API_KEY ?? process.env.OPENROUTER_API_KEY;
-const aiBaseURL = aiProvider === "groq"
-  ? "https://api.groq.com/openai/v1"
-  : aiProvider === "nvidia"
-  ? "https://integrate.api.nvidia.com/v1"
-  : aiProvider === "openrouter"
-    ? "https://openrouter.ai/api/v1"
-    : undefined;
-// Pin managed providers to known current model IDs so stale environment values cannot cause 404/410.
-const chatModel = aiProvider === "groq"
-  ? "openai/gpt-oss-20b"
-  : aiProvider === "nvidia"
-    ? "mistralai/mistral-7b-instruct-v0.3"
-    : process.env.OPENAI_MODEL;
+const aiKey = process.env.OPENAI_API_KEY ?? process.env.NVIDIA_API_KEY ?? process.env.OPENROUTER_API_KEY;
+const aiBaseURL = process.env.OPENAI_API_KEY
+  ? undefined
+  : process.env.NVIDIA_API_KEY
+    ? "https://integrate.api.nvidia.com/v1"
+    : process.env.OPENROUTER_API_KEY
+      ? "https://openrouter.ai/api/v1"
+      : undefined;
+// ลำดับความสำคัญ: OPENAI_API_KEY > NVIDIA_API_KEY > OPENROUTER_API_KEY — ตั้งค่าคีย์ตัวไหนไว้
+// ระบบจะใช้ตัวนั้นเป็นหลักโดยอัตโนมัติ (ไม่ต้องลบคีย์ตัวเก่าออกก็ได้ แค่ตัวที่ priority สูงกว่าจะชนะ)
 const ai = aiKey ? new OpenAI({ apiKey: aiKey, ...(aiBaseURL ? { baseURL: aiBaseURL } : {}) }) : null;
 // Vision-capable model for reading receipt/slip photos. Not every free/cheap model can read images —
 // a text-only model will just fail (e.g. "openai/gpt-oss-120b" on OpenRouter is TEXT-ONLY, no image
@@ -64,8 +54,9 @@ const ai = aiKey ? new OpenAI({ apiKey: aiKey, ...(aiBaseURL ? { baseURL: aiBase
 //     (catalog changes often — if this 404s/410s, check https://build.nvidia.com/models for a current vision model)
 //   OpenRouter (free, tighter rate limits): "google/gemma-4-31b-it:free"
 //   OpenAI direct (paid): "gpt-4o-mini" / "gpt-4.1-mini"
-// Groq GPT-OSS and NVIDIA Mistral are text-only, so do not send receipt images to them.
-const visionModel = process.env.OPENAI_VISION_MODEL ?? ((aiProvider === "nvidia" || aiProvider === "groq") ? undefined : chatModel);
+// Falls back to OPENAI_MODEL if no separate vision model is set — but OPENAI_MODEL must ALSO be a vision
+// model in that case, or slip/receipt reading will fail. Safer to always set OPENAI_VISION_MODEL explicitly.
+const visionModel = process.env.OPENAI_VISION_MODEL ?? process.env.OPENAI_MODEL;
 
 // ---------------------------------------------------------------------------
 // Premium subscription + payment system (see docs/ARCHITECTURE.md)
@@ -216,7 +207,7 @@ function parse(text) {
 async function enrichWithAi(tx, source, typeWasAmbiguous) {
   const needType = typeWasAmbiguous;
   const needCategory = tx.type === "expense" && tx.category === "อื่น ๆ";
-  if (!ai || !chatModel || (!needType && !needCategory)) return tx;
+  if (!ai || !process.env.OPENAI_MODEL || (!needType && !needCategory)) return tx;
   try {
     const instructions = [];
     if (needType) instructions.push('"type": ตัดสินว่าข้อความนี้เป็น "income" (เงินเข้า/รายรับ) หรือ "expense" (เงินออก/รายจ่าย)');
@@ -227,7 +218,7 @@ async function enrichWithAi(tx, source, typeWasAmbiguous) {
     if (needCategory) instructions.push(`"category": จัดหมวดรายจ่ายนี้ (ใส่เฉพาะกรณีเป็นรายจ่ายเท่านั้น) — ถ้าเข้ากับหมวดใดหมวดหนึ่งใน ${Object.keys(CATEGORIES).filter((c) => c !== "อื่น ๆ").join(", ")} ให้ใช้ชื่อหมวดเดิมนั้นเป๊ะ ๆ แต่ถ้าไม่เข้าหมวดไหนเลยจริง ๆ ให้ตั้งชื่อหมวดใหม่สั้น ๆ ภาษาไทยเอง (1-3 คำ ไม่ต้องมีคำว่า "ค่า" นำหน้าถ้าไม่จำเป็น เช่น "เลี้ยงลูก" "การศึกษา" "ทำบุญ") ห้ามใช้ "อื่น ๆ" ถ้าพอเดาความหมายของรายการได้`);
     const fields = [needType ? '"type":"income"|"expense"' : null, needCategory ? '"category":"..."' : null].filter(Boolean).join(", ");
     const completion = await ai.chat.completions.create({
-      model: chatModel,
+      model: process.env.OPENAI_MODEL,
       temperature: 0,
       max_tokens: 40, // เอาต์พุตเป็น JSON เล็ก ๆ แค่ {"type":"...","category":"..."} เท่านั้น ไม่ต้องเผื่อพื้นที่มาก
       response_format: { type: "json_object" },
@@ -837,7 +828,7 @@ function allowed(req) {
   try { return crypto.timingSafeEqual(Buffer.from(given), Buffer.from(expected)); } catch { return false; }
 }
 async function askFinanceAi(user, question) {
-  if (!ai || !chatModel) return null;
+  if (!ai || !process.env.OPENAI_MODEL) return null;
   try {
     const month = user.transactions.filter((tx) => sameMonth(tx.createdAt));
     const t = totals(month);
@@ -845,7 +836,7 @@ async function askFinanceAi(user, question) {
     const budgetLines = Object.entries(user.budgets ?? {}).map(([category, amount]) => `${category}: งบ ${money(amount)} บาท`).join("\n") || "ยังไม่ได้ตั้งงบ";
     const context = `ข้อมูลบัญชีเดือนนี้ของผู้ใช้คนนี้เท่านั้น (ห้ามอ้างอิงคนอื่น):\nรายรับ: ${money(t.income)} บาท\nรายจ่าย: ${money(t.expense)} บาท\nคงเหลือ: ${money(t.income - t.expense)} บาท\nหมวดที่ใช้จ่ายมากสุด: ${top.map(([category, value]) => `${category} ${money(value)} บาท`).join(", ") || "ยังไม่มีข้อมูล"}\nงบประมาณที่ตั้งไว้:\n${budgetLines}`;
     const completion = await ai.chat.completions.create({
-      model: chatModel,
+      model: process.env.OPENAI_MODEL,
       temperature: 0.4,
       max_tokens: 200, // ลดจาก 280 — prompt ใหม่เน้น "1-4 ประโยค กระชับ" ชัดเจนขึ้น ลด budget ลงช่วยตัดโอกาสที่โมเดลจะยืดคำตอบยาวเกินจำเป็นโดยไม่ตัดคำตอบจริงกลางคัน (คำตอบปกติสั้นกว่านี้มาก)
       // เดิมตั้ง 400 ซึ่งกว้างเกินคำตอบจริงมาก โมเดลบางตัว (โดยเฉพาะที่มี reasoning/thinking ในตัว) จะยิ่งใช้เวลาคิดนานขึ้นตาม budget ที่เปิดให้ — ลดค่านี้ช่วยตัดเวลาตอบโดยไม่ตัดคุณภาพคำตอบ เพราะคำตอบจริงไม่เคยยาวถึง 400 อยู่แล้ว
@@ -1635,6 +1626,11 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
   }
 });
 app.listen(Number(process.env.PORT ?? 3000), () => console.log(`Ta Phin listening on ${process.env.PORT ?? 3000}`));
+
+
+
+
+
 
 
 
