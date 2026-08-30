@@ -50,10 +50,12 @@ const ai = aiKey ? new OpenAI({ apiKey: aiKey, ...(aiBaseURL ? { baseURL: aiBase
 // Vision-capable model for reading receipt/slip photos. Not every free/cheap model can read images —
 // a text-only model will just fail (e.g. "openai/gpt-oss-120b" on OpenRouter is TEXT-ONLY, no image
 // input — do not point OPENAI_VISION_MODEL at it). Working vision options (Aug 2026):
+//   NVIDIA NIM (free, higher rate limits ~40 RPM): "nvidia/nemotron-nano-12b-v2-vl"
+//     (catalog changes often — if this 404s/410s, check https://build.nvidia.com/models for a current vision model)
 //   OpenRouter (free, tighter rate limits): "google/gemma-4-31b-it:free"
-//   NVIDIA NIM (free, higher rate limits ~40 RPM, no ":free" suffix on model IDs): "google/gemma-4-31b-it"
 //   OpenAI direct (paid): "gpt-4o-mini" / "gpt-4.1-mini"
-// Falls back to OPENAI_MODEL if no separate vision model is set.
+// Falls back to OPENAI_MODEL if no separate vision model is set — but OPENAI_MODEL must ALSO be a vision
+// model in that case, or slip/receipt reading will fail. Safer to always set OPENAI_VISION_MODEL explicitly.
 const visionModel = process.env.OPENAI_VISION_MODEL ?? process.env.OPENAI_MODEL;
 
 // ---------------------------------------------------------------------------
@@ -1624,7 +1626,6 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
   }
 });
 app.listen(Number(process.env.PORT ?? 3000), () => console.log(`Ta Phin listening on ${process.env.PORT ?? 3000}`));
-
 
 
 
