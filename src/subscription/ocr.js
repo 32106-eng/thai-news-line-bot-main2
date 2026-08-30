@@ -12,7 +12,7 @@ export async function readSlip(ai, visionModel, mime, base64) {
       const completion = await ai.chat.completions.create({
         model: visionModel,
         temperature: 0,
-        max_tokens: 200, // เอาต์พุตเป็น JSON เล็ก ๆ (amount/transactionReference/paidAt/receiverName/senderName) ไม่ควรยาวเกินนี้
+        max_tokens: 300, // เอาต์พุตเป็น JSON เล็ก ๆ (amount/transactionReference/paidAt/receiverName/senderName) — เผื่อพื้นที่ไว้มากกว่าความยาว JSON จริงเล็กน้อย กันโดนตัดกลางคันในบางโมเดล
         // ไม่ใส่ response_format: json_object เพราะบางโมเดล (เช่น NVIDIA NIM VLM บางตัว หรือโมเดลที่ตอบเป็นข้อความอธิบายนำก่อน)
         // จะตอบ 500 หรือใส่ prose ภาษาไทยนำหน้า JSON (เช่น "ข้อมูลที่อ่านได้...") ทั้งที่ถูกบังคับ structured output แล้ว
         // ทำให้ JSON.parse พังด้วย "Unexpected token" — คุม JSON ผ่าน prompt + cleanup ก่อน parse แทน (เหมือน readReceipt() ใน index.js)
@@ -27,6 +27,8 @@ export async function readSlip(ai, visionModel, mime, base64) {
               "Each block usually has TWO lines of text: a PERSON'S NAME (often prefixed with a title like นาย/นาง/นางสาว/น.ส./ด.ช./ด.ญ., or an English name) on one line, " +
               "and a BANK NAME or account/e-wallet label (e.g. \"ธนาคารกสิกรไทย\", \"ธ.กสิกรไทย\", \"ธนาคารกรุงเทพ\", \"PromptPay\", a masked account number like xxx-x-x6752-x) on another line, sometimes with a shop/merchant name (e.g. \"ร้านพี่ออม\") as a third line for the receiver. " +
               "senderName and receiverName MUST be the PERSON'S NAME (or merchant/shop name if no person name is shown) — NEVER a bank name, NEVER the word \"ธนาคาร\"/\"ธ.\" plus a bank brand, and NEVER a masked account number. " +
+              "Both blocks (sender near the top, receiver below the arrow) have the exact same structure and should be read with EQUAL effort — do not give up on the receiver block just because it is lower on the slip or partly overlapped by a decorative logo, sticker, or watermark image. Zoom in mentally on the text region of each block even if graphics overlap nearby areas. " +
+              "Only set a name field to null if the person/merchant name text is genuinely fully unreadable or absent — a decorative image next to or behind the text is not a valid reason to return null. " +
               "If a block shows a bank name but you cannot find any person or merchant name in that same block, set that name field to null rather than using the bank name. " +
               "amount is the total paid in THB as a plain number (no currency symbol/commas) — look for a label like \"จำนวน\" or \"จำนวนเงิน\". " +
               "transactionReference is the transaction/reference ID printed on the slip — look for labels like \"เลขที่รายการ\", \"รหัสอ้างอิง\", \"Ref\", or a long alphanumeric code near a QR code — or null if genuinely not visible. " +
