@@ -108,6 +108,7 @@
     .row strong{font-size:14.5px;font-weight:700}
     .meta{font-size:11.5px;color:var(--ink-soft);margin-top:3px}
     .amount{white-space:nowrap;font-weight:800;font-size:14.5px}
+    .amount.over{color:#7A2B3D}
     .amount.income{color:var(--sage)}
     .amount.expense{color:var(--wine)}
     .empty{padding:40px 10px;text-align:center;color:var(--ink-soft);font-size:13.5px}
@@ -274,14 +275,14 @@
   </main>
   <button class="fab" id="addButton" aria-label="เพิ่มรายการ"><span class="msym">add</span></button>
   <nav class="nav" aria-label="เมนูหลัก" id="mainNav">
-    <button data-page="summary"><span class="msym">home</span><span data-nav-label>สรุป</span></button><button data-page="analysis"><span class="msym">bar_chart</span><span data-nav-label>วิเคราะห์</span></button><button data-page="budgets"><span class="msym">pie_chart</span><span data-nav-label>งบ</span></button><button data-page="transactions"><span class="msym">receipt_long</span><span data-nav-label>รายการ</span></button><button data-page="settings"><span class="msym">settings</span><span data-nav-label>ตั้งค่า</span></button>
+    <button data-page="summary"><span class="msym">home</span><span data-nav-label>สรุป</span></button><button data-page="analysis"><span class="msym">bar_chart</span><span data-nav-label>วิเคราะห์</span></button><button data-page="budgets"><span class="msym">pie_chart</span><span data-nav-label>งบ</span></button><button data-page="transactions"><span class="msym">receipt_long</span><span data-nav-label>รายการ</span></button><button data-page="debts" id="debtsNavBtn" class="hidden"><span class="msym">handshake</span><span data-nav-label>หนี้</span></button><button data-page="settings"><span class="msym">settings</span><span data-nav-label>ตั้งค่า</span></button>
   </nav>
   <div class="modal" id="modal"><form class="sheet" id="transactionForm"><div class="sheet-grip"></div><h2 id="formTitle">เพิ่มรายการ</h2><div class="field"><label for="type" id="formTypeLabel">ประเภท</label><select id="type"><option value="expense" id="formExpenseOpt">รายจ่าย</option><option value="income" id="formIncomeOpt">รายรับ</option></select></div><div class="field"><label for="description" id="formDescLabel">ชื่อรายการ</label><input id="description" required placeholder="เช่น ค่าอาหาร"></div><div class="field"><label for="amount" id="formAmountLabel">จำนวนเงิน (บาท)</label><input id="amount" required type="number" min="0.01" step="0.01"></div><div class="field"><label for="category" id="formCategoryLabel">หมวดหมู่</label><input id="category" required placeholder="เช่น อาหาร" list="catList"><datalist id="catList"></datalist></div><div class="field"><label for="createdAt" id="formDateLabel">วันที่และเวลา</label><input id="createdAt" required type="datetime-local"></div><input id="transactionId" type="hidden"><div class="actions"><button class="danger hidden" id="deleteButton" type="button">ลบ</button><button class="secondary" id="cancelButton" type="button">ยกเลิก</button><button class="primary" type="submit" id="submitButton">บันทึก</button></div></form></div>
   <div class="modal" id="settingsModal"><div class="sheet" id="settingsSheet"></div></div>
   <div class="toast" id="toast"></div>
   <script>
     const token=new URLSearchParams(location.search).get('token');const uid=new URLSearchParams(location.search).get('u');const query='?token='+encodeURIComponent(token||'')+'&u='+encodeURIComponent(uid||'');const view=document.getElementById('view');const fmt=n=>new Intl.NumberFormat('th-TH',{style:'currency',currency:'THB',maximumFractionDigits:2}).format(Number(n)||0);const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-    let page='summary',filter='all',transactions=[],dashboard=null,budgets={},recurring=[],loaded=false;
+    let page='summary',filter='all',transactions=[],dashboard=null,budgets={},recurring=[],debts=[],loaded=false;
     const PALETTE=['#7A2B3D','#4b6a58','#A87C2E','#5c7a9e','#8a5a3f','#6b5490','#a15a6e','#557a6a'];
     const PREFS_KEY='panuan-prefs';
     const prefs=Object.assign({categoryMemory:true,dailyReminder:false,reminderTime:'20:00',language:'ไทย',currency:'บาท (฿)',timezone:'Bangkok (GMT+7)'},JSON.parse(localStorage.getItem(PREFS_KEY)||'{}'));
@@ -306,7 +307,7 @@
         langSheetTitle:'ภาษา',currencySheetTitle:'สกุลเงิน',tzSheetTitle:'โซนเวลา',
         toastOn:'เปิดใช้งานแล้ว',toastOff:'ปิดใช้งานแล้ว',toastLangChanged:'เปลี่ยนภาษาแล้ว',toastCurrencyChanged:'เปลี่ยนสกุลเงินแล้ว',toastTzChanged:'เปลี่ยนโซนเวลาแล้ว',
         appName:'ยายจันทร์',appTitle:'ยายจันทร์ — สมุดบัญชี',appSub:'สมุดบัญชีที่เชื่อมกับ LINE',statusConnected:'เชื่อมข้อมูลแล้ว',refreshing:'กำลังรีเฟรช…',dataRefreshed:'อัปเดตข้อมูลแล้ว',
-        addEntry:'เพิ่มรายการ',editEntry:'แก้ไขรายการ',navSummary:'สรุป',navAnalysis:'วิเคราะห์',navBudgets:'งบ',navTransactions:'รายการ',navSettings:'ตั้งค่า',
+        addEntry:'เพิ่มรายการ',editEntry:'แก้ไขรายการ',navSummary:'สรุป',navAnalysis:'วิเคราะห์',navBudgets:'งบ',navTransactions:'รายการ',navDebts:'หนี้',navSettings:'ตั้งค่า',
         formType:'ประเภท',formExpense:'รายจ่าย',formIncome:'รายรับ',formDescription:'ชื่อรายการ',formDescPlaceholder:'เช่น ค่าอาหาร',formAmount:'จำนวนเงิน (บาท)',formCategory:'หมวดหมู่',formCategoryPlaceholder:'เช่น อาหาร',formDate:'วันที่และเวลา',
         deleteBtn:'ลบ',cancelBtn:'ยกเลิก',saveBtn:'บันทึก',
         loading:'กำลังโหลด…',income:'รายรับ',expense:'รายจ่าย',balance:'คงเหลือสุทธิ',byCategory:'ใช้จ่ายตามหมวด',recentEntries:'รายการล่าสุด',noExpenseThisMonth:'ยังไม่มีรายจ่ายในเดือนนี้',totalLabel:'รวม',categoryPieAria:'สัดส่วนรายจ่ายตามหมวด',
@@ -315,6 +316,7 @@
         peakMonthLabel:(label,amt)=>'เดือนที่ใช้จ่ายเยอะสุดคือ '+label+' ('+amt+')',
         budgetsTitle:'หมวดและงบ',budgetsLead:'กำหนดวงเงินรายเดือนแยกตามหมวด',budgetPanelTitle:'งบประมาณ',budgetSpent:'ใช้แล้ว',budgetOf:'จาก',budgetSave:'บันทึก',budgetEmpty:'เพิ่มรายจ่ายก่อน แล้วหมวดจะปรากฏที่นี่',budgetSaved:n=>'บันทึกงบ'+n+'แล้ว',budgetOnTrackToast:'เยี่ยมมาก! ทุกหมวดยังอยู่ในงบที่ตั้งไว้',
         transTitle:'รายการ',transLead:'ปัดซ้ายเพื่อลบ หรือแตะเพื่อแก้ไข',filterAll:'ทั้งหมด',filterExpense:'รายจ่าย',filterIncome:'รายรับ',exportCsv:'⇩ ส่งออก CSV',exportingCsv:'กำลังส่งออก CSV',exportPdf:'⇩ รายงาน PDF',exportingPdf:'กำลังสร้างรายงาน PDF...',pdfPremiumRequired:'รายงาน PDF เป็นฟีเจอร์ Pro',pdfMonthLabel:'รายเดือน',pdfYearLabel:'รายปี',pdfSheetTitle:'ส่งออกรายงาน PDF',pdfSheetLead:'เลือกช่วงเวลาที่ต้องการสรุป รายงานจะมีกราฟและตารางรายการครบพร้อมเก็บไว้ยื่นภาษีหรือส่งให้นักบัญชีได้เลย',noEntries:'ยังไม่มีรายการ กด + เพื่อเริ่มบันทึก',noEntriesShort:'ยังไม่มีรายการ',
+        debtsTitle:'หนี้ในกลุ่ม',debtsLead:'ดูรายการหนี้ระหว่างสมาชิก — เคลียร์หนี้ได้จากไลน์เท่านั้น พิมพ์ "/บอท เคลียร์หนี้ @ชื่อ" (เฉพาะคนที่กำหนดหนี้ไว้)',debtsOpenTitle:'ค้างอยู่',debtsClearedTitle:'เคลียร์แล้ว',debtsEmpty:'ยังไม่มีหนี้ค้างในกลุ่มนี้',debtDue:'กำหนดคืน',
         deleteEntryConfirm:'ลบรายการนี้?',entryDeleted:'ลบรายการแล้ว',entrySaved:'บันทึกรายการแล้ว',entryUpdated:'แก้ไขรายการแล้ว',
         recurringSheetTitle:'จดประจำ',recurringEvery:'ทุกวันที่',addRecurringBtn:'+ เพิ่มรายการประจำ',recurringDeleteConfirm:'ลบรายการประจำ?',recurringDeleted:'ลบรายการประจำแล้ว',recurringAdded:'ตั้งรายการประจำแล้ว',recurringEmptySheet:'ยังไม่มีรายการประจำ',
         promptRecurringDesc:'ชื่อรายการประจำ เช่น ค่าเช่า',promptRecurringAmount:'จำนวนเงิน (บาท)',promptRecurringCategory:'หมวดหมู่',promptRecurringCategoryDefault:'อื่น ๆ',promptRecurringDay:'บันทึกทุกวันที่ (1-31)',promptRecurringType:'กด OK = รายรับ, Cancel = รายจ่าย',invalidData:'ข้อมูลไม่ถูกต้อง',
@@ -337,7 +339,7 @@
         langSheetTitle:'Language',currencySheetTitle:'Currency',tzSheetTitle:'Timezone',
         toastOn:'Turned on',toastOff:'Turned off',toastLangChanged:'Language changed',toastCurrencyChanged:'Currency changed',toastTzChanged:'Timezone changed',
         appName:'Yai Chan',appTitle:'Yai Chan — Ledger',appSub:'A ledger connected to LINE',statusConnected:'Data connected',refreshing:'Refreshing…',dataRefreshed:'Data updated',
-        addEntry:'Add entry',editEntry:'Edit entry',navSummary:'Summary',navAnalysis:'Analysis',navBudgets:'Budgets',navTransactions:'Entries',navSettings:'Settings',
+        addEntry:'Add entry',editEntry:'Edit entry',navSummary:'Summary',navAnalysis:'Analysis',navBudgets:'Budgets',navTransactions:'Entries',navDebts:'Debts',navSettings:'Settings',
         formType:'Type',formExpense:'Expense',formIncome:'Income',formDescription:'Description',formDescPlaceholder:'e.g. Lunch',formAmount:'Amount (THB)',formCategory:'Category',formCategoryPlaceholder:'e.g. Food',formDate:'Date & time',
         deleteBtn:'Delete',cancelBtn:'Cancel',saveBtn:'Save',
         loading:'Loading…',income:'Income',expense:'Expense',balance:'Net balance',byCategory:'Spending by category',recentEntries:'Recent entries',noExpenseThisMonth:'No expenses this month yet',totalLabel:'Total',categoryPieAria:'Spending share by category',
@@ -346,6 +348,7 @@
         peakMonthLabel:(label,amt)=>'Highest spending month: '+label+' ('+amt+')',
         budgetsTitle:'Categories & Budgets',budgetsLead:'Set a monthly limit for each category',budgetPanelTitle:'Budget',budgetSpent:'Spent',budgetOf:'of',budgetSave:'Save',budgetEmpty:'Add an expense first, and categories will appear here',budgetSaved:n=>'Saved budget for '+n,budgetOnTrackToast:'Nice! All categories are within budget',
         transTitle:'Entries',transLead:'Swipe left to delete, or tap to edit',filterAll:'All',filterExpense:'Expense',filterIncome:'Income',exportCsv:'⇩ Export CSV',exportingCsv:'Exporting CSV',exportPdf:'⇩ PDF report',exportingPdf:'Generating PDF report...',pdfPremiumRequired:'PDF reports are a Pro feature',pdfMonthLabel:'Monthly',pdfYearLabel:'Yearly',pdfSheetTitle:'Export PDF report',pdfSheetLead:'Choose a period to summarize. The report includes charts and a full transaction table — ready to keep for tax filing or send to your accountant.',noEntries:'No entries yet — tap + to start logging',noEntriesShort:'No entries yet',
+        debtsTitle:'Group debts',debtsLead:'View debts between members — clear a debt from LINE only, by typing "/บอท เคลียร์หนี้ @name" (only the person who recorded it can clear it)',debtsOpenTitle:'Outstanding',debtsClearedTitle:'Cleared',debtsEmpty:'No outstanding debts in this group yet',debtDue:'Due',
         deleteEntryConfirm:'Delete this entry?',entryDeleted:'Entry deleted',entrySaved:'Entry saved',entryUpdated:'Entry updated',
         recurringSheetTitle:'Recurring entries',recurringEvery:'Every day',addRecurringBtn:'+ Add recurring entry',recurringDeleteConfirm:'Delete this recurring entry?',recurringDeleted:'Recurring entry deleted',recurringAdded:'Recurring entry set',recurringEmptySheet:'No recurring entries yet',
         promptRecurringDesc:'Recurring entry name, e.g. Rent',promptRecurringAmount:'Amount (THB)',promptRecurringCategory:'Category',promptRecurringCategoryDefault:'Other',promptRecurringDay:'Log on which day each month (1-31)',promptRecurringType:'Click OK = Income, Cancel = Expense',invalidData:'Invalid data',
@@ -364,7 +367,7 @@
       document.getElementById('ptrText').textContent=t('refreshing');
       document.getElementById('addButton').setAttribute('aria-label',t('addEntry'));
       document.getElementById('mainNav').setAttribute('aria-label',t('navAriaLabel'));
-      const navLabels=[t('navSummary'),t('navAnalysis'),t('navBudgets'),t('navTransactions'),t('navSettings')];
+      const navLabels=[t('navSummary'),t('navAnalysis'),t('navBudgets'),t('navTransactions'),t('navDebts'),t('navSettings')];
       document.querySelectorAll('#mainNav [data-nav-label]').forEach((el,i)=>el.textContent=navLabels[i]);
       document.getElementById('formTypeLabel').textContent=t('formType');
       document.getElementById('formExpenseOpt').textContent=t('formExpense');
@@ -433,7 +436,7 @@
     }
     async function api(url,opt){const r=await fetch(url+(url.includes('?')?'&':'?')+'token='+encodeURIComponent(token||'')+'&u='+encodeURIComponent(uid||''),opt);if(!r.ok){const body=await r.json().catch(()=>({}));throw new Error(body.error||t('genericError'))}return r.headers.get('content-type')?.includes('application/json')?r.json():r}
     function local(dt){const d=new Date(dt||Date.now()),z=n=>String(n).padStart(2,'0');return d.getFullYear()+'-'+z(d.getMonth()+1)+'-'+z(d.getDate())+'T'+z(d.getHours())+':'+z(d.getMinutes())}
-    function setPage(next){page=next;document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.page===page));document.getElementById('addButton').classList.toggle('hidden',page==='settings'||page==='budgets');render()}
+    function setPage(next){page=next;document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.page===page));document.getElementById('addButton').classList.toggle('hidden',page==='settings'||page==='budgets'||page==='debts');render()}
 
     function skeletonSummary(){
       return '<div class="skel-hero" aria-hidden="true">'+skeletonIllustration()+'</div>'
@@ -554,6 +557,18 @@
       document.body.appendChild(layer);
       setTimeout(()=>layer.remove(),2800);
       toast(t('budgetOnTrackToast'));
+    }
+    function debtsPage(){
+      const open=debts.filter(d=>d.status==='OPEN'),cleared=debts.filter(d=>d.status==='CLEARED');
+      const row=d=>{
+        const due=d.dueDate?new Date(d.dueDate).toLocaleDateString(prefs.language==='English'?'en-GB':'th-TH',{day:'numeric',month:'short'}):null;
+        const overdue=d.dueDate&&new Date(d.dueDate).getTime()<Date.now()&&d.status==='OPEN';
+        return '<article class="row stagger"><div><strong>'+esc(d.debtorName)+' → '+esc(d.creditorName)+'</strong><div class="meta">'+esc(d.note||'')+(due?' · '+esc(t('debtDue'))+' '+due:'')+'</div></div><span class="amount num '+(d.status==='CLEARED'?'income':'expense')+(overdue?' over':'')+'">'+fmt(d.amount)+'</span></article>';
+      };
+      const emptyHtml='<div class="empty"><span class="msym">handshake</span>'+esc(t('debtsEmpty'))+'</div>';
+      return '<h1 class="view-title">'+esc(t('debtsTitle'))+'</h1><p class="lead">'+esc(t('debtsLead'))+'</p>'
+        +'<section class="panel"><h2>'+esc(t('debtsOpenTitle'))+'</h2>'+(open.length?open.map(row).join(''):emptyHtml)+'</section>'
+        +(cleared.length?'<section class="panel"><h2>'+esc(t('debtsClearedTitle'))+'</h2>'+cleared.map(row).join('')+'</section>':'');
     }
     function transactionPage(){const list=transactions.filter(x=>filter==='all'||x.type===filter);const emptyHtml='<div class="empty"><span class="msym">receipt_long</span>'+esc(t('noEntries'))+'<button class="primary empty-cta" id="emptyAddBtn">'+esc(t('addEntry'))+'</button></div>';return '<h1 class="view-title">'+esc(t('transTitle'))+'</h1><p class="lead">'+esc(t('transLead'))+'</p><div class="toolbar"><button class="'+(filter==='all'?'active':'')+'" data-filter="all">'+esc(t('filterAll'))+'</button><button class="'+(filter==='expense'?'active':'')+'" data-filter="expense">'+esc(t('filterExpense'))+'</button><button class="'+(filter==='income'?'active':'')+'" data-filter="income">'+esc(t('filterIncome'))+'</button><button id="download">'+esc(t('exportCsv'))+'</button><button id="downloadPdf">'+esc(t('exportPdf'))+(subscription.active?'':' <span class="msym" style="font-size:12px;vertical-align:-2px">lock</span>')+'</button></div><section class="panel">'+(list.length?list.map(row).join(''):emptyHtml)+'</section>';}
     function recentRows(n){return transactions.length?transactions.slice(0,n).map(row).join(''):'<div class="empty"><span class="msym">receipt_long</span>'+esc(t('noEntriesShort'))+'</div>'}
@@ -765,6 +780,7 @@
       else if(page==='analysis')view.innerHTML=analysisPage();
       else if(page==='budgets')view.innerHTML=budgetsPage();
       else if(page==='transactions')view.innerHTML=transactionPage();
+      else if(page==='debts')view.innerHTML=debtsPage();
       else view.innerHTML=settingsPage();
       view.classList.remove('page-enter');void view.offsetWidth;view.classList.add('page-enter');
       view.querySelectorAll('[data-target]').forEach(el=>animateNumber(el,Number(el.dataset.target)));
@@ -797,6 +813,10 @@
         api('/api/reminder').catch(()=>null),
         Promise.all([api('/api/dashboard'),api('/api/transactions').then(x=>x.transactions),api('/api/budgets').then(x=>x.budgets),api('/api/recurring').then(x=>x.recurring).catch(()=>[]),api('/api/subscription').catch(()=>subscription)]).then(r=>{[dashboard,transactions,budgets,recurring,subscription]=r})
       ]);
+      // แท็บ "หนี้" เป็นฟีเจอร์เฉพาะกลุ่ม (u เป็น groupId/roomId) — ดึงหลังรู้ subscription.isGroup แล้วเท่านั้น ไม่งั้นแชทส่วนตัวจะยิง /api/debts เปล่า ๆ ทุกครั้ง
+      debts=subscription.isGroup?await api('/api/debts').then(x=>x.debts).catch(()=>[]):[];
+      document.getElementById('debtsNavBtn').classList.toggle('hidden',!subscription.isGroup);
+      if(page==='debts'&&!subscription.isGroup)page='summary'; // กันค้างหน้าหนี้ถ้า u เปลี่ยนไปเป็นแชทส่วนตัว (ไม่ควรเกิดจริง แต่กันไว้)
       if(reminderPrefs){prefs.dailyReminder=Boolean(reminderPrefs.dailyReminder);prefs.reminderTime=reminderPrefs.reminderTime||prefs.reminderTime;savePrefs()}
       renderHeader();
       // Pro หมดอายุแล้วแต่ prefs (เก็บใน localStorage ฝั่ง client) ยังจำค่า "เปิด" ค้างไว้จากตอนที่ยังเป็น Premium อยู่
