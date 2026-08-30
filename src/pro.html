@@ -27,6 +27,36 @@
   .app{max-width:480px;margin:auto;min-height:100vh;padding:0 0 40px;position:relative}
   img{max-width:100%}
 
+  /* ---- swipeable feature carousel (top of upsell page) ---- */
+  .carousel{display:flex;gap:12px;overflow-x:auto;scroll-snap-type:x mandatory;padding:4px 20px 4px;margin:0 0 14px;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+  .carousel::-webkit-scrollbar{display:none}
+  .slide{scroll-snap-align:center;flex:0 0 calc(100% - 40px);border-radius:var(--radius);overflow:hidden;background:linear-gradient(155deg,var(--wine) 0%,var(--wine-deep) 100%);box-shadow:var(--shadow-lift);position:relative;min-height:300px;display:flex;flex-direction:column}
+  .slide-visual{flex:1;display:flex;align-items:center;justify-content:center;padding:26px 22px 6px;position:relative}
+  .slide-visual::before{content:"";position:absolute;top:-30px;right:-30px;width:140px;height:140px;border-radius:50%;background:radial-gradient(circle,rgba(228,193,112,.28),transparent 70%)}
+  .slide-visual .msym{font-size:64px;color:var(--gold-shine);position:relative}
+  .slide-body{background:var(--card);border-radius:16px 16px 0 0;padding:18px 20px 20px;margin-top:-14px;position:relative}
+  .slide-body h3{margin:0 0 4px;font-size:16px;font-weight:800;font-family:"Noto Serif Thai",serif;color:var(--ink)}
+  .slide-body p{margin:0;font-size:12px;color:var(--ink-soft);line-height:1.6}
+  .dots{display:flex;justify-content:center;gap:6px;margin:0 0 22px}
+  .dots i{width:6px;height:6px;border-radius:50%;background:var(--line);transition:background .2s,transform .2s}
+  .dots i.active{background:var(--wine);transform:scale(1.3)}
+
+  /* ---- sticky pricing footer (two boxes + CTA, image reference layout) ---- */
+  .pricing-foot{position:sticky;bottom:0;left:0;right:0;background:linear-gradient(180deg,transparent,var(--paper) 22%);padding:14px 20px calc(18px + env(safe-area-inset-bottom));margin-top:10px}
+  .price-boxes{display:flex;gap:10px;margin-bottom:10px}
+  .price-box{flex:1;border:1.5px solid var(--line);border-radius:var(--radius-sm);background:var(--card);padding:13px 14px;text-align:left;position:relative;transition:border-color .15s,background .15s,transform .14s var(--ease-spring)}
+  .price-box:active{transform:scale(.97)}
+  .price-box.selected{border-color:var(--wine);background:var(--wine-soft)}
+  .price-box .pb-name{font-size:11.5px;font-weight:800;color:var(--ink-soft);margin-bottom:5px}
+  .price-box.selected .pb-name{color:var(--wine)}
+  .price-box .pb-amt{font-size:19px;font-weight:800;letter-spacing:-.02em;color:var(--ink)}
+  .price-box .pb-sub{font-size:10.5px;color:var(--ink-soft);margin-top:3px}
+  .price-box .pb-badge{position:absolute;top:-9px;right:9px;background:linear-gradient(135deg,var(--gold-shine),var(--gold));color:#3A2C0F;font-size:8px;font-weight:800;padding:3px 7px;border-radius:99px;box-shadow:0 4px 10px -3px rgba(166,119,46,.6);white-space:nowrap}
+  .price-vat{font-size:10.5px;color:var(--ink-soft);text-align:center;margin:0 0 10px}
+  .promo-row{display:flex;justify-content:flex-end;margin-bottom:2px}
+  .promo-link{font-size:11.5px;font-weight:700;color:var(--ink-soft);background:var(--line-soft);border-radius:99px;padding:6px 12px;display:inline-flex;align-items:center;gap:5px}
+  .promo-link .msym{font-size:14px}
+
   /* ---- top bar ---- */
   .top{position:sticky;top:0;z-index:6;display:flex;align-items:center;gap:12px;padding:16px 18px 10px;background:linear-gradient(var(--paper) 65%,transparent)}
   .back{width:36px;height:36px;border-radius:50%;border:1px solid var(--line);background:var(--card);display:flex;align-items:center;justify-content:center;font-size:17px;color:var(--ink);flex:none;transition:transform .14s var(--ease-spring),background .15s}
@@ -79,19 +109,6 @@
   .cmp-mark{color:var(--sage);font-weight:800}
   .cmp-mark.pro{color:var(--wine)}
   .cmp-dash{color:var(--line);font-weight:800}
-
-  /* ---- plan toggle (monthly / yearly) ---- */
-  .plans{display:flex;gap:10px;margin:26px 20px 0}
-  .plan-opt{flex:1;position:relative;border:1.5px solid var(--line);border-radius:var(--radius-sm);background:var(--card);padding:14px 14px 13px;text-align:left;transition:border-color .15s,background .15s,transform .16s var(--ease-spring),box-shadow .15s}
-  .plan-opt:active{transform:scale(.96)}
-  .plan-opt.selected{border-color:var(--wine);background:var(--wine-soft);box-shadow:var(--shadow)}
-  .plan-badge{position:absolute;top:-9px;right:10px;background:linear-gradient(135deg,var(--gold-shine),var(--gold));color:#3A2C0F;font-size:8.5px;font-weight:800;padding:3px 8px;border-radius:99px;box-shadow:0 4px 10px -3px rgba(166,119,46,.6)}
-  .plan-name{font-size:11.5px;font-weight:800;color:var(--ink-soft);margin-bottom:6px}
-  .plan-opt.selected .plan-name{color:var(--wine)}
-  .plan-price{font-size:20px;font-weight:800;letter-spacing:-.02em;color:var(--ink)}
-  .plan-sub{font-size:10.5px;color:var(--ink-soft);margin-top:3px;line-height:1.4}
-  .plan-radio{position:absolute;top:12px;right:12px;width:17px;height:17px;border-radius:50%;border:1.5px solid var(--line);background:#fff;transition:border-color .15s,background .15s}
-  .plan-opt.selected .plan-radio{border-color:var(--wine);background:var(--wine);box-shadow:inset 0 0 0 3px #fff}
 
   /* ---- price card (checkout summary strip) ---- */
   .price-card{margin:18px 20px 0;border-radius:var(--radius);background:linear-gradient(155deg,var(--wine) 0%,var(--wine-deep) 100%);color:#fff;padding:22px;position:relative;overflow:hidden;box-shadow:var(--shadow-lift)}
@@ -196,7 +213,7 @@
   let subscription = { active:false, expiresAt:null, plan:'FREE', lineOaLink:null };
   let allowedFlag = false;
   let checkoutSession = null;
-  let selectedPlan = 'YEARLY'; // ค่าเริ่มต้นชี้ไปแผนที่คุ้มกว่าไว้ก่อน ผู้ใช้สลับเป็นรายเดือนได้จากหน้าอัพเซล
+  let selectedPlan = 'YEARLY'; // ค่าเริ่มต้นชี้ไปแผนที่คุ้มกว่าไว้ก่อน ผู้ใช้สลับเป็นรายเดือนได้จากกล่องราคาด้านล่างจอ
 
   function toast(msg){
     const el = document.getElementById('toast');
@@ -246,18 +263,6 @@
     </div>`;
   }
 
-  // การ์ดเลือกแผนรายเดือน/รายปี — แตะเพื่อสลับ selectedPlan แล้ว re-render การ์ดราคาด้านล่างให้ตรงกัน
-  function renderPlanToggle(){
-    return `<div class="plans">${Object.entries(PLAN_CATALOG).map(([key, p]) => `
-      <button class="plan-opt${selectedPlan === key ? ' selected' : ''}" data-plan="${key}" type="button">
-        ${p.badge ? `<span class="plan-badge">${esc(p.badge)}</span>` : ''}
-        <span class="plan-radio"></span>
-        <div class="plan-name">${esc(p.label)}</div>
-        <div class="plan-price num">฿${money(p.amount)}</div>
-        <div class="plan-sub">${esc(p.sub)}</div>
-      </button>`).join('')}</div>`;
-  }
-
   function renderActivePage(){
     const expiry = fmtExpiry(subscription.expiresAt);
     document.getElementById('topLabel').textContent = 'สมาชิก Pro';
@@ -279,60 +284,80 @@
     document.getElementById('renewBtn').onclick = startCheckout;
   }
 
-  function renderUpsellPage(){
-    document.getElementById('topLabel').textContent = 'สมัคร Pro';
-    document.getElementById('root').innerHTML = `
-      <div class="hero fade-in">
-        <div class="seal-wrap"><div class="seal">จ</div></div>
-        <p class="eyebrow">ยายจันทร์ Pro</p>
-        <h1>ให้ยายจันทร์ดูแล<br>บัญชีให้ <em>เต็มที่</em></h1>
-        <p>ปลดล็อกลูกเล่นที่ช่วยให้จดง่ายขึ้น เร็วขึ้น และดูภาพรวมการเงินได้ชัดเจนขึ้น</p>
-      </div>
+  // สไลด์ไฮไลต์บนสุด (สลับปัดได้) — เลือกฟีเจอร์เด่น ๆ 4 อย่างจาก FEATURES มาทำเป็นการ์ดใหญ่ ก่อนลงตารางเทียบเต็ม ๆ ด้านล่าง
+  const HIGHLIGHT_SLIDES = [
+    { icon:'photo_camera', title:'อ่านใบเสร็จอัตโนมัติ', sub:'ถ่ายรูปสลิปส่งมา ยายจันทร์อ่านยอดเงินให้เองทันที ไม่ต้องพิมพ์เอง' },
+    { icon:'description', title:'ส่งออกรายงาน PDF', sub:'สรุปรายเดือน/รายปีพร้อมกราฟ เก็บไว้ยื่นภาษีหรือส่งนักบัญชีได้เลย' },
+    { icon:'group', title:'จดบัญชีกลุ่ม', sub:'จดกองกลางร่วมกับเพื่อนหรือครอบครัวได้ในแชทเดียวกัน' },
+    { icon:'schedule', title:'เตือนจดประจำวัน', sub:'ตั้งเวลาที่อยากให้ยายจันทร์ทักเตือนให้เองทุกวัน' }
+  ];
 
-      <div class="section">
+  function renderCarousel(){
+    return `
+      <div class="carousel" id="carousel">${HIGHLIGHT_SLIDES.map(s => `
+        <div class="slide">
+          <div class="slide-visual"><span class="msym">${esc(s.icon)}</span></div>
+          <div class="slide-body"><h3>${esc(s.title)}</h3><p>${esc(s.sub)}</p></div>
+        </div>`).join('')}</div>
+      <div class="dots" id="dots">${HIGHLIGHT_SLIDES.map((_, i) => `<i class="${i === 0 ? 'active' : ''}"></i>`).join('')}</div>
+    `;
+  }
+
+  function wireCarousel(){
+    const car = document.getElementById('carousel');
+    const dots = () => document.querySelectorAll('#dots i');
+    if (!car) return;
+    car.onscroll = () => {
+      const i = Math.round(car.scrollLeft / car.clientWidth);
+      dots().forEach((d, idx) => d.classList.toggle('active', idx === i));
+    };
+  }
+
+  // กล่องราคาแบบ 2 กล่องข้างกันติดล่างจอ (รายเดือน / รายปี) — แตะกล่องเพื่อเลือก แล้วปุ่มด้านล่างพาไปเช็คเอาต์ตามแผนที่เลือก
+  function renderPricingFoot(){
+    return `
+      <div class="pricing-foot">
+        <div class="price-boxes" id="priceBoxes">${Object.entries(PLAN_CATALOG).map(([key, p]) => `
+          <button class="price-box${selectedPlan === key ? ' selected' : ''}" data-plan="${key}" type="button">
+            ${p.badge ? `<span class="pb-badge">${esc(p.badge)}</span>` : ''}
+            <div class="pb-name">${esc(p.label)}</div>
+            <div class="pb-amt num">฿${money(p.amount)}</div>
+            <div class="pb-sub">${key === 'YEARLY' ? (money(Math.round(p.amount / 365)) + ' บาทต่อวัน') : '&nbsp;'}</div>
+          </button>`).join('')}</div>
+        <p class="price-vat">ราคายังไม่รวมภาษีมูลค่าเพิ่ม 7%</p>
+        <button class="primary" id="startCheckoutBtn">เลือกช่องทางชำระเงิน</button>
+      </div>
+    `;
+  }
+
+  function wirePricingFoot(){
+    document.querySelectorAll('.price-box').forEach(btn => {
+      btn.onclick = () => {
+        selectedPlan = btn.dataset.plan;
+        document.querySelector('.pricing-foot').outerHTML = renderPricingFoot();
+        wirePricingFoot();
+      };
+    });
+    const btn = document.getElementById('startCheckoutBtn');
+    if (btn) btn.onclick = startCheckout;
+  }
+
+  function renderUpsellPage(){
+    document.getElementById('topLabel').textContent = 'อัปเกรดเป็น Pro';
+    document.getElementById('root').innerHTML = `
+      ${renderCarousel()}
+
+      <div class="section" style="padding-top:6px">
         <div class="section-title">เทียบ Free กับ Pro</div>
         ${renderComparisonTable()}
       </div>
 
-      <div class="section" style="padding-bottom:0">
-        <div class="section-title" style="margin-bottom:0">เลือกรอบบิล</div>
-      </div>
-      <div id="planToggle">${renderPlanToggle()}</div>
-
-      <div class="price-card fade-in" id="priceCard" style="animation-delay:.1s"></div>
-
-      <div class="actionbar">
-        <button class="primary" id="startCheckoutBtn">สมัคร Pro เลย</button>
-      </div>
+      ${renderPricingFoot()}
     `;
-    renderPriceSummary();
-    rewirePlanToggle();
-    document.getElementById('startCheckoutBtn').onclick = startCheckout;
+    wireCarousel();
+    wirePricingFoot();
   }
 
-  // ผูก onclick ใหม่ทุกครั้งหลัง re-render #planToggle (innerHTML แทนที่ node เดิม ทำให้ event handler เก่าหลุดไปด้วย)
-  function rewirePlanToggle(){
-    document.querySelectorAll('.plan-opt').forEach(btn => {
-      btn.onclick = () => {
-        selectedPlan = btn.dataset.plan;
-        document.getElementById('planToggle').innerHTML = renderPlanToggle();
-        rewirePlanToggle();
-        renderPriceSummary();
-      };
-    });
-  }
-
-  function renderPriceSummary(){
-    const p = PLAN_CATALOG[selectedPlan];
-    const unit = selectedPlan === 'YEARLY' ? '/ ปี' : '/ เดือน';
-    const note = selectedPlan === 'YEARLY'
-      ? 'จ่ายผ่าน PromptPay ครั้งเดียวต่อปี คุ้มกว่ารายเดือนกว่า 200 บาท'
-      : 'จ่ายผ่าน PromptPay ครั้งเดียวต่อเดือน ยกเลิกเมื่อไหร่ก็ได้ ไม่ผูกมัด';
-    document.getElementById('priceCard').innerHTML = `
-      <div class="price-row"><span class="price-amt num">฿${money(p.amount)}</span><span class="price-unit">${unit}</span></div>
-      <p class="price-note">${esc(note)}</p>
-    `;
-  }
 
   async function startCheckout(){
     const root = document.getElementById('root');
@@ -508,5 +533,6 @@
 </script>
 </body>
 </html>
+
 
 
