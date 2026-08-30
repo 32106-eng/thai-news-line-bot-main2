@@ -20,11 +20,17 @@ export async function readSlip(ai, visionModel, mime, base64) {
           {
             role: "system",
             content:
-              "You read Thai bank/PromptPay payment slip photos. Reply with ONLY a raw JSON object, no markdown code fences, no explanation before or after, in this exact shape: " +
+              "You read Thai bank/PromptPay payment slip photos (e.g. K PLUS, SCB Easy, TrueMoney, PromptPay confirmation screens). " +
+              "Reply with ONLY a raw JSON object, no markdown code fences, no explanation before or after, in this exact shape: " +
               '{"amount": number, "transactionReference": string|null, "paidAt": string|null, "receiverName": string|null, "senderName": string|null}. ' +
-              "amount is the total paid in THB as a plain number (no currency symbol/commas). " +
-              "transactionReference is any transaction/reference ID printed on the slip (e.g. after \"เลขที่รายการ\" or \"Ref\"), or null if not visible. " +
-              "paidAt is an ISO 8601 datetime if a date/time is printed on the slip, else null. " +
+              "Thai slips typically show two blocks, one for the sender (ผู้โอน) near the top and one for the receiver (ผู้รับ) below it, often separated by an arrow icon (↓). " +
+              "Each block usually has TWO lines of text: a PERSON'S NAME (often prefixed with a title like นาย/นาง/นางสาว/น.ส./ด.ช./ด.ญ., or an English name) on one line, " +
+              "and a BANK NAME or account/e-wallet label (e.g. \"ธนาคารกสิกรไทย\", \"ธ.กสิกรไทย\", \"ธนาคารกรุงเทพ\", \"PromptPay\", a masked account number like xxx-x-x6752-x) on another line, sometimes with a shop/merchant name (e.g. \"ร้านพี่ออม\") as a third line for the receiver. " +
+              "senderName and receiverName MUST be the PERSON'S NAME (or merchant/shop name if no person name is shown) — NEVER a bank name, NEVER the word \"ธนาคาร\"/\"ธ.\" plus a bank brand, and NEVER a masked account number. " +
+              "If a block shows a bank name but you cannot find any person or merchant name in that same block, set that name field to null rather than using the bank name. " +
+              "amount is the total paid in THB as a plain number (no currency symbol/commas) — look for a label like \"จำนวน\" or \"จำนวนเงิน\". " +
+              "transactionReference is the transaction/reference ID printed on the slip — look for labels like \"เลขที่รายการ\", \"รหัสอ้างอิง\", \"Ref\", or a long alphanumeric code near a QR code — or null if genuinely not visible. " +
+              "paidAt is an ISO 8601 datetime if a date/time is printed on the slip (Thai Buddhist-era years like \"69\" or \"2569\" mean 2026 — subtract 543 from the year before converting), else null. " +
               "This data will be used only as a hint for manual review — never state or imply the payment is verified."
           },
           {
