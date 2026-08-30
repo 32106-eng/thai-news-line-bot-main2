@@ -793,6 +793,16 @@ async function getLineDisplayName(userId) {
     return profile.displayName ?? null;
   } catch (error) { console.warn("LINE profile fetch failed:", error.message); return null; }
 }
+// เหมือน getLineDisplayName แต่คืนทั้งชื่อและรูปโปรไฟล์ ใช้แสดงที่หัวการ์ด "สรุป" ของ dashboard.html
+// (แทนที่ชื่อบอทเดิม ให้ผู้ใช้เห็นว่ากำลังดูบัญชีของตัวเอง พร้อมแพ็กเกจที่ใช้อยู่)
+async function getLineProfile(userId) {
+  try {
+    const r = await fetch(`https://api.line.me/v2/bot/profile/${userId}`, { headers: { authorization: `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}` } });
+    if (!r.ok) return null;
+    const profile = await r.json();
+    return { displayName: profile.displayName ?? null, pictureUrl: profile.pictureUrl ?? null };
+  } catch (error) { console.warn("LINE profile fetch failed:", error.message); return null; }
+}
 // ดึงชื่อสมาชิกกลุ่ม (ใช้แสดง "ใครจดอะไรบ้าง" ในกองกลาง) — ใช้ได้เฉพาะ userId ที่เคยส่งข้อความในกลุ่มนี้มาก่อน
 // (ข้อจำกัดของ LINE: ดึงรายชื่อสมาชิกกลุ่มทั้งหมดล่วงหน้าไม่ได้ ต้องรู้ userId ก่อนถึงจะสอบถามโปรไฟล์ได้)
 async function getGroupMemberName(groupId, userId) {
@@ -1294,10 +1304,30 @@ app.post("/api/premium/slip", express.json({ limit: "8mb" }), async (req, res) =
 });
 app.get("/api/dashboard", async (req, res) => {
   if (!allowed(req)) return res.sendStatus(401);
-  const user = await getUser(req.query.u), current = user.transactions.filter((tx) => sameMonth(tx.createdAt)), t = totals(current);
+  const uid = req.query.u;
+  const user = await getUser(uid), current = user.transactions.filter((tx) => sameMonth(tx.createdAt)), t = totals(current);
   const categories = Object.entries(current.filter((tx) => tx.type === "expense").reduce((o, tx) => ({ ...o, [tx.category]: (o[tx.category] ?? 0) + tx.amount }), {})).map(([category, amount]) => ({ category, amount })).sort((a, b) => b.amount - a.amount);
   const now = new Date(), history = Array.from({ length: 6 }, (_, index) => { const d = new Date(now.getFullYear(), now.getMonth() - (5 - index), 1), p = parts(d), total = totals(user.transactions.filter((tx) => sameMonth(tx.createdAt, p.year, p.month))); return { label: new Intl.DateTimeFormat("th-TH", { month: "short", timeZone: "Asia/Bangkok" }).format(d), ...total }; });
-  res.json({ label: `ข้อมูลเดือน ${new Intl.DateTimeFormat("th-TH", { month: "long", year: "numeric", timeZone: "Asia/Bangkok" }).format(now)}`, income: t.income, expense: t.expense, balance: t.income - t.expense, categories, history, recent: [...user.transactions].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 30).map((tx) => ({ ...tx, date: new Intl.DateTimeFormat("th-TH", { dateStyle: "short", timeZone: "Asia/Bangkok" }).format(new Date(tx.createdAt)) })) });
+  // โปรไฟล์สำหรับหัวการ์ด "สรุป": แชทกลุ่มไม่ดึงชื่อ/รูปจริงมาโชว์ (กันข้อมูลส่วนตัวรั่วถ้ามีคนแอบดูหน้าจอ) ใช้ label กองกลางแทน
+  // แชท 1:1 ดึงชื่อ+รูปโปรไฟล์ LINE จริงมาแสดงแทนชื่อบอทเดิม
+  const groupLink = await groupLinkService.getRaw(uid).catch(() => null);
+  const statusUid = groupLink?.ownerId ?? uid;
+  const [profile, planStatus] = await Promise.all([
+    groupLink ? Promise.resolve(null) : getLineProfile(uid),
+    subscriptionService.getStatusView(statusUid).catch(() => ({ plan: PLAN.FREE, active: false }))
+  ]);
+  res.json({
+    label: `ข้อมูลเดือน ${new Intl.DateTimeFormat("th-TH", { month: "long", year: "numeric", timeZone: "Asia/Bangkok" }).format(now)}`,
+    income: t.income, expense: t.expense, balance: t.income - t.expense, categories, history,
+    recent: [...user.transactions].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 30).map((tx) => ({ ...tx, date: new Intl.DateTimeFormat("th-TH", { dateStyle: "short", timeZone: "Asia/Bangkok" }).format(new Date(tx.createdAt)) })),
+    profile: {
+      displayName: groupLink ? "กองกลางของกลุ่ม" : (profile?.displayName ?? null),
+      pictureUrl: groupLink ? null : (profile?.pictureUrl ?? null),
+      isGroup: Boolean(groupLink),
+      plan: planStatus.plan ?? PLAN.FREE,
+      active: Boolean(planStatus.active)
+    }
+  });
 });
 // เรนเดอร์ QR ของ payment session เป็นภาพ PNG จริง เพื่อให้ LINE Image Message ใช้ originalContentUrl/
 // previewImageUrl ชี้มาที่นี่ได้ (LINE ต้องการ URL รูปภาพที่เข้าถึงได้จริง จะส่ง payload string ตรง ๆ ไม่ได้)
@@ -1584,6 +1614,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
   }
 });
 app.listen(Number(process.env.PORT ?? 3000), () => console.log(`Ta Phin listening on ${process.env.PORT ?? 3000}`));
+
 
 
 
