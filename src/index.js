@@ -1283,7 +1283,16 @@ app.post("/api/premium/slip", express.json({ limit: "8mb" }), async (req, res) =
 
   let ocrData = null;
   try {
-    ocrData = await readSlip(ai, visionModel, mime, base64);
+    // รูปจากมือถือที่อัปโหลดผ่านเว็บมักมีความละเอียดสูงมาก (ต่างจากฝั่ง LINE ที่ downloadLineImage() ย่อให้แล้วเสมอ)
+    // ส่ง base64 ดิบตรง ๆ ให้ VLM ทำให้ payload ใหญ่เกินไปหรือถูกย่อคุณภาพต่ำฝั่ง provider เอง ส่งผลให้อ่านชื่อ/เลขอ้างอิงผิดบ่อย
+    // ย่อขนาดให้เหมือนเส้นทาง LINE ก่อนเสมอ (1600px, quality 82) เพื่อให้ผลอ่านสม่ำเสมอกันทั้งสองช่องทาง
+    const rawBuffer = Buffer.from(base64, "base64");
+    const resized = await sharp(rawBuffer).rotate().resize({ width: 1600, height: 1600, fit: "inside", withoutEnlargement: true }).jpeg({ quality: 82 }).toBuffer();
+    const resizedBase64 = resized.toString("base64");
+    ocrData = await readSlip(ai, visionModel, "image/jpeg", resizedBase64);
+    // แนบรูปสลิปย่อขนาดเล็กติดไปกับ ocrData เหมือนฝั่ง LINE (lineHandlers.js handleSlipImage) — เดิม endpoint นี้ไม่เคยแนบเลย
+    // ทำให้สลิปที่อัปโหลดผ่านเว็บ (หน้า Pro) ไม่มีรูปให้แอดมินเทียบตอนตรวจสอบ ต่างจากสลิปที่ส่งผ่านแชท LINE
+    if (ocrData) ocrData.slipImageBase64 = await makeSlipThumbnail(rawBuffer);
   } catch (error) {
     console.error("Web slip OCR failed:", error.message);
     return res.status(502).json({ error: "ระบบประมวลผลภาพใช้เวลานานกว่าปกติ กรุณาลองใหม่อีกครั้ง" });
@@ -1614,7 +1623,6 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
   }
 });
 app.listen(Number(process.env.PORT ?? 3000), () => console.log(`Ta Phin listening on ${process.env.PORT ?? 3000}`));
-
 
 
 
