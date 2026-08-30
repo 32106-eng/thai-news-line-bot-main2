@@ -11,7 +11,7 @@ import cron from "node-cron";
 import { initializeApp, cert } from "firebase-admin/app";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 
-import { buildSubscriptionCollections } from "./subscription/db.js";
+import { buildSubscriptionCollections, toDate } from "./subscription/db.js";
 import { createAuditLogger } from "./subscription/auditLog.js";
 import { createSubscriptionService, PLAN } from "./subscription/subscriptions.js";
 import { createPaymentSessionService, PLAN_CATALOG } from "./subscription/paymentSessions.js";
@@ -24,6 +24,8 @@ import { readSlip } from "./subscription/ocr.js";
 import { createRichMenuService } from "./subscription/richMenu.js";
 import { createSubscriptionLineHandlers } from "./subscription/lineHandlers.js";
 import { createGroupLinkService, CONFIRM_WINDOW_MINUTES } from "./subscription/groupLinks.js";
+import { createGroupDebtService } from "./subscription/groupDebts.js";
+import { formatThaiDate } from "./shared/time.js";
 import { createAdminAuth } from "./admin/auth.js";
 import { createAdminRouter } from "./admin/routes.js";
 
@@ -99,6 +101,7 @@ app.use("/admin", createAdminRouter({ collections: subCollections, adminAuth, su
 // ทุกคำสั่ง/ข้อความในกลุ่ม-ห้อง ต้องขึ้นต้นด้วย "/บอท" เสมอ ไม่งั้นบอทจะไม่ตอบ (ดู docs/ARCHITECTURE.md)
 // ---------------------------------------------------------------------------
 const groupLinkService = createGroupLinkService(subCollections, auditLog, subscriptionService);
+const groupDebtService = createGroupDebtService(subCollections, auditLog);
 const BOT_PREFIX = "/บอท";
 function stripBotPrefix(text) {
   if (!text.startsWith(BOT_PREFIX)) return null;
@@ -125,6 +128,39 @@ cron.schedule("*/2 * * * *", async () => {
       } catch (error) { console.error(`Leaving group ${groupId} failed:`, error.message); }
     }
   } catch (error) { console.error("Group pending sweep failed:", error.message); }
+}, { timezone: "Asia/Bangkok" });
+
+// housekeeping: กลุ่มที่ LINKED อยู่ แต่ Premium ของเจ้าของกลุ่มหมดอายุไปแล้ว (สด ๆ) -> ถามในกลุ่มว่ายังอยากให้ยายจันทร์อยู่ต่อไหม
+// ไม่มี deadline ในการตอบ (ตามที่ระบุ) แต่ระหว่างรอตอบ ฟีเจอร์ Premium ทั้งหมดใช้ไม่ได้ทันที (isPremiumGroup เช็ค owner สด ๆ อยู่แล้ว)
+// ถามครั้งเดียวตอนเพิ่งหมดอายุ (findNewlyExpiredLinked กันถามซ้ำด้วยการย้ายสถานะไป RECONFIRM_PENDING ทันที)
+cron.schedule("*/10 * * * *", async () => {
+  try {
+    const groups = await groupLinkService.findNewlyExpiredLinked();
+    for (const { groupId } of groups) {
+      try {
+        await groupLinkService.askReconfirm(groupId);
+        await push(groupId, reconfirmAskFlexMessage());
+        console.log(`Asked group ${groupId} to reconfirm: owner Premium expired`);
+      } catch (error) { console.error(`Asking reconfirm for group ${groupId} failed:`, error.message); }
+    }
+  } catch (error) { console.error("Group reconfirm sweep failed:", error.message); }
+}, { timezone: "Asia/Bangkok" });
+
+// เตือนหนี้ที่ครบกำหนดคืนแล้ว (dueDate <= วันนี้ ตามเวลาไทย, เฉพาะที่ยังไม่เคลียร์) — เช็ควันละครั้งตอนเที่ยงคืนครึ่ง
+cron.schedule("30 0 * * *", async () => {
+  try {
+    const dueDebts = await groupDebtService.findDueReminders();
+    for (const debt of dueDebts) {
+      try {
+        const [debtorName, creditorName] = await Promise.all([
+          getGroupMemberName(debt.groupId, debt.debtorId),
+          getGroupMemberName(debt.groupId, debt.creditorId)
+        ]);
+        await push(debt.groupId, debtDueFlexMessage(debt, { debtorName: debtorName ?? "เพื่อนสมาชิก", creditorName: creditorName ?? "เพื่อนสมาชิก" }));
+        await groupDebtService.markReminded(debt.id);
+      } catch (error) { console.error(`Debt due reminder failed for debt ${debt.id}:`, error.message); }
+    }
+  } catch (error) { console.error("Debt due-reminder sweep failed:", error.message); }
 }, { timezone: "Asia/Bangkok" });
 
 const CATEGORIES = {
@@ -747,6 +783,81 @@ function groupWelcomeFlexMessage() {
     }
   };
 }
+// การ์ดถามในกลุ่มตอน Premium ของเจ้าของกลุ่มหมดอายุแล้ว: ยังอยากให้ยายจันทร์อยู่ต่อไหม (ไม่มี deadline ตอบ)
+// ระหว่างรอตอบ ฟีเจอร์ Premium ทั้งหมดใช้ไม่ได้แล้ว (isPremiumGroup เช็คสด ๆ) — ต้องมีคนตอบก่อนถึงจะกลับมาใช้ได้/บอทออกจากกลุ่ม
+function reconfirmAskFlexMessage() {
+  const pink = "#D23283", cream = "#FBF3EC";
+  return {
+    type: "flex",
+    altText: "Premium ของกลุ่มนี้หมดอายุแล้ว ยังอยากให้ยายจันทร์อยู่ต่อไหมคะ? พิมพ์ \"/บอท ยืนยันต่อ\" (ต้องมี Premium) หรือ \"/บอท ยืนยันต่อ ไม่\"",
+    contents: {
+      type: "bubble",
+      body: {
+        type: "box", layout: "vertical", paddingAll: "20px", backgroundColor: cream,
+        contents: [
+          { type: "text", text: "Premium ของกลุ่มนี้หมดอายุแล้วนะคะ 🙏", weight: "bold", size: "md", color: "#2B2320", wrap: true },
+          { type: "separator", margin: "lg", color: "#EFE3D8" },
+          { type: "text", text: "ยังอยากให้ยายจันทร์อยู่ในกลุ่มนี้ต่อไหมคะ? ไม่รีบนะคะ ตอบได้ตลอดเวลา แต่ระหว่างนี้ฟีเจอร์ Premium ในกลุ่มจะใช้ไม่ได้ก่อน", size: "xs", color: "#5B5450", margin: "lg", wrap: true },
+          {
+            type: "box", layout: "vertical", margin: "lg", paddingAll: "12px", cornerRadius: "12px", backgroundColor: "#FFFFFF",
+            contents: [
+              { type: "text", text: "ถ้าอยากให้อยู่ต่อ (ต้องมีสมาชิก Premium ยืนยัน)", size: "xxs", color: "#9B94A0" },
+              { type: "text", text: "/บอท ยืนยันต่อ", weight: "bold", size: "sm", color: pink, margin: "xs" },
+              { type: "text", text: "ถ้าไม่ต้องการแล้ว", size: "xxs", color: "#9B94A0", margin: "md" },
+              { type: "text", text: "/บอท ยืนยันต่อ ไม่", weight: "bold", size: "sm", color: "#7A2B3D", margin: "xs" }
+            ]
+          }
+        ]
+      }
+    }
+  };
+}
+
+// การ์ดยืนยันตอนบันทึกหนี้สำเร็จ (/บอท @ชื่อ ติดหนี้ ...)
+function debtFlexMessage(debt, { debtorName, creditorName }) {
+  const pink = "#D23283", cream = "#FBF3EC";
+  const dueLine = debt.dueDate ? `กำหนดคืน: ${formatThaiDate(debt.dueDate)}` : "ไม่กำหนดวันคืน";
+  return {
+    type: "flex",
+    altText: `บันทึกแล้ว: ${debtorName} ติดหนี้ ${creditorName} ${money(debt.amount)} บาท`,
+    contents: {
+      type: "bubble",
+      body: {
+        type: "box", layout: "vertical", paddingAll: "20px", backgroundColor: cream,
+        contents: [
+          { type: "text", text: "📒 บันทึกหนี้แล้ว", weight: "bold", size: "md", color: "#2B2320" },
+          { type: "separator", margin: "md", color: "#EFE3D8" },
+          { type: "text", text: `${debtorName} ติดหนี้ ${creditorName}`, size: "sm", color: "#5B5450", margin: "md", wrap: true },
+          { type: "text", text: `${money(debt.amount)} บาท`, weight: "bold", size: "xl", color: pink, margin: "xs" },
+          ...(debt.note ? [{ type: "text", text: debt.note, size: "xs", color: "#9B94A0", margin: "xs", wrap: true }] : []),
+          { type: "text", text: dueLine, size: "xxs", color: "#9B94A0", margin: "md" }
+        ]
+      }
+    }
+  };
+}
+
+// การ์ดเตือนหนี้ครบกำหนดคืนแล้ว (ส่งเข้ากลุ่ม, cron รายวัน) — debtorName/creditorName resolve ล่วงหน้าแล้ว (ดู getGroupMemberName)
+function debtDueFlexMessage(debt, { debtorName, creditorName }) {
+  return {
+    type: "flex",
+    altText: `ครบกำหนดคืนแล้ว: ${money(debt.amount)} บาท`,
+    contents: {
+      type: "bubble",
+      body: {
+        type: "box", layout: "vertical", paddingAll: "20px", backgroundColor: "#FBF3EC",
+        contents: [
+          { type: "text", text: "⏰ ถึงกำหนดคืนเงินแล้วนะ", weight: "bold", size: "md", color: "#7A2B3D", wrap: true },
+          { type: "separator", margin: "md", color: "#EFE3D8" },
+          { type: "text", text: `${debtorName} ยังติดหนี้ ${creditorName} อยู่`, size: "sm", color: "#5B5450", margin: "md", wrap: true },
+          { type: "text", text: `${money(debt.amount)} บาท`, weight: "bold", size: "xl", color: "#D23283", margin: "xs" },
+          ...(debt.note ? [{ type: "text", text: debt.note, size: "xs", color: "#9B94A0", margin: "xs", wrap: true }] : [])
+        ]
+      }
+    }
+  };
+}
+
 // การ์ดแจ้งเตือนสั้น ๆ ทั่วไป (สำเร็จ/ผิดพลาด/แจ้งข้อมูล) แทนข้อความ text ล้วน — ใช้แทนที่ reply(token, "ข้อความยาว ๆ") เดิม
 // tone: 'success' | 'error' | 'info' — คุมสีแถบด้านซ้ายกับไอคอนหัวการ์ดเท่านั้น เนื้อหายังเป็นข้อความปกติ ใส่ \n ได้ตามเดิม
 function noticeFlexMessage(text, tone = "info") {
@@ -1241,6 +1352,22 @@ app.get("/api/subscription", async (req, res) => {
   // isGroup: ให้หน้าเว็บรู้ว่า u นี้คือแชทกลุ่มไหม เพื่อโชว์/ซ่อนเมนู "ข้อความยืนยัน" (ฟีเจอร์เฉพาะกลุ่ม ดู /api/confirm-message-prefs)
   res.json({ ...status, lineOaLink, isGroup: Boolean(groupLink) });
 });
+// รายการหนี้ในกลุ่ม (เฉพาะ u ที่เป็น groupId/roomId เท่านั้น — แชทส่วนตัวไม่มีระบบหนี้) แสดงชื่อสมาชิกจริงประกอบให้เลย
+// เรียงหนี้ค้าง (OPEN) ก่อน แล้วค่อยหนี้ที่เคลียร์แล้ว (CLEARED) ให้ผู้ใช้เห็นประวัติได้ด้วย ไม่ใช่แค่ยอดค้าง
+app.get("/api/debts", async (req, res) => {
+  if (!allowed(req)) return res.sendStatus(401);
+  const groupId = req.query.u;
+  const debts = await groupDebtService.listByGroup(groupId).catch(() => []);
+  const uniqueUserIds = [...new Set(debts.flatMap((d) => [d.debtorId, d.creditorId]))];
+  const names = Object.fromEntries(await Promise.all(uniqueUserIds.map(async (id) => [id, (await getGroupMemberName(groupId, id).catch(() => null)) ?? "สมาชิกกลุ่ม"])));
+  const enriched = debts
+    .map((d) => ({ ...d, debtorName: names[d.debtorId], creditorName: names[d.creditorId], createdAt: toDate(d.createdAt), dueDate: toDate(d.dueDate), clearedAt: toDate(d.clearedAt) }))
+    .sort((a, b) => (a.status === b.status ? (b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0) : a.status === "OPEN" ? -1 : 1));
+  res.json({ debts: enriched });
+});
+// เคลียร์หนี้เฉพาะทาง LINE เท่านั้น ("/บอท เคลียร์หนี้ @ชื่อ") ไม่มี endpoint เคลียร์จากแดชบอร์ด
+// เพราะลิงก์แดชบอร์ดของกลุ่มคีย์ด้วย groupId ตัวเดียว ไม่มีทางรู้ว่า "ใคร" ในกลุ่มเป็นคนเปิดดูอยู่จริง (ไม่มี session ต่อคน)
+// ถ้าเปิด endpoint POST ให้ client ส่ง requestedByUserId มาเอง จะกลายเป็นให้ใครก็ได้ปลอมตัวเป็นเจ้าของหนี้แล้วเคลียร์หนี้คนอื่นได้ทันที
 // สมัคร/ต่ออายุ Premium จากหน้าเว็บ — ใช้ paymentSessionService + qrService ตัวเดียวกับที่ฝั่ง LINE ใช้
 // (ดู lineHandlers.js handleSubscribeCommand) เพื่อให้ session/QR ผูกกับ user เดียวกันไม่ว่าจะสมัครทางไหน
 app.post("/api/premium/checkout", express.json(), async (req, res) => {
@@ -1467,9 +1594,21 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
     // --- ในกลุ่ม/ห้อง: ข้อความตัวอักษรต้องขึ้นต้นด้วย "/บอท" เสมอ ไม่งั้นเงียบสนิท ไม่อ่านไม่ตอบ (spec: กลุ่มจดบัญชี) ---
     // รูปภาพไม่ผ่านเงื่อนไขนี้ (แนบ prefix กับรูปพร้อมกันไม่ได้) — คุมด้วย groupLinkService.consumeReceiptWait แทน (ดูด้านล่าง)
     if (isGroupChat && event.message?.type === "text") {
-      const stripped = stripBotPrefix(event.message.text.trim());
+      const original = event.message.text; // mention.mentionees[].index อ้างอิงตำแหน่งตัวอักษรใน text ต้นฉบับนี้เท่านั้น (ห้าม trim ก่อนคำนวณ offset)
+      const trimmedOriginal = original.trim();
+      const stripped = stripBotPrefix(trimmedOriginal);
       if (stripped === null) continue; // ไม่มี "/บอท" นำหน้า -> ไม่ทำอะไรเลย
+      // offset = ตำแหน่งเริ่มต้นของเนื้อความที่เหลือ (stripped) เมื่อเทียบกับ original ต้นฉบับ
+      // หา index ของ "stripped" ใน "original" ตรง ๆ (กันกรณีมี whitespace นำหน้า/ระหว่าง prefix กับเนื้อหาไม่เท่ากัน)
+      const offset = original.indexOf(stripped, original.indexOf(BOT_PREFIX));
       event.message.text = stripped; // ตัด prefix ออก แล้วปล่อยให้ logic เดิมด้านล่างทำงานเหมือน 1:1
+      if (event.message.mention?.mentionees?.length && offset >= 0) {
+        event.message.mention = {
+          mentionees: event.message.mention.mentionees
+            .map((m) => ({ ...m, index: m.index - offset }))
+            .filter((m) => m.index >= 0)
+        };
+      }
     }
 
     if (event.message?.type === "image" && isGroupChat) {
@@ -1553,6 +1692,114 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
           message = noticeFlexMessage("กลุ่มนี้ยืนยันเจ้าของไปแล้ว หรือไม่มีคำขอที่รอยืนยันอยู่", "info");
         }
       } catch (error) { console.error("Confirm owner failed", error.message); message = noticeFlexMessage("เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง", "error"); }
+      try { await replyMessages(event.replyToken, [message]); } catch (error) { console.error("Could not reply", error.message); }
+      continue;
+    }
+
+    // --- คำสั่งเฉพาะกลุ่ม: ตอบคำถาม "ยังอยากให้อยู่ต่อไหม" หลัง Premium ของเจ้าของกลุ่มหมดอายุ (ดู cron ด้านบนที่เรียก askReconfirm) ---
+    // "/บอท ยืนยันต่อ" -> ต้องเป็น Premium จริง ณ ตอนนี้ ถึงจะกลับมาใช้ได้ (ไม่มี deadline ในการตอบ)
+    // "/บอท ยืนยันต่อ ไม่" -> ปฏิเสธ บอทออกจากกลุ่มทันที
+    if (isGroupChat && (text === "ยืนยันต่อ" || text === "ยืนยันต่อ ไม่")) {
+      let message;
+      try {
+        if (text === "ยืนยันต่อ ไม่") {
+          const result = await groupLinkService.declineReconfirm(userId, authorId);
+          if (result.ok) {
+            message = noticeFlexMessage("รับทราบค่ะ ยายจันทร์ขอตัวออกจากกลุ่มนี้นะคะ 🙏 ขอบคุณที่ใช้งานกันมานะคะ", "info");
+            try { await replyMessages(event.replyToken, [message]); } catch (error) { console.error("Could not reply", error.message); }
+            try { await leaveGroup(userId); await groupLinkService.markLeft(userId); } catch (error) { console.error("Leaving group after decline failed:", error.message); }
+            continue;
+          } else {
+            message = noticeFlexMessage("ตอนนี้ไม่มีคำถามที่รอตอบอยู่ค่ะ", "info");
+          }
+        } else {
+          const result = await groupLinkService.reconfirmOwner(userId, authorId);
+          if (result.ok) {
+            message = noticeFlexMessage("ยืนยันสำเร็จ ยายจันทร์อยู่ต่อและปลดล็อกฟีเจอร์ Premium ให้กลุ่มนี้แล้วค่ะ 🎉", "success");
+          } else if (result.reason === "NOT_PREMIUM") {
+            message = noticeFlexMessage("บัญชีของคุณยังไม่ใช่ Premium นะคะ ต้องสมัคร/ต่ออายุ Premium แบบ 1:1 กับยายจันทร์ก่อน (พิมพ์ \"สมัครพรีเมียม\") แล้วค่อยกลับมาพิมพ์ \"/บอท ยืนยันต่อ\" ในกลุ่มนี้อีกครั้ง", "error");
+          } else {
+            message = noticeFlexMessage("ตอนนี้ไม่มีคำถามที่รอตอบอยู่ค่ะ", "info");
+          }
+        }
+      } catch (error) { console.error("Reconfirm failed", error.message); message = noticeFlexMessage("เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง", "error"); }
+      try { await replyMessages(event.replyToken, [message]); } catch (error) { console.error("Could not reply", error.message); }
+      continue;
+    }
+
+    // --- คำสั่งเฉพาะกลุ่ม: ระบบหนี้ระหว่างสมาชิก (spec: กลุ่มจดบัญชี) ---
+    // รูปแบบ: "@ชื่อ ติดหนี้ 100 ค่าข้าว" หรือ "@ชื่อ ติดหนี้ 100 ค่าข้าว 5/9" (5/9 = วันครบกำหนดคืน, วัน/เดือน, ปีปัจจุบันเสมอ)
+    // ต้องมี mention ของสมาชิกในกลุ่ม (ไม่ใช่ตัวบอทเอง) — LINE ส่ง mention.mentionees[].userId มาให้ใน webhook เมื่อมีการแท็ก
+    // ฟีเจอร์นี้ใช้ได้ทั้งกลุ่ม Premium และไม่ Premium (เป็นแค่บันทึกความจำช่วยจำ ไม่ใช่ฟีเจอร์ Premium)
+    if (isGroupChat && /ติดหนี้/.test(text)) {
+      let message;
+      try {
+        const mentionees = (event.message.mention?.mentionees ?? []).filter((m) => m.type === "user" && m.userId);
+        if (!mentionees.length) {
+          message = noticeFlexMessage("ต้องแท็กคนที่ติดหนี้ด้วยนะคะ เช่น \"/บอท @ชื่อ ติดหนี้ 100 ค่าข้าว\"", "error");
+        } else {
+          const debtorId = mentionees[0].userId;
+          if (debtorId === authorId) {
+            message = noticeFlexMessage("แท็กตัวเองไม่ได้นะคะ ต้องเป็นคนอื่นที่ติดหนี้กับคุณ", "error");
+          } else {
+            // ตัดส่วนที่เป็น mention text ออกก่อน (เช่น "@ชื่อ ") แล้วค่อยหา "ติดหนี้ <จำนวนเงิน> <หมายเหตุ> [d/m]"
+            const withoutMentions = mentionees.reduce((acc, m) => acc.slice(0, m.index) + " ".repeat(m.length) + acc.slice(m.index + m.length), text);
+            const match = withoutMentions.match(/ติดหนี้\s*([0-9][0-9,]*(?:\.\d{1,2})?)\s*([^\n]*)/);
+            const amount = match ? Number(match[1].replaceAll(",", "")) : NaN;
+            if (!match || !Number.isFinite(amount) || amount <= 0 || amount > 10_000_000) {
+              message = noticeFlexMessage("รูปแบบไม่ถูกต้องนะคะ ลองพิมพ์แบบนี้: \"/บอท @ชื่อ ติดหนี้ 100 ค่าข้าว\" (ใส่วันครบกำหนดคืนต่อท้ายได้ เช่น \"...ค่าข้าว 5/9\")", "error");
+            } else {
+              let rest = (match[2] ?? "").trim();
+              let dueDate = null;
+              // จับวันที่ท้ายข้อความแบบ d/m (ปีปัจจุบัน) ถ้ามี — เช่น "5/9" หรือ "05/09"
+              const dateMatch = rest.match(/(\d{1,2})\/(\d{1,2})\s*$/);
+              if (dateMatch) {
+                const day = Number(dateMatch[1]), month = Number(dateMatch[2]);
+                const year = new Date().getFullYear();
+                const candidate = new Date(year, month - 1, day, 12);
+                if (day >= 1 && day <= 31 && month >= 1 && month <= 12 && candidate.getMonth() === month - 1) {
+                  dueDate = candidate;
+                  rest = rest.slice(0, dateMatch.index).trim();
+                }
+              }
+              const debt = await groupDebtService.addDebt({ groupId: userId, creditorId: authorId, debtorId, amount, note: rest, dueDate });
+              const [debtorName, creditorName] = await Promise.all([
+                getGroupMemberName(userId, debtorId),
+                getGroupMemberName(userId, authorId)
+              ]);
+              message = debtFlexMessage(debt, { debtorName: debtorName ?? "สมาชิกกลุ่ม", creditorName: creditorName ?? "คุณ" });
+            }
+          }
+        }
+      } catch (error) { console.error("Add debt failed", error.message); message = noticeFlexMessage("เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง", "error"); }
+      try { await replyMessages(event.replyToken, [message]); } catch (error) { console.error("Could not reply", error.message); }
+      continue;
+    }
+
+    // "/บอท เคลียร์หนี้ @ชื่อ 100" — เคลียร์หนี้ 1 รายการที่ยังเปิดอยู่ (OPEN) ระหว่างคนพิมพ์คำสั่ง (creditor) กับคนที่ถูกแท็ก (debtor)
+    // เฉพาะคนที่เป็นคนกำหนดหนี้ (creditorId เดิม) เท่านั้นที่เคลียร์ได้ — ถ้ามีหลายรายการตรงกัน เคลียร์รายการเก่าสุดก่อน (FIFO)
+    if (isGroupChat && text.startsWith("เคลียร์หนี้")) {
+      let message;
+      try {
+        const mentionees = (event.message.mention?.mentionees ?? []).filter((m) => m.type === "user" && m.userId);
+        if (!mentionees.length) {
+          message = noticeFlexMessage("ต้องแท็กคนที่จะเคลียร์หนี้ด้วยนะคะ เช่น \"/บอท เคลียร์หนี้ @ชื่อ\"", "error");
+        } else {
+          const debtorId = mentionees[0].userId;
+          const openDebts = (await groupDebtService.listOpenByGroup(userId))
+            .filter((d) => d.debtorId === debtorId && d.creditorId === authorId)
+            .sort((a, b) => (toDate(a.createdAt)?.getTime() ?? 0) - (toDate(b.createdAt)?.getTime() ?? 0));
+          if (!openDebts.length) {
+            message = noticeFlexMessage("ไม่พบหนี้ที่ยังค้างอยู่ ซึ่งคุณเป็นคนกำหนดไว้กับสมาชิกคนนี้", "info");
+          } else {
+            const target = openDebts[0];
+            const result = await groupDebtService.clearDebt({ debtId: target.id, groupId: userId, requestedByUserId: authorId });
+            if (result.ok) message = noticeFlexMessage(`เคลียร์หนี้ ${money(target.amount)} บาทแล้วค่ะ`, "success");
+            else if (result.reason === "NOT_CREDITOR") message = noticeFlexMessage("เคลียร์ได้เฉพาะคนที่เป็นคนกำหนดหนี้รายการนั้นเท่านั้นนะคะ", "error");
+            else message = noticeFlexMessage("ไม่พบรายการหนี้นี้แล้ว หรือเคลียร์ไปแล้ว", "info");
+          }
+        }
+      } catch (error) { console.error("Clear debt failed", error.message); message = noticeFlexMessage("เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง", "error"); }
       try { await replyMessages(event.replyToken, [message]); } catch (error) { console.error("Could not reply", error.message); }
       continue;
     }
