@@ -40,18 +40,22 @@ const usersCol = getFirestore(firebaseApp).collection("panuan_users");
 // existing Render deployment is not sent to api.openai.com with an NVIDIA-only model name.
 const misplacedNvidiaApiKey = process.env.OPENAI_API_KEY?.startsWith("nvapi-") ? process.env.OPENAI_API_KEY : undefined;
 const nvidiaApiKey = process.env.NVIDIA_API_KEY ?? misplacedNvidiaApiKey;
-const aiProvider = nvidiaApiKey ? "nvidia" : process.env.OPENAI_API_KEY ? "openai" : process.env.OPENROUTER_API_KEY ? "openrouter" : null;
-const aiKey = nvidiaApiKey ?? process.env.OPENAI_API_KEY ?? process.env.OPENROUTER_API_KEY;
-const aiBaseURL = aiProvider === "nvidia"
+const groqApiKey = process.env.GROQ_API_KEY;
+const aiProvider = groqApiKey ? "groq" : nvidiaApiKey ? "nvidia" : process.env.OPENAI_API_KEY ? "openai" : process.env.OPENROUTER_API_KEY ? "openrouter" : null;
+const aiKey = groqApiKey ?? nvidiaApiKey ?? process.env.OPENAI_API_KEY ?? process.env.OPENROUTER_API_KEY;
+const aiBaseURL = aiProvider === "groq"
+  ? "https://api.groq.com/openai/v1"
+  : aiProvider === "nvidia"
   ? "https://integrate.api.nvidia.com/v1"
   : aiProvider === "openrouter"
     ? "https://openrouter.ai/api/v1"
     : undefined;
-// The NVIDIA integration is intentionally pinned to an available 7B NVIDIA NIM chat model. This avoids
-// stale/deprecated values in OPENAI_MODEL causing a 410 from the hosted NVIDIA endpoint.
-const chatModel = aiProvider === "nvidia"
-  ? "mistralai/mistral-7b-instruct-v0.3"
-  : process.env.OPENAI_MODEL;
+// Pin managed providers to known current model IDs so stale environment values cannot cause 404/410.
+const chatModel = aiProvider === "groq"
+  ? "openai/gpt-oss-20b"
+  : aiProvider === "nvidia"
+    ? "mistralai/mistral-7b-instruct-v0.3"
+    : process.env.OPENAI_MODEL;
 const ai = aiKey ? new OpenAI({ apiKey: aiKey, ...(aiBaseURL ? { baseURL: aiBaseURL } : {}) }) : null;
 // Vision-capable model for reading receipt/slip photos. Not every free/cheap model can read images —
 // a text-only model will just fail (e.g. "openai/gpt-oss-120b" on OpenRouter is TEXT-ONLY, no image
@@ -60,9 +64,8 @@ const ai = aiKey ? new OpenAI({ apiKey: aiKey, ...(aiBaseURL ? { baseURL: aiBase
 //     (catalog changes often — if this 404s/410s, check https://build.nvidia.com/models for a current vision model)
 //   OpenRouter (free, tighter rate limits): "google/gemma-4-31b-it:free"
 //   OpenAI direct (paid): "gpt-4o-mini" / "gpt-4.1-mini"
-// The pinned NVIDIA 8B chat model is text-only, so do not accidentally send receipt images to it.
-// Set OPENAI_VISION_MODEL only when a separate image-capable provider/model is intentionally configured.
-const visionModel = process.env.OPENAI_VISION_MODEL ?? (aiProvider === "nvidia" ? undefined : chatModel);
+// Groq GPT-OSS and NVIDIA Mistral are text-only, so do not send receipt images to them.
+const visionModel = process.env.OPENAI_VISION_MODEL ?? ((aiProvider === "nvidia" || aiProvider === "groq") ? undefined : chatModel);
 
 // ---------------------------------------------------------------------------
 // Premium subscription + payment system (see docs/ARCHITECTURE.md)
@@ -1632,8 +1635,6 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
   }
 });
 app.listen(Number(process.env.PORT ?? 3000), () => console.log(`Ta Phin listening on ${process.env.PORT ?? 3000}`));
-
-
 
 
 
