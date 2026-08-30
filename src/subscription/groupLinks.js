@@ -10,9 +10,10 @@ import { now, addMinutes, isExpired } from "../shared/time.js";
 import { AUDIT_EVENTS } from "./auditLog.js";
 
 export const GROUP_LINK_STATUS = Object.freeze({
-  PENDING: "PENDING",   // รอคนยืนยันความเป็นเจ้าของ (ยังไม่ผูกใคร)
-  LINKED: "LINKED",     // ผูกกับ ownerId แล้ว
-  REJECTED: "REJECTED"  // มีคนยืนยันแต่ไม่ใช่ Premium (หรือหมดเวลา) -> รอออกจากกลุ่ม
+  PENDING: "PENDING",               // รอคนยืนยันความเป็นเจ้าของ (ยังไม่ผูกใคร)
+  LINKED: "LINKED",                 // ผูกกับ ownerId แล้ว และ ownerId ยังเป็น Premium อยู่
+  RECONFIRM_PENDING: "RECONFIRM_PENDING", // เคย LINKED แต่ Premium ของ owner หมดอายุแล้ว รอถามในกลุ่มว่ายังอยากให้บอทอยู่ต่อไหม
+  REJECTED: "REJECTED"               // ไม่ยืนยัน/ไม่ใช่ Premium/ตอบไม่อยากให้อยู่ต่อ -> รอออกจากกลุ่ม
 });
 
 export const CONFIRM_WINDOW_MINUTES = 10;
@@ -77,13 +78,71 @@ export function createGroupLinkService({ groupLinks, FieldValue }, auditLog, sub
 
   /**
    * ตรวจสอบสิทธิ์ Premium ของ "กลุ่ม" แบบสด ๆ ทุกครั้ง (เหมือน subscriptionService.isPremium ของ user เดี่ยว)
-   * กฎ: ต้อง LINKED และ ownerId ต้องยังเป็น Premium อยู่จริง ณ ตอนนี้ (ไม่เชื่อสถานะเก่าที่ cache ไว้)
+   * กฎ: ต้อง LINKED (หรือ RECONFIRM_PENDING ที่เพิ่งกลับมาเป็น Premium ก่อนมีคนตอบ) และ ownerId ต้องยังเป็น Premium อยู่จริง ณ ตอนนี้
    * ถ้า owner หมดอายุ/ยกเลิก Premium ไปแล้ว กลุ่มจะหลุดสถานะ Premium ทันทีโดยไม่ต้องมี cron แยก
+   * (การถามยืนยันซ้ำเมื่อหมดอายุเป็นคนละเรื่องกับ isPremiumGroup — ดู cron ที่เรียก findLinkedExpired ใน index.js)
    */
   async function isPremiumGroup(groupId) {
     const link = await getRaw(groupId);
-    if (!link || link.status !== GROUP_LINK_STATUS.LINKED || !link.ownerId) return false;
+    if (!link || ![GROUP_LINK_STATUS.LINKED, GROUP_LINK_STATUS.RECONFIRM_PENDING].includes(link.status) || !link.ownerId) return false;
     return subscriptionService.isPremium(link.ownerId);
+  }
+
+  /**
+   * ใช้โดย cron: หากลุ่มที่ LINKED อยู่แต่ owner หมด Premium ไปแล้ว (สด ๆ) -> ย้ายเป็น RECONFIRM_PENDING
+   * และคืนรายการกลุ่มที่ "เพิ่ง" เปลี่ยนสถานะรอบนี้ ให้ index.js ส่งข้อความถามในกลุ่มต่อ (ไม่ถามซ้ำทุกรอบ cron)
+   */
+  async function findNewlyExpiredLinked() {
+    const snap = await groupLinks.where("status", "==", GROUP_LINK_STATUS.LINKED).get();
+    const newlyExpired = [];
+    for (const doc of snap.docs) {
+      const link = doc.data();
+      if (!link.ownerId) continue;
+      const stillPremium = await subscriptionService.isPremium(link.ownerId).catch(() => false);
+      if (stillPremium) continue;
+      newlyExpired.push({ groupId: doc.id, ownerId: link.ownerId });
+    }
+    return newlyExpired;
+  }
+
+  /** เรียกทันทีหลังตรวจพบว่า owner หมด Premium — เปลี่ยนสถานะเป็น RECONFIRM_PENDING (ไม่มี deadline ตามที่ระบุ) */
+  async function askReconfirm(groupId) {
+    await groupLinks.doc(String(groupId)).set({
+      status: GROUP_LINK_STATUS.RECONFIRM_PENDING,
+      reconfirmAskedAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp()
+    }, { merge: true });
+    await auditLog({ userId: null, eventType: AUDIT_EVENTS.GROUP_RECONFIRM_ASKED, metadata: { groupId } });
+  }
+
+  /**
+   * เรียกตอนมีคนพิมพ์ "/บอท ยืนยันต่อ" ในกลุ่มที่อยู่สถานะ RECONFIRM_PENDING
+   * ไม่มีกำหนดเวลา (ตามที่ผู้ใช้ระบุ) แต่ผู้ยืนยันต้องเป็น Premium จริง ณ ตอนนี้ — กลายเป็นเจ้าของกลุ่มคนใหม่ได้ (ไม่จำเป็นต้องเป็นคนเดิม)
+   * ผลลัพธ์: { ok:true } | { ok:false, reason:"NOT_PENDING" | "NOT_PREMIUM" }
+   */
+  async function reconfirmOwner(groupId, confirmerUserId) {
+    const link = await getRaw(groupId);
+    if (!link || link.status !== GROUP_LINK_STATUS.RECONFIRM_PENDING) return { ok: false, reason: "NOT_PENDING" };
+    const confirmerIsPremium = await subscriptionService.isPremium(confirmerUserId);
+    if (!confirmerIsPremium) return { ok: false, reason: "NOT_PREMIUM" };
+    await groupLinks.doc(String(groupId)).set({
+      status: GROUP_LINK_STATUS.LINKED,
+      ownerId: confirmerUserId,
+      reconfirmAskedAt: null,
+      linkedAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp()
+    }, { merge: true });
+    await auditLog({ userId: confirmerUserId, eventType: AUDIT_EVENTS.GROUP_RECONFIRMED, metadata: { groupId } });
+    return { ok: true };
+  }
+
+  /** เรียกตอนมีคนพิมพ์ "/บอท ยืนยันต่อ ไม่" (ปฏิเสธ) ในกลุ่มที่อยู่สถานะ RECONFIRM_PENDING -> บอทควรออกจากกลุ่ม */
+  async function declineReconfirm(groupId, respondedByUserId) {
+    const link = await getRaw(groupId);
+    if (!link || link.status !== GROUP_LINK_STATUS.RECONFIRM_PENDING) return { ok: false, reason: "NOT_PENDING" };
+    await groupLinks.doc(String(groupId)).set({ status: GROUP_LINK_STATUS.REJECTED, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+    await auditLog({ userId: respondedByUserId, eventType: AUDIT_EVENTS.GROUP_RECONFIRM_DECLINED, metadata: { groupId } });
+    return { ok: true };
   }
 
   /** ใช้โดย cron: หา groupId ที่ค้างอยู่ใน PENDING เกินเวลาแล้ว เพื่อสั่งให้บอทออกจากกลุ่ม */
@@ -133,5 +192,5 @@ export function createGroupLinkService({ groupLinks, FieldValue }, auditLog, sub
     return true;
   }
 
-  return { getRaw, startPending, confirmOwner, isPremiumGroup, findExpiredPending, markLeft, removeLink, openReceiptWait, consumeReceiptWait };
+  return { getRaw, startPending, confirmOwner, isPremiumGroup, findExpiredPending, markLeft, removeLink, openReceiptWait, consumeReceiptWait, findNewlyExpiredLinked, askReconfirm, reconfirmOwner, declineReconfirm };
 }
