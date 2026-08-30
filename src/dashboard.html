@@ -35,8 +35,15 @@
     .seal.spin{transform:rotate(360deg)}
     .seal.stamp::after{opacity:1;animation:ring-pulse .6s var(--ease) both}
     @keyframes ring-pulse{from{transform:scale(.7);opacity:.9}to{transform:scale(1.35);opacity:0}}
-    .brand{font-size:19px;font-weight:800;letter-spacing:-.01em;line-height:1.1;font-family:"Noto Serif Thai",serif}
+    .brand{font-size:19px;font-weight:800;letter-spacing:-.01em;line-height:1.1;font-family:"Noto Serif Thai",serif;display:flex;align-items:center;gap:7px}
     .sub{font-size:12px;color:var(--ink-soft);margin-top:2px}
+    /* รูปโปรไฟล์ LINE ของผู้ใช้ที่หัวการ์ดสรุป — แทนที่ seal ตัวอักษรเดิมเมื่อโหลดรูปสำเร็จ */
+    .avatar{width:40px;height:40px;border-radius:50%;flex:none;object-fit:cover;box-shadow:0 3px 8px -2px rgba(122,43,61,.35);border:2px solid var(--card)}
+    .avatar.hidden,.seal.hidden{display:none}
+    /* ป้ายแพ็กเกจข้างชื่อผู้ใช้ (Free / Pro) */
+    .plan-pill{font-size:10.5px;font-weight:800;letter-spacing:.02em;padding:2px 8px;border-radius:99px;flex:none;line-height:1.5}
+    .plan-pill.free{background:var(--line-soft);color:var(--ink-soft)}
+    .plan-pill.pro{background:linear-gradient(135deg,var(--gold-shine),var(--gold-deep));color:#3a2a06}
     .status{font-size:11px;color:var(--sage);display:flex;align-items:center;gap:5px;font-weight:600;padding-top:9px}
     .status .dot{width:6px;height:6px;border-radius:50%;background:var(--sage);box-shadow:0 0 0 3px var(--sage-soft)}
 
@@ -257,7 +264,8 @@
     <header class="top" id="topbar">
       <div class="brandmark">
         <div class="seal" id="seal">จ</div>
-        <div><div class="brand" id="brandName">ยายจันทร์</div><div class="sub" id="brandSub">สมุดบัญชีที่เชื่อมกับ LINE</div></div>
+        <img class="avatar hidden" id="avatar" alt="">
+        <div><div class="brand" id="brandName">ยายจันทร์<span class="plan-pill free hidden" id="planPill"></span></div><div class="sub" id="brandSub">สมุดบัญชีที่เชื่อมกับ LINE</div></div>
       </div>
       <span class="status" id="statusPill"><i class="dot"></i><span id="statusText">เชื่อมข้อมูลแล้ว</span></span>
     </header>
@@ -721,6 +729,29 @@
       document.getElementById('addRecurringSheet').onclick=async()=>{await addRecurring();openRecurringSheet()};
     }
 
+    // แสดงรูปโปรไฟล์ LINE + ชื่อผู้ใช้ + แพ็กเกจที่ใช้อยู่ที่หัวการ์ด แทนชื่อบอท "ยายจันทร์" เดิม
+    // (dashboard.profile มาจาก /api/dashboard — ดึงจริงจาก LINE Profile API ฝั่งเซิร์ฟเวอร์)
+    function renderHeader(){
+      const p=dashboard?.profile;
+      const nameEl=document.getElementById('brandName'),subEl=document.getElementById('brandSub'),
+        avatarEl=document.getElementById('avatar'),sealEl=document.getElementById('seal'),pillEl=document.getElementById('planPill');
+      const name=p?.displayName||t('appName');
+      nameEl.childNodes[0].nodeValue=name;
+      subEl.textContent=t('appSub');
+      const isPro=Boolean(p?.active);
+      pillEl.textContent=isPro?t('pillPro'):t('pillFree');
+      pillEl.classList.remove('hidden');
+      pillEl.classList.toggle('pro',isPro);
+      pillEl.classList.toggle('free',!isPro);
+      if(p?.pictureUrl){
+        avatarEl.src=p.pictureUrl;avatarEl.alt=name;
+        avatarEl.onload=()=>{avatarEl.classList.remove('hidden');sealEl.classList.add('hidden')};
+        avatarEl.onerror=()=>{avatarEl.classList.add('hidden');sealEl.classList.remove('hidden')};
+      }else{
+        avatarEl.classList.add('hidden');sealEl.classList.remove('hidden');
+        sealEl.textContent=name?name.trim().charAt(0):'จ';
+      }
+    }
     function render(){
       applyStaticI18n();
       if(!loaded){view.innerHTML=skeletonSummary();return}
@@ -761,6 +792,7 @@
         Promise.all([api('/api/dashboard'),api('/api/transactions').then(x=>x.transactions),api('/api/budgets').then(x=>x.budgets),api('/api/recurring').then(x=>x.recurring).catch(()=>[]),api('/api/subscription').catch(()=>subscription)]).then(r=>{[dashboard,transactions,budgets,recurring,subscription]=r})
       ]);
       if(reminderPrefs){prefs.dailyReminder=Boolean(reminderPrefs.dailyReminder);prefs.reminderTime=reminderPrefs.reminderTime||prefs.reminderTime;savePrefs()}
+      renderHeader();
       // Pro หมดอายุแล้วแต่ prefs (เก็บใน localStorage ฝั่ง client) ยังจำค่า "เปิด" ค้างไว้จากตอนที่ยังเป็น Premium อยู่
       // เกิดจาก settingsPage() render toggle ตาม prefs[id] เฉย ๆ โดยไม่เคยเช็คย้อนว่า subscription.active หมดไปหรือยัง
       // ต้องบังคับปิดตรงนี้ทุกครั้งที่โหลดข้อมูลสด (ไม่ใช่แค่ตอน toggle) ไม่งั้นฟีเจอร์ Pro จะดูเหมือน "เปิดค้าง" ใช้งานต่อได้ทั้งที่หมดอายุแล้ว
@@ -811,6 +843,7 @@
   </script>
 </body>
 </html>
+
 
 
 
