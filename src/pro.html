@@ -448,7 +448,7 @@
         const result = await api('/api/premium/slip', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ sessionId: s.sessionId, mime: picked.type, base64 })
+          body: JSON.stringify({ sessionId: s.sessionId, mime: 'image/jpeg', base64 })
         });
         if (result.outcome === 'VERIFIED') {
           checkoutSession = null;
@@ -498,12 +498,37 @@
     document.getElementById('backToDashboardBtn').onclick = () => { location.href = '/dashboard' + query; };
   }
 
+  // เดิมอ่านไฟล์ดิบด้วย FileReader.readAsDataURL() ตรง ๆ โดยไม่ย่อขนาดก่อนเลย — รูปถ่ายจากกล้องมือถือสมัยนี้มักใหญ่ 8-20MB+
+  // ใน in-app browser ของ LINE (WebView หน่วยความจำจำกัดกว่า Chrome ทั่วไปมาก) การอ่านไฟล์ใหญ่ขนาดนี้ทำให้ FileReader ล้มเหลวเงียบ ๆ
+  // (onerror ยิงโดยไม่มีรายละเอียด, ไม่มี request ไปถึง server เลย) ตรงกับอาการ "อ่านไฟล์ไม่สำเร็จ" ที่ไม่มี log ฝั่งเซิร์ฟเวอร์
+  // แก้โดยย่อขนาดรูปผ่าน <canvas> ก่อนเสมอ (max 1600px และบีบ JPEG quality ลง) เพื่อลดขนาดไฟล์ให้เบาพอสำหรับ WebView ทุกตัว
+  // และเป็นผลพลอยได้ที่ดี: ไฟล์เล็กลง อัปโหลดเร็วขึ้น ไม่ต้องพึ่ง sharp ฝั่งเซิร์ฟเวอร์อย่างเดียว
   function fileToBase64(file){
     return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
-      reader.onerror = () => reject(new Error('อ่านไฟล์ไม่สำเร็จ'));
-      reader.readAsDataURL(file);
+      const img = new Image();
+      const objectUrl = URL.createObjectURL(file);
+      img.onload = () => {
+        try {
+          const maxDim = 1600;
+          const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+          const w = Math.max(1, Math.round(img.width * scale));
+          const h = Math.max(1, Math.round(img.height * scale));
+          const canvas = document.createElement('canvas');
+          canvas.width = w; canvas.height = h;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, w, h);
+          URL.revokeObjectURL(objectUrl);
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.82);
+          const b64 = dataUrl.split(',')[1];
+          if (!b64) { reject(new Error('อ่านไฟล์ไม่สำเร็จ')); return; }
+          resolve(b64);
+        } catch (e) {
+          URL.revokeObjectURL(objectUrl);
+          reject(new Error('อ่านไฟล์ไม่สำเร็จ'));
+        }
+      };
+      img.onerror = () => { URL.revokeObjectURL(objectUrl); reject(new Error('อ่านไฟล์ไม่สำเร็จ ลองเลือกรูปอื่นหรือถ่ายใหม่')); };
+      img.src = objectUrl;
     });
   }
 
