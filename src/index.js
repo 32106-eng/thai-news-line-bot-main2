@@ -47,10 +47,10 @@ const aiBaseURL = aiProvider === "nvidia"
   : aiProvider === "openrouter"
     ? "https://openrouter.ai/api/v1"
     : undefined;
-// The NVIDIA integration is intentionally pinned to the available NVIDIA 4B chat model. This avoids
+// The NVIDIA integration is intentionally pinned to an available 7B NVIDIA NIM chat model. This avoids
 // stale/deprecated values in OPENAI_MODEL causing a 410 from the hosted NVIDIA endpoint.
 const chatModel = aiProvider === "nvidia"
-  ? "nvidia/nemotron-mini-4b-instruct"
+  ? "mistralai/mistral-7b-instruct-v0.3"
   : process.env.OPENAI_MODEL;
 const ai = aiKey ? new OpenAI({ apiKey: aiKey, ...(aiBaseURL ? { baseURL: aiBaseURL } : {}) }) : null;
 // Vision-capable model for reading receipt/slip photos. Not every free/cheap model can read images —
@@ -1632,7 +1632,6 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
   }
 });
 app.listen(Number(process.env.PORT ?? 3000), () => console.log(`Ta Phin listening on ${process.env.PORT ?? 3000}`));
-
 
 
 
