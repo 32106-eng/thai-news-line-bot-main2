@@ -357,8 +357,9 @@
     function applyStaticI18n(){
       document.documentElement.lang=prefs.language==='English'?'en':'th';
       document.title=t('appTitle');
-      document.getElementById('brandName').textContent=t('appName');
-      document.getElementById('brandSub').textContent=t('appSub');
+      // brandName/brandSub ไม่ตั้งค่าตรงนี้แล้ว — renderHeader() เป็นคนคุมทั้งหมด (ชื่อผู้ใช้/รูป/แพ็กเกจ)
+      // เดิมโค้ดนี้ทับ textContent ของ #brandName ทุกครั้งที่ render() ทำงาน ซึ่งลบ <span id="planPill"> ที่ renderHeader() ใส่ไว้ทิ้งไปด้วย
+      // ทำให้ document.getElementById('planPill') เจอ null ครั้งถัดไปแล้ว throw ตอนตั้ง .textContent
       document.getElementById('statusText').textContent=t('statusConnected');
       document.getElementById('ptrText').textContent=t('refreshing');
       document.getElementById('addButton').setAttribute('aria-label',t('addEntry'));
@@ -732,11 +733,15 @@
     // แสดงรูปโปรไฟล์ LINE + ชื่อผู้ใช้ + แพ็กเกจที่ใช้อยู่ที่หัวการ์ด แทนชื่อบอท "ยายจันทร์" เดิม
     // (dashboard.profile มาจาก /api/dashboard — ดึงจริงจาก LINE Profile API ฝั่งเซิร์ฟเวอร์)
     function renderHeader(){
-      const p=dashboard?.profile;
       const nameEl=document.getElementById('brandName'),subEl=document.getElementById('brandSub'),
         avatarEl=document.getElementById('avatar'),sealEl=document.getElementById('seal'),pillEl=document.getElementById('planPill');
+      if(!nameEl||!subEl||!avatarEl||!sealEl||!pillEl)return; // กันพลาดถ้า DOM ยังไม่พร้อม ไม่ throw
+      const p=dashboard?.profile;
       const name=p?.displayName||t('appName');
-      nameEl.childNodes[0].nodeValue=name;
+      // หาหรือสร้าง text node ตัวแรกของ #brandName แทนการเดา index — กันกรณี re-render ซ้ำแล้วลำดับ child เพี้ยน
+      let textNode=[...nameEl.childNodes].find(n=>n.nodeType===Node.TEXT_NODE);
+      if(!textNode){textNode=document.createTextNode('');nameEl.insertBefore(textNode,nameEl.firstChild)}
+      textNode.nodeValue=name;
       subEl.textContent=t('appSub');
       const isPro=Boolean(p?.active);
       pillEl.textContent=isPro?t('pillPro'):t('pillFree');
@@ -754,6 +759,7 @@
     }
     function render(){
       applyStaticI18n();
+      renderHeader();
       if(!loaded){view.innerHTML=skeletonSummary();return}
       if(page==='summary')view.innerHTML=summaryPage();
       else if(page==='analysis')view.innerHTML=analysisPage();
