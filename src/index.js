@@ -285,6 +285,27 @@ function advice(monthTransactions) {
   return `คำแนะนำ: เดือนนี้ใช้หมวด${category}มากสุด ${money(value)} บาท ลองตั้งวงเงินหมวดนี้ไว้ดูนะ`;
 }
 function summary(list, title) { const t = totals(list); return `📊 สรุป${title}\nรายรับ: ${money(t.income)} บาท\nรายจ่าย: ${money(t.expense)} บาท\nคงเหลือ: ${money(t.income - t.expense)} บาท\nจำนวนรายการ: ${list.length}`; }
+// ปุ่ม "วิเคราะห์" บน Rich Menu: ต่างจาก advice() (ที่ตอบสั้น ๆ ต่อท้ายสรุปเดือน) ตรงที่ตอบเป็นข้อความเดี่ยว ๆ
+// ครบทั้ง breakdown 3 หมวดที่ใช้เงินเยอะสุด + สัดส่วน % ของรายจ่ายทั้งเดือน ให้เห็นภาพว่า "ใช้เงินกับอะไรเยอะสุด" จริง ๆ
+function spendingAnalysis(monthTransactions) {
+  const expenses = monthTransactions.filter((tx) => tx.type === "expense");
+  if (expenses.length === 0) return "📊 วิเคราะห์รายจ่ายเดือนนี้\n\nยังไม่มีรายการรายจ่ายเดือนนี้เลย ลองพิมพ์รายการดูนะ เช่น กาแฟ 60";
+  const t = totals(monthTransactions);
+  const groups = expenses.reduce((out, tx) => ({ ...out, [tx.category]: (out[tx.category] ?? 0) + tx.amount }), {});
+  const ranked = Object.entries(groups).sort((a, b) => b[1] - a[1]);
+  const top = ranked.slice(0, 3);
+  const lines = top.map(([category, value], i) => {
+    const pct = t.expense > 0 ? Math.round((value / t.expense) * 100) : 0;
+    const medal = ["🥇", "🥈", "🥉"][i];
+    return `${medal} ${category}: ${money(value)} บาท (${pct}%)`;
+  });
+  const [topCategory, topValue] = ranked[0];
+  const topPct = t.expense > 0 ? Math.round((topValue / t.expense) * 100) : 0;
+  const tip = topPct >= 40
+    ? `\n\nหมวด${topCategory}กินสัดส่วนรายจ่ายไปเกือบครึ่งเดือนนี้ ลองตั้งวงเงินหมวดนี้ไว้ดูนะ`
+    : `\n\nลองตั้งวงเงินหมวด${topCategory}ไว้ดูนะ จะได้คุมง่ายขึ้น`;
+  return `📊 วิเคราะห์รายจ่ายเดือนนี้\nรวมรายจ่าย: ${money(t.expense)} บาท จาก ${expenses.length} รายการ\n\nใช้เงินเยอะสุด 3 อันดับ:\n${lines.join("\n")}${tip}`;
+}
 function signatureValid(raw, signature) { const expected = crypto.createHmac("sha256", process.env.LINE_CHANNEL_SECRET).update(raw).digest("base64"); return Boolean(signature) && crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected)); }
 async function line(endpoint, body) { const r = await fetch(`https://api.line.me/v2/bot/message/${endpoint}`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}` }, body: JSON.stringify(body) }); if (!r.ok) { const detail = await r.text().catch(() => ""); throw new Error(`LINE ${endpoint}: ${r.status} ${detail}`); } }
 // แสดง "..." กำลังพิมพ์ในแชท ระหว่างรอ AI อ่านสลิป — ใช้ได้เฉพาะแชท 1:1 เท่านั้น (LINE ไม่รองรับในกลุ่ม/ห้อง)
@@ -1135,6 +1156,48 @@ app.get("/dashboard-gate", async (req, res) => {
   const waitSeconds = Number(process.env.DASHBOARD_AD_WAIT_SECONDS) || 25;
   res.type("html").send(adInterstitial({ nextUrl: `/dashboard${query}`, waitSeconds }));
 });
+// --- LIFF redirect: ทำให้ปุ่ม Rich Menu "หมวด/งบ" และ "สรุป" เด้งเข้าเว็บได้ทันทีในคลิกเดียว ---
+// Rich Menu เป็นภาพเดียวที่ทุกคนใช้ร่วมกัน ผูก URI คงที่ตัวเดียว จึงไม่รู้ userId ของคนที่กดโดยตรง
+// (นี่คือเหตุผลที่เดิมต้องส่งเป็นข้อความให้บอทตอบการ์ดที่มีลิงก์ ให้ผู้ใช้กดอีกทีถึงจะรู้ userId)
+// วิธีแก้ให้เหลือคลิกเดียวคือใช้ LIFF: หน้าเว็บนี้รันในตัวเปิดของแอป LINE เอง จึงดึง userId จาก LIFF SDK
+// ฝั่ง client ได้อัตโนมัติโดยไม่ต้องพิมพ์/กดอะไรเพิ่ม แล้วส่ง userId มาที่ /liff-resolve เพื่อขอ token
+// ที่เซ็นถูกต้องจาก server (ไม่ expose DASHBOARD_TOKEN ให้ client โดยตรง) ก่อน redirect เข้า /dashboard-gate จริง
+//
+// ต้องตั้งค่า LIFF_ID ใน .env (สร้างจาก LINE Developers Console > LIFF > Add > Endpoint URL ชี้มาที่
+// PUBLIC_BASE_URL + /liff-redirect) — ดูขั้นตอนเต็มใน README
+app.get("/liff-redirect", (req, res) => {
+  const liffId = process.env.LIFF_ID;
+  if (!liffId) return res.status(500).send("ยังไม่ได้ตั้งค่า LIFF_ID ใน .env — ดูวิธีตั้งค่าใน README");
+  const page = String(req.query.page ?? "").slice(0, 40);
+  res.type("html").send(`<!doctype html>
+<html lang="th"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>กำลังเปิด...</title></head>
+<body style="font-family: sans-serif; display:flex; align-items:center; justify-content:center; height:100vh; margin:0; background:#FBF6EF; color:#3A3540;">
+<div>กำลังเปิดแดชบอร์ด…</div>
+<script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+<script>
+(async () => {
+  try {
+    await liff.init({ liffId: ${JSON.stringify(liffId)} });
+    if (!liff.isLoggedIn()) { liff.login(); return; }
+    const profile = await liff.getProfile();
+    const r = await fetch('/liff-resolve?u=' + encodeURIComponent(profile.userId) + '&page=' + encodeURIComponent(${JSON.stringify(page)}));
+    if (!r.ok) { document.body.textContent = 'เปิดไม่สำเร็จ กรุณาลองใหม่'; return; }
+    const { url } = await r.json();
+    location.replace(url);
+  } catch (err) { document.body.textContent = 'เปิดไม่สำเร็จ: ' + (err?.message ?? 'unknown error'); }
+})();
+</script>
+</body></html>`);
+});
+// server เท่านั้นที่รู้ DASHBOARD_TOKEN — endpoint นี้รับ userId ที่ LIFF ยืนยันมาแล้ว แล้วออก token ที่ perUserToken เซ็นให้ ณ ตอนนั้น
+app.get("/liff-resolve", (req, res) => {
+  const uid = String(req.query.u ?? "");
+  if (!uid) return res.sendStatus(400);
+  const url = dashboardEditUrl(uid, req.query.page || undefined);
+  if (!url) return res.sendStatus(500);
+  res.json({ url });
+});
 app.get("/dashboard", (req, res) => allowed(req) ? res.type("html").send(dashboard) : res.sendStatus(401));
 app.get("/confirm-message", (req, res) => allowed(req) ? res.type("html").send(confirmMessagePage) : res.sendStatus(401));
 app.get("/pro", (req, res) => allowed(req) ? res.type("html").send(proPage) : res.sendStatus(401));
@@ -1852,13 +1915,19 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
     const helpText = isGroupChat
       ? "📒 ยายจันทร์พร้อมจดบัญชีกองกลางให้กลุ่มนี้\n\nทุกคำสั่งต้องขึ้นต้นด้วย \"/บอท\" เสมอ เช่น:\n/บอท กาแฟ 60\n/บอท เงินเดือน 15000\n/บอท สลิป (แล้วส่งรูปใบเสร็จตาม — ต้องมีสมาชิก Premium เป็นเจ้าของกลุ่มนี้ก่อน)\n/บอท สรุปวันนี้ | /บอท สรุปเดือนนี้ | /บอท ลบล่าสุด | /บอท เว็บ\n\nสมัคร Premium ต้องไปแชท 1:1 กับยายจันทร์เท่านั้น"
       : "📒 ยายจันทร์พร้อมจดบัญชีของคุณ (ข้อมูลของแต่ละคนแยกกันเป็นส่วนตัว)\n\nพิมพ์: กาแฟ 60\nรายรับ: เงินเดือน 15000\nถ่ายรูปใบเสร็จส่งมาได้เลย (ฟีเจอร์ Premium) ยายจันทร์จะอ่านยอดกับร้านค้าให้อัตโนมัติ\nคำสั่ง: สรุปวันนี้ | สรุปเดือนนี้ | ลบล่าสุด | เว็บ | สมัครพรีเมียม\nทุกวันอาทิตย์ยายจันทร์จะสรุปสัปดาห์ให้อัตโนมัติด้วย\n\nหรือถามยายจันทร์ได้เลย เช่น \"เดือนนี้ใช้เงินไปกับอะไรมากสุด\" ยายจันทร์เน้นตอบเรื่องการเงินเป็นหลัก แต่คุยเรื่องอื่นได้ด้วยนะ";
-    if (["เริ่ม", "ช่วยเหลือ", "help"].includes(text.toLowerCase())) message = helpText;
+    // ปุ่ม "จดรายรับ/รายจ่าย" บน Rich Menu ส่งคำนี้มา (เดิมส่ง "กาแฟ 60" ซึ่งไปเด้งอยู่ในช่องพิมพ์เฉย ๆ ให้ผู้ใช้กดส่งเอง
+    // ทำให้เข้าใจผิดว่าเป็นการจดรายการจริง) เปลี่ยนมาสอนวิธีพิมพ์แทน ตอบทันทีโดยไม่ต้องรอผู้ใช้พิมพ์-ส่งอะไรเพิ่ม
+    if (text === "จดรายการ") message = isGroupChat
+      ? "พิมพ์รายการต่อท้าย \"/บอท\" ได้เลย เช่น:\n/บอท กาแฟ 60 (รายจ่าย)\n/บอท เงินเดือน 15000 (รายรับ)"
+      : "พิมพ์รายการได้เลย เช่น:\nกาแฟ 60 (รายจ่าย)\nเงินเดือน 15000 (รายรับ)";
+    else if (["เริ่ม", "ช่วยเหลือ", "help"].includes(text.toLowerCase())) message = helpText;
     else if (text === "สรุปวันนี้") message = summary(user.transactions.filter((tx) => sameDay(tx.createdAt)), "วันนี้");
     else if (text === "สรุปเดือนนี้") { const month = user.transactions.filter((tx) => sameMonth(tx.createdAt)); message = `${summary(month, "เดือนนี้")}\n\n${advice(month)}`; }
     else if (text === "ลบล่าสุด") { const tx = user.transactions.pop(); if (tx) { await saveUser(userId, user); message = noticeFlexMessage(`ลบแล้ว: ${tx.description} ${money(tx.amount)} บาท`, "success"); } else message = noticeFlexMessage("ยังไม่มีรายการให้ลบ", "info"); }
     else if (text === "เว็บ" || text === "สรุป") message = dashboardFlexMessage(user, { isGroupChat, dashboardUrl: dashboardEditUrl(userId) });
     // --- ปุ่ม Rich Menu: เปิดหน้าต่าง ๆ ของ dashboard ตรง ๆ ผ่าน deep-link (?page=) ---
-    else if (text === "วิเคราะห์") message = dashboardFlexMessage(user, { isGroupChat, dashboardUrl: dashboardEditUrl(userId, "analysis") });
+    // "วิเคราะห์" ตอบผลวิเคราะห์จริงในแชททันที (ดู spendingAnalysis ด้านบน) แนบท้ายด้วยการ์ดเปิดเว็บดูกราฟแบบเต็ม ๆ
+    else if (text === "วิเคราะห์") { const month = user.transactions.filter((tx) => sameMonth(tx.createdAt)); message = [noticeFlexMessage(spendingAnalysis(month), "info"), dashboardFlexMessage(user, { isGroupChat, dashboardUrl: dashboardEditUrl(userId, "analysis") })]; }
     else if (text === "หมวด/งบ") message = dashboardFlexMessage(user, { isGroupChat, dashboardUrl: dashboardEditUrl(userId, "budgets") });
     else if (text === "รายการ") message = dashboardFlexMessage(user, { isGroupChat, dashboardUrl: dashboardEditUrl(userId, "transactions") });
     else if (text === "ตั้งค่า") message = dashboardFlexMessage(user, { isGroupChat, dashboardUrl: dashboardEditUrl(userId, "settings") });
@@ -1879,10 +1948,15 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
         message = aiAnswer ?? (isGroupChat ? "พิมพ์ได้เลย เช่น /บอท กาแฟ 60 หรือ /บอท เงินเดือน 15000\nพิมพ์ /บอท ช่วยเหลือ เพื่อดูคำสั่ง" : "พิมพ์ได้เลย เช่น กาแฟ 60 หรือ เงินเดือน 15000\nพิมพ์ ช่วยเหลือ เพื่อดูคำสั่ง");
       }
     }
-    try { await (typeof message === "string" ? reply(event.replyToken, message) : replyMessages(event.replyToken, [message])); } catch (error) { console.error("Could not reply", error.message); }
+    try {
+      if (typeof message === "string") await reply(event.replyToken, message);
+      else if (Array.isArray(message)) await replyMessages(event.replyToken, message); // เช่น ปุ่ม "วิเคราะห์" ที่ตอบ 2 การ์ดต่อกัน (ผลวิเคราะห์ + ปุ่มเปิดเว็บ)
+      else await replyMessages(event.replyToken, [message]);
+    } catch (error) { console.error("Could not reply", error.message); }
   }
 });
 app.listen(Number(process.env.PORT ?? 3000), () => console.log(`Ta Phin listening on ${process.env.PORT ?? 3000}`));
+
 
 
 
