@@ -1609,6 +1609,8 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
   if (!signatureValid(req.body, req.get("x-line-signature"))) return res.sendStatus(401);
   res.sendStatus(200); const payload = JSON.parse(req.body.toString("utf8"));
   for (const event of payload.events ?? []) {
+   try { // กันทั้งก้อน: ถ้า step ไหนใน event นี้ throw ไม่คาด (เช่น Firestore ล่มชั่วคราว) จะได้ไม่ทำให้ process ทั้งตัวตายไปด้วย (unhandled rejection)
+         // ทำให้ event ถัดไป/ข้อความถัดไปยังตอบได้ปกติ และเห็น error จริงใน log แทนที่จะเงียบสนิทไม่มีอะไรขึ้นเลย
     // --- ผู้ใช้แอดบอทเป็นเพื่อนใหม่ (1-1 chat) — คนละ event กับ "join" (นั่นคือถูกเชิญเข้ากลุ่ม/ห้อง ดูด้านล่าง) ---
     if (event.type === "follow") {
       const uid = event.source?.userId;
@@ -2023,20 +2025,10 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
       else if (Array.isArray(message)) await replyMessages(event.replyToken, message); // เช่น ปุ่ม "วิเคราะห์" ที่ตอบ 2 การ์ดต่อกัน (ผลวิเคราะห์ + ปุ่มเปิดเว็บ)
       else await replyMessages(event.replyToken, [message]);
     } catch (error) { console.error("Could not reply", error.message); }
+   } catch (error) {
+     // ตัวดักสุดท้ายของทั้ง event — ต้อง log ให้เห็นชัดเจนเสมอ เพื่อจะได้รู้ว่าทำไมบอทไม่ตอบ
+     console.error("Webhook event handling crashed:", error);
+   }
   }
 });
 app.listen(Number(process.env.PORT ?? 3000), () => console.log(`Ta Phin listening on ${process.env.PORT ?? 3000}`));
-
-
-
-
-
-
-
-
-
-
-
-
-
-
