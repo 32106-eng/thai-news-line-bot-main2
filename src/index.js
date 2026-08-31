@@ -892,9 +892,11 @@ function budgetProgressFor(user, tx) {
   const spent = user.transactions.filter((t) => t.type === "expense" && t.category === tx.category && sameMonth(t.createdAt)).reduce((sum, t) => sum + t.amount, 0);
   return { limit, spent };
 }
-function dashboardEditUrl(userId) {
+function dashboardEditUrl(userId, page) {
   const base = process.env.PUBLIC_BASE_URL?.replace(/\/$/, "");
-  return base ? `${base}/dashboard-gate?token=${perUserToken(userId)}&u=${encodeURIComponent(userId)}` : null;
+  if (!base) return null;
+  const pageQuery = page ? `&page=${encodeURIComponent(page)}` : "";
+  return `${base}/dashboard-gate?token=${perUserToken(userId)}&u=${encodeURIComponent(userId)}${pageQuery}`;
 }
 // ดึงชื่อโปรไฟล์ LINE ของ user 1:1 (คนละตัวกับ getGroupMemberName ด้านล่างซึ่งต้องมี groupId ด้วย)
 // ใช้เทียบกับชื่อผู้โอนที่อ่านได้จากสลิป (ocrData.senderName) ตอนแจ้งผลใน MSG.verified/pendingReview ให้ผู้ใช้เห็นเองในแชทด้วย ไม่ต้องรอเช็คที่แอดมินอย่างเดียว
@@ -1123,7 +1125,8 @@ document.getElementById('premiumBtn').onclick = () => { window.close(); };
 app.get("/dashboard-gate", async (req, res) => {
   if (!allowed(req)) return res.sendStatus(401);
   const uid = req.query.u;
-  const query = `?token=${encodeURIComponent(req.query.token)}&u=${encodeURIComponent(uid)}`;
+  const pageQuery = req.query.page ? `&page=${encodeURIComponent(req.query.page)}` : "";
+  const query = `?token=${encodeURIComponent(req.query.token)}&u=${encodeURIComponent(uid)}${pageQuery}`;
   // uid อาจเป็นบัญชีส่วนตัว (userId) หรือกลุ่ม/ห้อง (groupId/roomId) — isPremium เช็คได้เฉพาะบัญชีส่วนตัว
   // ถ้าไม่ใช่ Premium ส่วนตัว ต้องเช็คต่อว่าเป็นกลุ่มที่ปลดล็อก Premium ไว้แล้วหรือเปล่า (เจ้าของกลุ่มเป็น Premium + ยืนยันแล้ว)
   // ไม่งั้นสมาชิกกลุ่ม Premium ทุกคนจะโดนโฆษณาอยู่ดีทั้งที่กลุ่มปลดล็อกแล้ว
@@ -1806,7 +1809,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
 
     // --- Premium subscription commands: เช็คก่อน finance parser เสมอ เพื่อไม่ให้ "สมัครพรีเมียม" ถูกตีความเป็นรายการบัญชี ---
     // ห้ามสมัคร/ต่ออายุ Premium จากในกลุ่มเด็ดขาด (spec: ต้องไปสมัครแบบ 1:1 เท่านั้น) — งดคำสั่งนี้ในกลุ่ม
-    if (!isGroupChat && text === "สมัครพรีเมียม") {
+    if (!isGroupChat && (text === "สมัครพรีเมียม" || text === "แปลงร่างเป็น Pro")) {
       let result;
       try { result = await subLineHandlers.handleSubscribeCommand(userId); }
       catch (error) { console.error("Subscribe command failed", error.message); result = { alreadyPremium: false, error: true }; }
@@ -1818,7 +1821,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
       try { await replyMessages(event.replyToken, messages); } catch (error) { console.error("Could not reply", error.message); }
       continue;
     }
-    if (isGroupChat && text === "สมัครพรีเมียม") {
+    if (isGroupChat && (text === "สมัครพรีเมียม" || text === "แปลงร่างเป็น Pro")) {
       try { await replyMessages(event.replyToken, [noticeFlexMessage("สมัคร Premium ทำได้เฉพาะแชทส่วนตัวกับยายจันทร์เท่านั้นนะ ไปคุย 1:1 แล้วพิมพ์ \"สมัครพรีเมียม\" ได้เลย\n\nพอสมัครเสร็จแล้ว เชิญยายจันทร์เข้ากลุ่มนี้ (หรือกลุ่มอื่น) แล้วพิมพ์ \"/บอท ยืนยันเจ้าของ\" เพื่อปลดล็อก Premium ให้ทั้งกลุ่มได้เลย", "info")]); } catch (error) { console.error("Could not reply", error.message); }
       continue;
     }
@@ -1853,7 +1856,14 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
     else if (text === "สรุปวันนี้") message = summary(user.transactions.filter((tx) => sameDay(tx.createdAt)), "วันนี้");
     else if (text === "สรุปเดือนนี้") { const month = user.transactions.filter((tx) => sameMonth(tx.createdAt)); message = `${summary(month, "เดือนนี้")}\n\n${advice(month)}`; }
     else if (text === "ลบล่าสุด") { const tx = user.transactions.pop(); if (tx) { await saveUser(userId, user); message = noticeFlexMessage(`ลบแล้ว: ${tx.description} ${money(tx.amount)} บาท`, "success"); } else message = noticeFlexMessage("ยังไม่มีรายการให้ลบ", "info"); }
-    else if (text === "เว็บ") message = dashboardFlexMessage(user, { isGroupChat, dashboardUrl: dashboardEditUrl(userId) });
+    else if (text === "เว็บ" || text === "สรุป") message = dashboardFlexMessage(user, { isGroupChat, dashboardUrl: dashboardEditUrl(userId) });
+    // --- ปุ่ม Rich Menu: เปิดหน้าต่าง ๆ ของ dashboard ตรง ๆ ผ่าน deep-link (?page=) ---
+    else if (text === "วิเคราะห์") message = dashboardFlexMessage(user, { isGroupChat, dashboardUrl: dashboardEditUrl(userId, "analysis") });
+    else if (text === "หมวด/งบ") message = dashboardFlexMessage(user, { isGroupChat, dashboardUrl: dashboardEditUrl(userId, "budgets") });
+    else if (text === "รายการ") message = dashboardFlexMessage(user, { isGroupChat, dashboardUrl: dashboardEditUrl(userId, "transactions") });
+    else if (text === "ตั้งค่า") message = dashboardFlexMessage(user, { isGroupChat, dashboardUrl: dashboardEditUrl(userId, "settings") });
+    // --- ปุ่ม "ประกาศ" บน Rich Menu: ยังไม่มีฟีเจอร์ข่าวสาร/ประกาศแยกต่างหาก ชี้ไปหน้าช่วยเหลือไปพลางก่อน ---
+    else if (text === "ประกาศ") message = helpText;
     else {
       let tx = parse(text);
       if (tx) {
@@ -1873,6 +1883,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
   }
 });
 app.listen(Number(process.env.PORT ?? 3000), () => console.log(`Ta Phin listening on ${process.env.PORT ?? 3000}`));
+
 
 
 
