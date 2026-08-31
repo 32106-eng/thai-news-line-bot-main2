@@ -26,6 +26,10 @@ if (!TOKEN) {
   process.exit(1);
 }
 
+// ไฟล์ต้นฉบับ assets/main-menu.jpg มีขนาด 1536x1024 ซึ่งไม่ตรงกับสเปกที่ LINE
+// รองรับ (ต้องเป็น 2500x1686 หรือ 2500x843 เท่านั้น) จึงเตรียมไฟล์ที่ scale ให้ตรงสเปก
+// ไว้ล่วงหน้าที่ assets/rich-menu/main-menu.jpg (สัดส่วนใกล้เคียงเดิม 1536:1024 ≈ 2500:1686
+// จึงไม่บิดเพี้ยน และพิกัดปุ่มใน AREAS ด้านล่างคำนวณอิงกับขนาด 2500x1686 นี้อยู่แล้ว)
 const IMAGE_PATH = path.join(__dirname, "..", "assets", "rich-menu", "main-menu.jpg");
 
 async function callLineApi(endpoint, options) {
@@ -124,4 +128,5 @@ main().catch((err) => {
   console.error("เกิดข้อผิดพลาด:", err.message);
   process.exit(1);
 });
+
 
