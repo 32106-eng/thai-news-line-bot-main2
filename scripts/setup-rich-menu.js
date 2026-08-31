@@ -32,8 +32,12 @@ if (!TOKEN) {
 // จึงไม่บิดเพี้ยน และพิกัดปุ่มใน AREAS ด้านล่างคำนวณอิงกับขนาด 2500x1686 นี้อยู่แล้ว)
 const IMAGE_PATH = path.join(__dirname, "..", "assets", "rich-menu", "main-menu.jpg");
 
-async function callLineApi(endpoint, options) {
-  const r = await fetch(`https://api.line.me${endpoint}`, {
+// อัปโหลด/ดาวน์โหลดเนื้อหา (เช่น รูปภาพ rich menu) ต้องยิงไปที่ api-data.line.me
+// endpoint อื่น ๆ ทั้งหมด (สร้าง/ลบ/ผูก rich menu) ยังใช้ api.line.me ตามปกติ
+// อ้างอิง: https://developers.line.biz/en/reference/messaging-api/
+async function callLineApi(endpoint, options, { useDataHost = false } = {}) {
+  const host = useDataHost ? "https://api-data.line.me" : "https://api.line.me";
+  const r = await fetch(`${host}${endpoint}`, {
     ...options,
     headers: { ...options?.headers, authorization: `Bearer ${TOKEN}` }
   });
@@ -112,7 +116,7 @@ async function main() {
     method: "POST",
     headers: { "content-type": "image/jpeg" },
     body: imageBuffer
-  });
+  }, { useDataHost: true });
   console.log("   อัปโหลดภาพสำเร็จ");
 
   console.log("3) ตั้งเป็นเมนู default ของบอท (ทุกคนเห็นทันที)...");
