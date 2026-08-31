@@ -1,0 +1,127 @@
+// scripts/setup-rich-menu.js
+//
+// สร้าง Rich Menu 1 อันตามภาพ assets/rich-menu/main-menu.jpg แล้วผูก action ให้ครบทุกปุ่ม
+// จากนั้นตั้งเป็นเมนู default ของบอท (ให้ผู้ใช้ทุกคนเห็นเมนูนี้ทันทีโดยไม่ต้อง switchTo รายคน)
+//
+// วิธีรัน:
+//   1. ตรวจสอบว่ามีไฟล์ .env ที่มี LINE_CHANNEL_ACCESS_TOKEN ตั้งไว้แล้ว (โหลดผ่าน dotenv หรือ export เอง)
+//   2. node scripts/setup-rich-menu.js
+//
+// หมายเหตุ:
+//   - ปุ่มที่ผูกกับ dashboard (สรุป/วิเคราะห์/หมวด-งบ/รายการ/ตั้งค่า) ใช้ action type "message" ส่งคำ
+//     ที่ตรงกับ handler ใน src/index.js พอดี (ดู "เพิ่ม handler ครบทุกปุ่ม" ที่แก้ไว้แล้ว)
+//   - ถ้าจะสร้าง Rich Menu แยกสำหรับ Premium (ภาพอื่น/ปุ่มอื่น) ให้รัน script นี้อีกรอบด้วยภาพอื่น
+//     แล้วนำ richMenuId ที่ได้ไปใส่ .env เป็น LINE_RICH_MENU_FREE_ID / LINE_RICH_MENU_PREMIUM_ID
+//     เพื่อให้ src/subscription/richMenu.js สลับเมนูตามแพ็กเกจได้ (ตอนนี้ script นี้สร้างแค่เมนูเดียว
+//     แล้วตั้งเป็น default ให้ทุกคนเลย ถ้ายังไม่ต้องแยก Free/Premium ก็ใช้วิธีนี้พอ)
+
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN;
+if (!TOKEN) {
+  console.error("ไม่พบ LINE_CHANNEL_ACCESS_TOKEN — ตั้งค่าใน .env หรือ export ตัวแปรนี้ก่อนรัน");
+  process.exit(1);
+}
+
+const IMAGE_PATH = path.join(__dirname, "..", "assets", "rich-menu", "main-menu.jpg");
+
+async function callLineApi(endpoint, options) {
+  const r = await fetch(`https://api.line.me${endpoint}`, {
+    ...options,
+    headers: { ...options?.headers, authorization: `Bearer ${TOKEN}` }
+  });
+  if (!r.ok) {
+    const body = await r.text().catch(() => "");
+    throw new Error(`LINE API ${endpoint} -> ${r.status}: ${body}`);
+  }
+  return r;
+}
+
+// พิกัดคำนวณจากภาพต้นฉบับ (สแกนหาขอบปุ่มจริงจากสี background) แล้ว scale เป็น 2500x1686
+// ลำดับปุ่มตามภาพ: การ์ดใหญ่จดรายรับ/รายจ่าย, สรุป, วิเคราะห์, หมวด/งบ, รายการ, แปลงร่างเป็น Pro, ประกาศ, ตั้งค่า, Help
+const AREAS = [
+  {
+    bounds: { x: 0, y: 0, width: 1486, height: 963 },
+    action: { type: "message", label: "จดรายรับ/รายจ่าย", text: "กาแฟ 60" }
+  },
+  {
+    bounds: { x: 1486, y: 0, width: 483, height: 486 },
+    action: { type: "message", label: "สรุป", text: "สรุป" }
+  },
+  {
+    bounds: { x: 1969, y: 0, width: 531, height: 486 },
+    action: { type: "message", label: "วิเคราะห์", text: "วิเคราะห์" }
+  },
+  {
+    bounds: { x: 1486, y: 486, width: 483, height: 477 },
+    action: { type: "message", label: "หมวด/งบ", text: "หมวด/งบ" }
+  },
+  {
+    bounds: { x: 1969, y: 486, width: 531, height: 477 },
+    action: { type: "message", label: "รายการ", text: "รายการ" }
+  },
+  {
+    bounds: { x: 0, y: 963, width: 1006, height: 723 },
+    action: { type: "message", label: "แปลงร่างเป็น Pro", text: "แปลงร่างเป็น Pro" }
+  },
+  {
+    bounds: { x: 1006, y: 963, width: 480, height: 723 },
+    action: { type: "message", label: "ประกาศ", text: "ประกาศ" }
+  },
+  {
+    bounds: { x: 1486, y: 963, width: 483, height: 723 },
+    action: { type: "message", label: "ตั้งค่า", text: "ตั้งค่า" }
+  },
+  {
+    bounds: { x: 1969, y: 963, width: 531, height: 723 },
+    action: { type: "message", label: "Help", text: "Help" }
+  }
+];
+
+async function main() {
+  if (!fs.existsSync(IMAGE_PATH)) {
+    console.error(`ไม่พบไฟล์ภาพที่ ${IMAGE_PATH}`);
+    process.exit(1);
+  }
+
+  console.log("1) สร้าง Rich Menu object...");
+  const createRes = await callLineApi("/v2/bot/richmenu", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      size: { width: 2500, height: 1686 },
+      selected: true,
+      name: "ยายนวล - เมนูหลัก",
+      chatBarText: "เมนู",
+      areas: AREAS
+    })
+  });
+  const { richMenuId } = await createRes.json();
+  console.log("   richMenuId:", richMenuId);
+
+  console.log("2) อัปโหลดรูปภาพ...");
+  const imageBuffer = fs.readFileSync(IMAGE_PATH);
+  await callLineApi(`/v2/bot/richmenu/${richMenuId}/content`, {
+    method: "POST",
+    headers: { "content-type": "image/jpeg" },
+    body: imageBuffer
+  });
+  console.log("   อัปโหลดภาพสำเร็จ");
+
+  console.log("3) ตั้งเป็นเมนู default ของบอท (ทุกคนเห็นทันที)...");
+  await callLineApi(`/v2/bot/user/all/richmenu/${richMenuId}`, { method: "POST" });
+  console.log("   ตั้งเป็น default แล้ว");
+
+  console.log("\nเสร็จแล้ว! richMenuId =", richMenuId);
+  console.log("ถ้าต้องการแยกเมนู Free/Premium ในอนาคต ให้เก็บ richMenuId นี้ไว้ และรัน script");
+  console.log("อีกครั้งด้วยภาพอื่นสำหรับอีกแพ็กเกจ แล้วนำ id ทั้งสองไปใส่ .env ตามคอมเมนต์ด้านบนของไฟล์นี้");
+}
+
+main().catch((err) => {
+  console.error("เกิดข้อผิดพลาด:", err.message);
+  process.exit(1);
+});
+
