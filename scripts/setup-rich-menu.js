@@ -18,6 +18,7 @@
 //     เพื่อให้ src/subscription/richMenu.js สลับเมนูตามแพ็กเกจได้ (ตอนนี้ script นี้สร้างแค่เมนูเดียว
 //     แล้วตั้งเป็น default ให้ทุกคนเลย ถ้ายังไม่ต้องแยก Free/Premium ก็ใช้วิธีนี้พอ)
 
+import "dotenv/config";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -145,5 +146,6 @@ main().catch((err) => {
   console.error("เกิดข้อผิดพลาด:", err.message);
   process.exit(1);
 });
+
 
 
