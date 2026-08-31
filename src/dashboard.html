@@ -282,7 +282,9 @@
   <div class="toast" id="toast"></div>
   <script>
     const token=new URLSearchParams(location.search).get('token');const uid=new URLSearchParams(location.search).get('u');const query='?token='+encodeURIComponent(token||'')+'&u='+encodeURIComponent(uid||'');const view=document.getElementById('view');const fmt=n=>new Intl.NumberFormat('th-TH',{style:'currency',currency:'THB',maximumFractionDigits:2}).format(Number(n)||0);const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-    let page='summary',filter='all',transactions=[],dashboard=null,budgets={},recurring=[],debts=[],loaded=false;
+    const VALID_PAGES=['summary','analysis','budgets','transactions','debts','settings'];
+    const requestedPage=new URLSearchParams(location.search).get('page');
+    let page=VALID_PAGES.includes(requestedPage)?requestedPage:'summary',filter='all',transactions=[],dashboard=null,budgets={},recurring=[],debts=[],loaded=false;
     const PALETTE=['#7A2B3D','#4b6a58','#A87C2E','#5c7a9e','#8a5a3f','#6b5490','#a15a6e','#557a6a'];
     const PREFS_KEY='panuan-prefs';
     const prefs=Object.assign({categoryMemory:true,dailyReminder:false,reminderTime:'20:00',language:'ไทย',currency:'บาท (฿)',timezone:'Bangkok (GMT+7)'},JSON.parse(localStorage.getItem(PREFS_KEY)||'{}'));
@@ -849,6 +851,7 @@
     document.getElementById('settingsModal').addEventListener('click',e=>{if(e.target.id==='settingsModal')closeSettingsSheet()});
     async function addRecurring(){const description=prompt(t('promptRecurringDesc'));if(!description)return;const amount=Number(prompt(t('promptRecurringAmount')));const category=prompt(t('promptRecurringCategory'),t('promptRecurringCategoryDefault'));const day=Number(prompt(t('promptRecurringDay'),String(new Date().getDate())));if(!Number.isFinite(amount)||amount<=0||!category||!Number.isInteger(day)||day<1||day>31)return alert(t('invalidData'));await api('/api/recurring',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({type:confirm(t('promptRecurringType'))?'income':'expense',description,amount,category,day})});toast(t('recurringAdded'))}
     document.querySelectorAll('.nav button').forEach(b=>b.onclick=()=>setPage(b.dataset.page));
+    document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.page===page));
     document.addEventListener('scroll',()=>{
       document.getElementById('topbar').classList.toggle('scrolled',window.scrollY>4);
       // parallax เบา ๆ ที่การ์ดยอดเงินรวม (ledger-row.balance) เลื่อนช้ากว่า scroll ปกตินิดหน่อย ให้รู้สึกมีมิติ ไม่ใช่แผ่นแบนติดหน้าจอ
@@ -869,6 +872,7 @@
   </script>
 </body>
 </html>
+
 
 
 
