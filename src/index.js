@@ -907,9 +907,11 @@ function noticeFlexMessage(text, tone = "info") {
 }
 
 // การ์ดตอบปุ่ม "จดรายรับ/รายจ่าย" บน Rich Menu — โชว์ตัวอย่างพิมพ์ + ปุ่ม "จดเลย"
-// ปุ่มใช้ action type "message" แบบไม่มี text (เว้นว่าง) พร้อม inputOption: "openKeyboard"
-// LINE จะเปิดคีย์บอร์ดให้ผู้ใช้พิมพ์เองทันที โดยไม่ส่งข้อความอะไรเข้าแชทก่อน (ทำให้ฝั่งแชทเราดูสะอาด
-// ไม่มีข้อความ "จดเลย" ไปโผล่ค้างอยู่) ต้องใช้คู่กับ inputOption + fillInText ถึงจะเด้งคีย์บอร์ดแทนส่งข้อความ
+// ปุ่มใช้ action type "postback" (ไม่ใช่ "message") — postback ไม่แสดงข้อความอะไรในแชทฝั่งผู้ใช้เลย
+// (ต่างจาก type "message" ที่กดแล้วข้อความจะโผล่ในแชทก่อนบอทตอบ) กดแล้วบอทจะได้รับ postback event
+// แล้วตอบกลับด้วยการ์ดแนะนำวิธีพิมพ์ทันที (ดู "quicklog" handler ในบล็อก postback ด้านล่างของไฟล์นี้)
+// ผลคือแชทดูครีน มีแต่ข้อความที่บอทตอบ ไม่มีข้อความ "จดเลย" ของฝั่งเราไปค้างอยู่
+// หมายเหตุ: postback ไม่มี inputOption/fillInText เหมือน uri จึงไม่เปิดคีย์บอร์ดอัตโนมัติ ผู้ใช้ต้องพิมพ์เองต่อ
 function quickLogFlexMessage({ isGroupChat } = {}) {
   const pink = "#D23283", cream = "#FBF3EC";
   const example1 = isGroupChat ? "/บอท ข้าวมันไก่ 50" : "ข้าวมันไก่ 50";
@@ -948,11 +950,10 @@ function quickLogFlexMessage({ isGroupChat } = {}) {
           {
             type: "button", style: "primary", height: "sm", color: pink,
             action: {
-              type: "message",
+              type: "postback",
               label: "จดเลย",
-              text: "",
-              inputOption: "openKeyboard",
-              fillInText: isGroupChat ? "/บอท " : ""
+              data: `quicklog=1`,
+              displayText: "\u200b" // zero-width space กัน LINE fallback ไปโชว์ label เป็นข้อความในแชท (เหมือนปุ่ม "ลบ" ด้านบน)
             }
           }
         ]
@@ -1637,6 +1638,20 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
     if (event.type === "postback") {
       const data = event.postback?.data ?? "";
       const params = new URLSearchParams(data);
+      // --- ปุ่ม "จดเลย" บนการ์ด quickLogFlexMessage (ปุ่มจากคำสั่ง "จดรายการ" บน Rich Menu) ---
+      // postback ไม่โผล่ข้อความในแชท ตอบกลับด้วยข้อความแนะนำวิธีพิมพ์ ให้ผู้ใช้พิมพ์เอง
+      // (ไม่ใส่ quick reply แบบ action type "message" เพราะกดแล้วข้อความจะถูกส่งเข้าแชททันที เหมือนปุ่ม message เดิม
+      // ขัดกับเจตนา "ครีน ไม่มีข้อความไปโผล่ก่อน" — ปล่อยให้ผู้ใช้พิมพ์เองในช่องแชทแทน)
+      if (params.get("quicklog") === "1") {
+        const pbSourceType = event.source?.type;
+        const pbIsGroupChat = pbSourceType === "group" || pbSourceType === "room";
+        const prefix = pbIsGroupChat ? "/บอท " : "";
+        const example1 = `${prefix}ข้าวมันไก่ 50`;
+        const example2 = `${prefix}เงินเดือน 20000`;
+        const message = { type: "text", text: `พิมพ์บอกยายได้เลยค่ะ เช่น\n- ${example1}\n- ${example2}\n\nยายจะจดและจัดประเภทให้อัตโนมัติค่ะ` };
+        try { await replyMessages(event.replyToken, [message]); } catch (error) { console.error("Could not reply", error.message); }
+        continue;
+      }
       // --- ปุ่มเลือกแผนสมัคร Premium (รายเดือน/รายปี) บนการ์ด planPickerFlexMessage ---
       if (params.has("pn_plan")) {
         const planKey = params.get("pn_plan") === "YEARLY" ? "YEARLY" : "MONTHLY";
@@ -1971,7 +1986,8 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
       ? "📒 ยายจันทร์พร้อมจดบัญชีกองกลางให้กลุ่มนี้\n\nทุกคำสั่งต้องขึ้นต้นด้วย \"/บอท\" เสมอ เช่น:\n/บอท กาแฟ 60\n/บอท เงินเดือน 15000\n/บอท สลิป (แล้วส่งรูปใบเสร็จตาม — ต้องมีสมาชิก Premium เป็นเจ้าของกลุ่มนี้ก่อน)\n/บอท สรุปวันนี้ | /บอท สรุปเดือนนี้ | /บอท ลบล่าสุด | /บอท เว็บ\n\nสมัคร Premium ต้องไปแชท 1:1 กับยายจันทร์เท่านั้น"
       : "📒 ยายจันทร์พร้อมจดบัญชีของคุณ (ข้อมูลของแต่ละคนแยกกันเป็นส่วนตัว)\n\nพิมพ์: กาแฟ 60\nรายรับ: เงินเดือน 15000\nถ่ายรูปใบเสร็จส่งมาได้เลย (ฟีเจอร์ Premium) ยายจันทร์จะอ่านยอดกับร้านค้าให้อัตโนมัติ\nคำสั่ง: สรุปวันนี้ | สรุปเดือนนี้ | ลบล่าสุด | เว็บ | สมัครพรีเมียม\nทุกวันอาทิตย์ยายจันทร์จะสรุปสัปดาห์ให้อัตโนมัติด้วย\n\nหรือถามยายจันทร์ได้เลย เช่น \"เดือนนี้ใช้เงินไปกับอะไรมากสุด\" ยายจันทร์เน้นตอบเรื่องการเงินเป็นหลัก แต่คุยเรื่องอื่นได้ด้วยนะ";
     // ปุ่ม "จดรายรับ/รายจ่าย" บน Rich Menu ส่งคำนี้มา — ตอบเป็นการ์ด Flex สวย ๆ พร้อมปุ่ม "จดเลย"
-    // ปุ่ม "จดเลย" ใช้ inputOption: "openKeyboard" เปิดคีย์บอร์ดให้พิมพ์ต่อทันที ไม่ส่งข้อความอะไรเข้าแชทก่อน
+    // ปุ่ม "จดเลย" ใช้ action type "postback" (ดู "quicklog" handler ในบล็อก postback ด้านบนของไฟล์นี้)
+    // กดแล้วไม่มีข้อความอะไรโผล่ในแชทฝั่งผู้ใช้ก่อน บอทตอบข้อความแนะนำกลับมาทันที ให้ผู้ใช้พิมพ์เอง
     // (ดู quickLogFlexMessage ด้านบน) ทำให้ฝั่งแชทของผู้ใช้ดูสะอาด ไม่มีคำว่า "จดเลย" ไปค้างอยู่ในประวัติแชท
     if (text === "จดรายการ") message = quickLogFlexMessage({ isGroupChat });
     else if (["เริ่ม", "ช่วยเหลือ", "help"].includes(text.toLowerCase())) message = helpText;
@@ -2010,6 +2026,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
   }
 });
 app.listen(Number(process.env.PORT ?? 3000), () => console.log(`Ta Phin listening on ${process.env.PORT ?? 3000}`));
+
 
 
 
