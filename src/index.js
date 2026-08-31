@@ -906,6 +906,61 @@ function noticeFlexMessage(text, tone = "info") {
   };
 }
 
+// การ์ดตอบปุ่ม "จดรายรับ/รายจ่าย" บน Rich Menu — โชว์ตัวอย่างพิมพ์ + ปุ่ม "จดเลย"
+// ปุ่มใช้ action type "message" แบบไม่มี text (เว้นว่าง) พร้อม inputOption: "openKeyboard"
+// LINE จะเปิดคีย์บอร์ดให้ผู้ใช้พิมพ์เองทันที โดยไม่ส่งข้อความอะไรเข้าแชทก่อน (ทำให้ฝั่งแชทเราดูสะอาด
+// ไม่มีข้อความ "จดเลย" ไปโผล่ค้างอยู่) ต้องใช้คู่กับ inputOption + fillInText ถึงจะเด้งคีย์บอร์ดแทนส่งข้อความ
+function quickLogFlexMessage({ isGroupChat } = {}) {
+  const pink = "#D23283", cream = "#FBF3EC";
+  const example1 = isGroupChat ? "/บอท ข้าวมันไก่ 50" : "ข้าวมันไก่ 50";
+  const example2 = isGroupChat ? "/บอท เงินเดือน 20000" : "เงินเดือน 20000";
+  return {
+    type: "flex",
+    altText: "พิมพ์บอกยายจันทร์ได้เลย เช่น ข้าวมันไก่ 50 หรือ เงินเดือน 20000",
+    contents: {
+      type: "bubble",
+      body: {
+        type: "box", layout: "vertical", paddingAll: "20px", backgroundColor: cream,
+        contents: [
+          {
+            type: "box", layout: "horizontal", alignItems: "center", spacing: "md",
+            contents: [
+              { type: "box", layout: "vertical", width: "40px", height: "40px", cornerRadius: "20px", backgroundColor: pink, justifyContent: "center", alignItems: "center",
+                contents: [{ type: "text", text: "👵", size: "md", align: "center" }] },
+              { type: "box", layout: "vertical", flex: 1, contents: [
+                { type: "text", text: "พิมพ์บอกยายได้เลย เช่น", weight: "bold", size: "sm", color: "#2B2320", wrap: true }
+              ] }
+            ]
+          },
+          {
+            type: "box", layout: "vertical", margin: "lg", paddingAll: "12px", cornerRadius: "12px", backgroundColor: "#FFFFFF",
+            contents: [
+              { type: "text", text: `- ${example1}`, size: "sm", color: "#5B5450" },
+              { type: "text", text: `- ${example2}`, size: "sm", color: "#5B5450", margin: "sm" }
+            ]
+          },
+          { type: "text", text: "ยายจะจดและจัดประเภทให้อัตโนมัติค่ะ", size: "xs", color: "#9B94A0", margin: "lg", wrap: true }
+        ]
+      },
+      footer: {
+        type: "box", layout: "vertical", paddingAll: "12px", backgroundColor: cream,
+        contents: [
+          {
+            type: "button", style: "primary", height: "sm", color: pink,
+            action: {
+              type: "message",
+              label: "จดเลย",
+              text: "",
+              inputOption: "openKeyboard",
+              fillInText: isGroupChat ? "/บอท " : ""
+            }
+          }
+        ]
+      }
+    }
+  };
+}
+
 function budgetProgressFor(user, tx) {
   if (tx.type !== "expense") return null;
   const limit = user.budgets?.[tx.category];
@@ -1915,11 +1970,10 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
     const helpText = isGroupChat
       ? "📒 ยายจันทร์พร้อมจดบัญชีกองกลางให้กลุ่มนี้\n\nทุกคำสั่งต้องขึ้นต้นด้วย \"/บอท\" เสมอ เช่น:\n/บอท กาแฟ 60\n/บอท เงินเดือน 15000\n/บอท สลิป (แล้วส่งรูปใบเสร็จตาม — ต้องมีสมาชิก Premium เป็นเจ้าของกลุ่มนี้ก่อน)\n/บอท สรุปวันนี้ | /บอท สรุปเดือนนี้ | /บอท ลบล่าสุด | /บอท เว็บ\n\nสมัคร Premium ต้องไปแชท 1:1 กับยายจันทร์เท่านั้น"
       : "📒 ยายจันทร์พร้อมจดบัญชีของคุณ (ข้อมูลของแต่ละคนแยกกันเป็นส่วนตัว)\n\nพิมพ์: กาแฟ 60\nรายรับ: เงินเดือน 15000\nถ่ายรูปใบเสร็จส่งมาได้เลย (ฟีเจอร์ Premium) ยายจันทร์จะอ่านยอดกับร้านค้าให้อัตโนมัติ\nคำสั่ง: สรุปวันนี้ | สรุปเดือนนี้ | ลบล่าสุด | เว็บ | สมัครพรีเมียม\nทุกวันอาทิตย์ยายจันทร์จะสรุปสัปดาห์ให้อัตโนมัติด้วย\n\nหรือถามยายจันทร์ได้เลย เช่น \"เดือนนี้ใช้เงินไปกับอะไรมากสุด\" ยายจันทร์เน้นตอบเรื่องการเงินเป็นหลัก แต่คุยเรื่องอื่นได้ด้วยนะ";
-    // ปุ่ม "จดรายรับ/รายจ่าย" บน Rich Menu ส่งคำนี้มา (เดิมส่ง "กาแฟ 60" ซึ่งไปเด้งอยู่ในช่องพิมพ์เฉย ๆ ให้ผู้ใช้กดส่งเอง
-    // ทำให้เข้าใจผิดว่าเป็นการจดรายการจริง) เปลี่ยนมาสอนวิธีพิมพ์แทน ตอบทันทีโดยไม่ต้องรอผู้ใช้พิมพ์-ส่งอะไรเพิ่ม
-    if (text === "จดรายการ") message = isGroupChat
-      ? "พิมพ์รายการต่อท้าย \"/บอท\" ได้เลย เช่น:\n/บอท กาแฟ 60 (รายจ่าย)\n/บอท เงินเดือน 15000 (รายรับ)"
-      : "พิมพ์รายการได้เลย เช่น:\nกาแฟ 60 (รายจ่าย)\nเงินเดือน 15000 (รายรับ)";
+    // ปุ่ม "จดรายรับ/รายจ่าย" บน Rich Menu ส่งคำนี้มา — ตอบเป็นการ์ด Flex สวย ๆ พร้อมปุ่ม "จดเลย"
+    // ปุ่ม "จดเลย" ใช้ inputOption: "openKeyboard" เปิดคีย์บอร์ดให้พิมพ์ต่อทันที ไม่ส่งข้อความอะไรเข้าแชทก่อน
+    // (ดู quickLogFlexMessage ด้านบน) ทำให้ฝั่งแชทของผู้ใช้ดูสะอาด ไม่มีคำว่า "จดเลย" ไปค้างอยู่ในประวัติแชท
+    if (text === "จดรายการ") message = quickLogFlexMessage({ isGroupChat });
     else if (["เริ่ม", "ช่วยเหลือ", "help"].includes(text.toLowerCase())) message = helpText;
     else if (text === "สรุปวันนี้") message = summary(user.transactions.filter((tx) => sameDay(tx.createdAt)), "วันนี้");
     else if (text === "สรุปเดือนนี้") { const month = user.transactions.filter((tx) => sameMonth(tx.createdAt)); message = `${summary(month, "เดือนนี้")}\n\n${advice(month)}`; }
@@ -1956,6 +2010,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
   }
 });
 app.listen(Number(process.env.PORT ?? 3000), () => console.log(`Ta Phin listening on ${process.env.PORT ?? 3000}`));
+
 
 
 
