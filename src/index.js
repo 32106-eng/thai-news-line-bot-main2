@@ -1017,21 +1017,43 @@ function allowed(req) {
   if (given.length !== expected.length) return false;
   try { return crypto.timingSafeEqual(Buffer.from(given), Buffer.from(expected)); } catch { return false; }
 }
-async function askFinanceAi(user, question) {
+// จัดกลุ่ม transaction ทั้งหมดของ user ตามเดือน (key รูปแบบ YYYY-MM ตามเวลา Asia/Bangkok) เรียงใหม่ -> เก่า
+// ใช้สำหรับ context ย้อนหลังของฟีเจอร์ Pro ใน askFinanceAi เท่านั้น
+function groupTransactionsByMonth(transactions) {
+  const byKey = new Map();
+  for (const tx of transactions) {
+    const p = parts(tx.createdAt);
+    if (!p) continue;
+    const key = `${p.year}-${p.month}`;
+    if (!byKey.has(key)) byKey.set(key, []);
+    byKey.get(key).push(tx);
+  }
+  return [...byKey.entries()].sort((a, b) => (a[0] < b[0] ? 1 : -1));
+}
+function monthLabel(key) { const [year, month] = key.split("-"); return `${month}/${year}`; }
+async function askFinanceAi(user, question, isPremium = false) {
   if (!ai || !process.env.OPENAI_MODEL) return null;
   try {
     const month = user.transactions.filter((tx) => sameMonth(tx.createdAt));
     const t = totals(month);
     const top = Object.entries(month.filter((tx) => tx.type === "expense").reduce((o, tx) => ({ ...o, [tx.category]: (o[tx.category] ?? 0) + tx.amount }), {})).sort((a, b) => b[1] - a[1]).slice(0, 5);
     const budgetLines = Object.entries(user.budgets ?? {}).map(([category, amount]) => `${category}: งบ ${money(amount)} บาท`).join("\n") || "ยังไม่ได้ตั้งงบ";
-    const context = `ข้อมูลบัญชีเดือนนี้ของผู้ใช้คนนี้เท่านั้น (ห้ามอ้างอิงคนอื่น):\nรายรับ: ${money(t.income)} บาท\nรายจ่าย: ${money(t.expense)} บาท\nคงเหลือ: ${money(t.income - t.expense)} บาท\nหมวดที่ใช้จ่ายมากสุด: ${top.map(([category, value]) => `${category} ${money(value)} บาท`).join(", ") || "ยังไม่มีข้อมูล"}\nงบประมาณที่ตั้งไว้:\n${budgetLines}`;
+    let context = `ข้อมูลบัญชีเดือนนี้ของผู้ใช้คนนี้เท่านั้น (ห้ามอ้างอิงคนอื่น):\nรายรับ: ${money(t.income)} บาท\nรายจ่าย: ${money(t.expense)} บาท\nคงเหลือ: ${money(t.income - t.expense)} บาท\nหมวดที่ใช้จ่ายมากสุด: ${top.map(([category, value]) => `${category} ${money(value)} บาท`).join(", ") || "ยังไม่มีข้อมูล"}\nงบประมาณที่ตั้งไว้:\n${budgetLines}`;
+    if (isPremium) {
+      // Pro: แนบสรุปย้อนหลังทุกเดือนที่มีข้อมูลในระบบ (ไม่รวมเดือนนี้ที่แนบไปแล้วด้านบน) ให้โมเดลตอบคำถามข้ามเดือนได้
+      const grouped = groupTransactionsByMonth(user.transactions).filter(([key]) => key !== `${parts().year}-${parts().month}`);
+      const historyLines = grouped.map(([key, list]) => { const mt = totals(list); return `${monthLabel(key)} -> รายรับ: ${money(mt.income)} บาท, รายจ่าย: ${money(mt.expense)} บาท, คงเหลือ: ${money(mt.income - mt.expense)} บาท`; }).join("\n") || "ยังไม่มีข้อมูลเดือนก่อนหน้าในระบบ";
+      context += `\n\n[สิทธิ์ Pro: ดูข้อมูลย้อนหลังได้] สรุปยอดรายเดือนย้อนหลังทั้งหมดที่มีในระบบ (ใหม่ -> เก่า):\n${historyLines}`;
+    } else {
+      context += `\n\nหมายเหตุ: ผู้ใช้คนนี้เป็นแผน Free มีให้แค่ข้อมูลเดือนนี้เท่านั้น ถ้าคำถามถามถึงเดือนก่อนหน้าหรือช่วงเวลาย้อนหลัง ให้ตอบตรง ๆ ว่ายายมีให้แค่ของเดือนนี้ และชวนสมัคร Pro แบบสั้น ๆ เพื่อดูย้อนหลังได้ทุกเดือน ห้ามแต่งตัวเลขเดือนก่อนขึ้นมาเอง`;
+    }
     const completion = await ai.chat.completions.create({
       model: process.env.OPENAI_MODEL,
       temperature: 0.4,
       max_tokens: 200, // ลดจาก 280 — prompt ใหม่เน้น "1-4 ประโยค กระชับ" ชัดเจนขึ้น ลด budget ลงช่วยตัดโอกาสที่โมเดลจะยืดคำตอบยาวเกินจำเป็นโดยไม่ตัดคำตอบจริงกลางคัน (คำตอบปกติสั้นกว่านี้มาก)
       // เดิมตั้ง 400 ซึ่งกว้างเกินคำตอบจริงมาก โมเดลบางตัว (โดยเฉพาะที่มี reasoning/thinking ในตัว) จะยิ่งใช้เวลาคิดนานขึ้นตาม budget ที่เปิดให้ — ลดค่านี้ช่วยตัดเวลาตอบโดยไม่ตัดคุณภาพคำตอบ เพราะคำตอบจริงไม่เคยยาวถึง 400 อยู่แล้ว
       messages: [
-        { role: "system", content: "คุณคือ \"ยายจันทร์\" ผู้ช่วยเรื่องเงินที่ตอบคำถามของผู้ใช้ตรงประเด็นเป็นอันดับหนึ่งเสมอ อ่านคำถามให้ดีก่อนตอบ ถ้าถามเรื่องหนึ่งให้ตอบเรื่องนั้นก่อน อย่าเบี่ยงไปตอบเรื่องอื่นหรือพยายามยัดเยียดคำแนะนำการเงินเข้าไปทั้งที่ไม่เกี่ยว\n\nโทนการพูด: เป็นกันเอง อบอุ่นแบบผู้ใหญ่ใจดีคุยกับคนที่สนิทกัน ไม่ใช่พนักงานหรือบอทที่พูดจาเป็นทางการ ปกติไม่ลงท้ายด้วย \"ครับ/ค่ะ/คะ\" แต่ถ้าพูดแล้วห้วนไปหรือฟังดูแปลกก็ปรับให้เป็นธรรมชาติได้ ไม่ต้องเคร่งกฎนี้จนกระทบความชัดเจนของคำตอบ\n\nเนื้อหา: ให้คำปรึกษาเรื่องการเงินส่วนบุคคล (ออม ใช้จ่าย ตั้งงบ หนี้สิน ลงทุนเบื้องต้น) โดยอ้างอิงข้อมูลบัญชีที่ให้มาเมื่อเกี่ยวข้อง ตอบคำถามอื่นนอกเรื่องการเงินได้ตามปกติแบบตรงไปตรงมา ไม่ต้องฝืนโยงกลับมาเรื่องเงินถ้าไม่เกี่ยวกันจริง ๆ ห้ามให้คำแนะนำการลงทุนเฉพาะเจาะจงที่เสี่ยงสูงหรือรับประกันผลตอบแทน และห้ามฟันธงเรื่องกฎหมาย/ภาษี ให้แนะนำปรึกษาผู้เชี่ยวชาญแทน\n\nความยาว: ตอบสั้นกระชับเท่าที่พอตอบคำถามได้ครบ ปกติ 1-4 ประโยค ไม่ต้องยืดเกินความจำเป็น\n\nรูปแบบ: อ่านง่ายบนมือถือ ถ้าคำตอบมีหลายประเด็นหรือหลายตัวเลขให้ขึ้นบรรทัดใหม่ (\\n) แยกออกจากกัน ใช้ \"• \" นำหน้าถ้าเป็นรายการหลายอย่าง ไม่ต้องใช้ถ้าคำตอบสั้นและเป็นประเด็นเดียว" },
+        { role: "system", content: "คุณคือ \"ยายจันทร์\" ผู้ช่วยเรื่องเงินที่ตอบคำถามของผู้ใช้ตรงประเด็นเป็นอันดับหนึ่งเสมอ อ่านคำถามให้ดีก่อนตอบ ถ้าถามเรื่องหนึ่งให้ตอบเรื่องนั้นก่อน อย่าเบี่ยงไปตอบเรื่องอื่นหรือพยายามยัดเยียดคำแนะนำการเงินเข้าไปทั้งที่ไม่เกี่ยว\n\nโทนการพูด: เป็นกันเอง อบอุ่นแบบผู้ใหญ่ใจดีคุยกับคนที่สนิทกัน ไม่ใช่พนักงานหรือบอทที่พูดจาเป็นทางการ ปกติไม่ลงท้ายด้วย \"ครับ/ค่ะ/คะ\" แต่ถ้าพูดแล้วห้วนไปหรือฟังดูแปลกก็ปรับให้เป็นธรรมชาติได้ ไม่ต้องเคร่งกฎนี้จนกระทบความชัดเจนของคำตอบ\n\nเนื้อหา: ให้คำปรึกษาเรื่องการเงินส่วนบุคคล (ออม ใช้จ่าย ตั้งงบ หนี้สิน ลงทุนเบื้องต้น) โดยอ้างอิงข้อมูลบัญชีที่ให้มาเมื่อเกี่ยวข้อง ตอบคำถามอื่นนอกเรื่องการเงินได้ตามปกติแบบตรงไปตรงมา ไม่ต้องฝืนโยงกลับมาเรื่องเงินถ้าไม่เกี่ยวกันจริง ๆ ห้ามให้คำแนะนำการลงทุนเฉพาะเจาะจงที่เสี่ยงสูงหรือรับประกันผลตอบแทน และห้ามฟันธงเรื่องกฎหมาย/ภาษี ให้แนะนำปรึกษาผู้เชี่ยวชาญแทน\n\nข้อมูลย้อนหลัง: ถ้า context มีส่วน \"[สิทธิ์ Pro: ดูข้อมูลย้อนหลังได้]\" ให้ใช้ตัวเลขในนั้นตอบคำถามที่ถามถึงเดือนก่อนหน้าหรือช่วงเวลาย้อนหลังได้เต็มที่ ถ้าไม่มีส่วนนี้ (ผู้ใช้ Free) และคำถามถามถึงเดือนก่อน/ย้อนหลัง ห้ามเดาหรือแต่งตัวเลขขึ้นเอง ให้บอกตรง ๆ ว่ามีให้แค่ของเดือนนี้ และชวนสมัคร Pro สั้น ๆ เพื่อดูย้อนหลังได้\n\nความยาว: ตอบสั้นกระชับเท่าที่พอตอบคำถามได้ครบ ปกติ 1-4 ประโยค ไม่ต้องยืดเกินความจำเป็น\n\nรูปแบบ: อ่านง่ายบนมือถือ ถ้าคำตอบมีหลายประเด็นหรือหลายตัวเลขให้ขึ้นบรรทัดใหม่ (\\n) แยกออกจากกัน ใช้ \"• \" นำหน้าถ้าเป็นรายการหลายอย่าง ไม่ต้องใช้ถ้าคำตอบสั้นและเป็นประเด็นเดียว" },
 
         { role: "user", content: `${context}\n\nคำถามจากผู้ใช้: ${question}` }
       ]
@@ -2016,7 +2038,9 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
         message = txFlexMessage(tx, { budget: budgetProgressFor(user, tx), dashboardUrl: dashboardEditUrl(userId), userId, prefs: user.confirmMessagePrefs });
       }
       else {
-        const aiAnswer = await askFinanceAi(user, text);
+        // isPremium เช็คได้เฉพาะบัญชีส่วนตัว ส่วนแชทกลุ่มเช็คผ่าน isPremiumGroup (เจ้าของกลุ่มต้องเป็น Premium) — เช่นเดียวกับจุดเช็คสิทธิ์ Premium อื่น ๆ ในไฟล์นี้
+        const askerIsPremium = (await subscriptionService.isPremium(userId).catch(() => false)) || (isGroupChat && await groupLinkService.isPremiumGroup(userId).catch(() => false));
+        const aiAnswer = await askFinanceAi(user, text, askerIsPremium);
         message = aiAnswer ?? (isGroupChat ? "พิมพ์ได้เลย เช่น /บอท กาแฟ 60 หรือ /บอท เงินเดือน 15000\nพิมพ์ /บอท ช่วยเหลือ เพื่อดูคำสั่ง" : "พิมพ์ได้เลย เช่น กาแฟ 60 หรือ เงินเดือน 15000\nพิมพ์ ช่วยเหลือ เพื่อดูคำสั่ง");
       }
     }
@@ -2032,3 +2056,4 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
   }
 });
 app.listen(Number(process.env.PORT ?? 3000), () => console.log(`Ta Phin listening on ${process.env.PORT ?? 3000}`));
+
