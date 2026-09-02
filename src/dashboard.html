@@ -258,6 +258,24 @@
       0%{opacity:1;transform:translateY(0) translateX(0) rotate(0)}
       100%{opacity:0;transform:translateY(100vh) translateX(var(--drift)) rotate(540deg)}
     }
+
+    /* Visual refresh: ให้หน้าสรุปมี hierarchy แบบแอปการเงินระดับพรีเมียม โดยคงธีมสมุดบัญชีของเดิมไว้ */
+    .top{background:rgba(245,240,228,.82);backdrop-filter:blur(18px) saturate(1.12);padding-top:20px}
+    .top::after{content:"";position:absolute;width:124px;height:124px;right:-56px;top:-68px;border:1px solid rgba(168,124,46,.24);border-radius:50%;box-shadow:0 0 0 18px rgba(168,124,46,.055),0 0 0 43px rgba(122,43,61,.025);pointer-events:none}
+    .top.scrolled{background:rgba(245,240,228,.92);box-shadow:0 7px 24px -17px rgba(36,30,25,.45)}
+    .brandmark{position:relative;z-index:1}.status{position:relative;z-index:1;padding:7px 9px;border-radius:99px;background:rgba(255,253,250,.72);border:1px solid rgba(225,216,198,.72)}
+    .summary-hero{position:relative;min-height:120px;display:flex;justify-content:space-between;gap:14px;align-items:flex-start;padding:18px 17px 16px;margin:14px 0 13px;overflow:hidden;border:1px solid rgba(225,216,198,.92);border-radius:var(--radius);background:linear-gradient(132deg,rgba(255,253,250,.94) 0%,rgba(255,250,244,.88) 50%,rgba(246,236,211,.75) 100%);box-shadow:var(--shadow)}
+    .summary-hero::before{content:"";position:absolute;width:174px;height:174px;right:-78px;bottom:-98px;border:1px solid rgba(168,124,46,.28);border-radius:50%;box-shadow:0 0 0 24px rgba(168,124,46,.075),0 0 0 58px rgba(122,43,61,.035)}
+    .summary-hero::after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,rgba(255,255,255,.3),transparent 46%);pointer-events:none}
+    .summary-copy{position:relative;z-index:1;min-width:0}.summary-kicker{display:flex;align-items:center;gap:7px;color:var(--gold-deep);font-size:10.5px;font-weight:800;letter-spacing:.08em;text-transform:uppercase}.summary-kicker .spark{width:18px;height:18px;border-radius:6px;display:inline-grid;place-items:center;background:var(--gold-soft);font-size:12px;line-height:1}.summary-hero .view-title{margin:5px 0 2px;font-size:25px;line-height:1.2}.summary-hero .lead{font-size:12.5px;margin:0;max-width:280px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.month-stamp{position:relative;z-index:1;display:flex;flex-direction:column;align-items:center;justify-content:center;min-width:66px;min-height:66px;padding:7px 5px;border:1px solid rgba(168,124,46,.3);border-radius:13px;background:rgba(255,253,250,.75);box-shadow:0 8px 18px -15px rgba(122,43,61,.56);color:var(--wine-deep);text-align:center}.month-stamp strong{font-family:"Noto Serif Thai",serif;font-size:18px;line-height:1.05}.month-stamp span{margin-top:3px;color:var(--ink-soft);font-size:9px;font-weight:700}
+    .ledger{border-color:rgba(225,216,198,.9);box-shadow:0 18px 38px -28px rgba(78,26,38,.52)}
+    .ledger::before{content:"";position:absolute;inset:0;pointer-events:none;background:linear-gradient(115deg,rgba(255,255,255,.32),transparent 30%)}
+    .ledger-row{padding:16px 18px}.ledger-row .k{font-weight:600}.ledger-row.balance{min-height:85px;background:linear-gradient(125deg,#8e344a 0%,var(--wine) 52%,var(--wine-deep) 100%)}.ledger-row.balance::before{background:radial-gradient(circle at 86% 2%,rgba(228,193,112,.38),transparent 48%),linear-gradient(120deg,rgba(255,255,255,.12),transparent 36%)}.ledger-row.balance .k::before{content:"✦";font-size:11px;color:var(--gold-shine);margin-right:7px}.ledger-foot{position:relative;z-index:1;display:flex;align-items:center;gap:8px;padding:10px 18px;background:#fcf8f0;color:var(--ink-soft);font-size:10.5px;font-weight:700}.ledger-foot .meter{height:5px;flex:1;max-width:124px;overflow:hidden;border-radius:99px;background:var(--line-soft)}.ledger-foot .meter i{display:block;height:100%;border-radius:inherit;background:linear-gradient(90deg,var(--sage),#88a88e);transition:width .7s var(--ease)}.ledger-foot.over .meter i{background:linear-gradient(90deg,var(--wine),#c6687a)}.ledger-foot b{color:var(--wine);font-weight:800}.ledger-foot.over b{color:var(--wine-deep)}
+    .panel{border-color:rgba(225,216,198,.86);box-shadow:0 16px 35px -28px rgba(36,30,25,.48);transition:transform .2s var(--ease),box-shadow .2s var(--ease)}@media(hover:hover){.panel:hover{transform:translateY(-1px);box-shadow:var(--shadow-lift)}}.panel h2{letter-spacing:.025em}.panel h2::after{content:"";height:1px;flex:1;margin-left:11px;background:linear-gradient(90deg,var(--line),transparent)}
+    .insight-row{gap:10px}.insight-card{border-color:rgba(225,216,198,.9);box-shadow:0 12px 26px -22px rgba(36,30,25,.34)}
+    .cards .card{box-shadow:0 11px 25px -22px rgba(36,30,25,.38)}.toolbar{padding:4px;border:1px solid rgba(225,216,198,.9);border-radius:14px;background:rgba(255,253,250,.65);box-shadow:0 10px 24px -24px rgba(36,30,25,.42)}.toolbar button{border:0}.toolbar button.active{box-shadow:0 5px 12px -8px rgba(122,43,61,.5)}
+    .nav{border-top-color:rgba(225,216,198,.85);box-shadow:0 -8px 24px -24px rgba(36,30,25,.44)}.fab{border:3px solid rgba(255,253,250,.94);width:60px;height:60px;box-shadow:0 14px 30px -10px rgba(122,43,61,.65),inset 0 1px 1px rgba(255,255,255,.24)}
+    @media(max-width:380px){.summary-hero{padding:15px 14px;min-height:108px}.summary-hero .view-title{font-size:22px}.month-stamp{min-width:59px;min-height:59px}.ledger-row{padding:14px 15px}.ledger-foot{padding:9px 15px}.ledger-foot .meter{max-width:76px}}
   </style>
 </head>
 <body>
@@ -289,6 +307,7 @@
     const PREFS_KEY='panuan-prefs';
     const prefs=Object.assign({categoryMemory:true,dailyReminder:false,reminderTime:'20:00',language:'ไทย',currency:'บาท (฿)',timezone:'Bangkok (GMT+7)'},JSON.parse(localStorage.getItem(PREFS_KEY)||'{}'));
     function savePrefs(){localStorage.setItem(PREFS_KEY,JSON.stringify(prefs))}
+    const uiText=(th,en)=>prefs.language==='English'?en:th;
     let subscription={plan:'FREE',active:false,expiresAt:null,lineOaLink:null,isGroup:false};
 
     // ── i18n: หน้าตั้งค่าเท่านั้นที่มีสองภาษาตอนนี้ ─────────────────────────
@@ -472,11 +491,22 @@
 
     function summaryPage(){
       const d=dashboard||{income:0,expense:0,balance:0,categories:[],history:[]};
-      return '<h1 class="view-title">'+esc(t('summaryTitle'))+'</h1><p class="lead">'+esc(d.label||t('loading'))+'</p>'
+      const now=new Date();
+      const monthName=new Intl.DateTimeFormat(prefs.language==='English'?'en-US':'th-TH',{month:'short'}).format(now);
+      const ratio=d.income>0?Math.round(d.expense/d.income*100):0;
+      const meterWidth=Math.max(0,Math.min(100,ratio));
+      const meterText=d.income>0
+        ? uiText('ใช้จ่าย '+ratio+'% ของรายรับ','Spent '+ratio+'% of income')
+        : uiText('เริ่มบันทึกรายการแรกของคุณ','Start with your first entry');
+      return '<div class="summary-hero">'
+        +'<div class="summary-copy"><div class="summary-kicker"><span class="spark">✦</span>'+esc(uiText('ภาพรวมการเงิน','Financial overview'))+'</div><h1 class="view-title">'+esc(t('summaryTitle'))+'</h1><p class="lead">'+esc(d.label||t('loading'))+'</p></div>'
+        +'<div class="month-stamp"><strong>'+esc(String(now.getDate()))+'</strong><span>'+esc(monthName)+'</span></div>'
+      +'</div>'
         +'<div class="ledger">'
           +'<div class="ledger-row income"><span class="k"><i style="background:var(--sage)"></i>'+esc(t('income'))+'</span><span class="v num" data-money="1" data-target="'+d.income+'">฿0</span></div>'
           +'<div class="ledger-row expense"><span class="k"><i style="background:var(--wine)"></i>'+esc(t('expense'))+'</span><span class="v num" data-money="1" data-target="'+d.expense+'">฿0</span></div>'
           +'<div class="ledger-row balance"><span class="k">'+esc(t('balance'))+'</span><span class="v num" data-money="1" data-target="'+d.balance+'">฿0</span></div>'
+          +'<div class="ledger-foot'+(ratio>100?' over':'')+'"><span>'+esc(meterText)+'</span><span class="meter"><i style="width:'+meterWidth+'%"></i></span><b>'+ratio+'%</b></div>'
         +'</div>'
         +insightRow(d)
         +'<section class="panel"><h2>'+esc(t('byCategory'))+'</h2>'+pieChart(d.categories)+'</section>'
@@ -872,8 +902,6 @@
   </script>
 </body>
 </html>
-
-
 
 
 
