@@ -1087,43 +1087,71 @@ async function makeSlipThumbnail(rawBuffer) {
     return `data:image/jpeg;base64,${thumb.toString("base64")}`;
   } catch (error) { console.warn("Slip thumbnail generation failed:", error.message); return null; }
 }
-// คืนค่า { receipt } ถ้าอ่านสำเร็จ, { error: "system" } ถ้า provider/AI พัง (ไม่เกี่ยวกับภาพ), { error: "unreadable" } ถ้าอ่านได้แต่ไม่เจอยอดเงินที่สมเหตุสมผล
-// แยกสองเคสนี้ออกจากกัน เพราะข้อความที่ควรบอกผู้ใช้ต่างกันมาก — เดิมรวมเป็น null เดียวกันหมด ทำให้ปัญหาฝั่งระบบ (เช่น provider error 500)
-// ถูกเข้าใจผิดว่าเป็นปัญหาความชัดของภาพ ทั้งที่ภาพชัดแค่ไหนก็อ่านไม่ได้เพราะ request ไปไม่ถึงขั้นตอนอ่านภาพเลยด้วยซ้ำ
+// เปลี่ยนมาใช้ NVIDIA NIM "nemotron-ocr-v2" (Image OCR NIM, /v1/ocr) แทน chat.completions ของ VLM ทั่วไป
+// ต่างจากเดิม: ได้แค่ "ข้อความดิบ + ตำแหน่ง" ไม่เข้าใจว่าอันไหนคือชื่อร้าน/ยอดรวม — เดา merchant/amount เอาเองด้านล่าง
+// (คนละ endpoint กับ readSlip ใน subscription/ocr.js แต่ใช้ logic คล้ายกัน)
+const RECEIPT_OCR_ENDPOINT = process.env.NVIDIA_OCR_ENDPOINT || "https://ai.api.nvidia.com/v1/ocr";
+const RECEIPT_TOTAL_LABEL_HINTS = ["รวมทั้งสิ้น", "รวมทั้งหมด", "รวมเงิน", "ยอดรวม", "รวม", "total", "grand total", "net total"];
+const RECEIPT_SKIP_HINTS = ["ภาษีมูลค่าเพิ่ม", "vat", "ส่วนลด", "discount", "เงินทอน", "รับเงิน", "เปลี่ยน"];
+
 async function readReceipt(mime, base64) {
-  if (!ai || !visionModel) return { error: "system" };
-  // ลองใหม่ได้ 1 ครั้งถ้าเจอ error 5xx (เช่น "EngineCore encountered an issue" จาก NVIDIA NIM) เพราะมักเป็นปัญหาชั่วคราวฝั่ง provider
-  // ไม่ใช่ปัญหาภาพหรือโค้ดเรา — ถ้าลองใหม่แล้วยังพังอีก ถึงจะถือว่าเป็น error ฝั่งระบบจริง ๆ (ดู error handling ท้ายฟังก์ชัน)
+  // ลองใหม่ได้ 1 ครั้งถ้าเจอ error 5xx/503 (service กำลังโหลด/คิวเต็มชั่วคราว) เหมือนพฤติกรรมเดิม
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const completion = await ai.chat.completions.create({
-        model: visionModel,
-        temperature: 0,
-        max_tokens: 80, // เอาต์พุตเป็น JSON เล็ก ๆ แค่ {"merchant":"...","amount":number} เท่านั้น
-        // ไม่ใส่ response_format: json_object เพราะ NVIDIA NIM VLM บางตัว (เช่น nemotron-nano-12b-v2-vl)
-        // ตอบ 500 "EngineCore encountered an issue" เมื่อถูกบังคับ structured output แบบนี้ — คุม JSON ผ่าน prompt แทน
-        messages: [
-          { role: "system", content: "You read Thai/English receipt or bank-transfer slip photos. Reply with ONLY a raw JSON object, no markdown code fences, no explanation, in this exact shape: {\"merchant\":\"...\",\"amount\":number}. \"amount\" is the final total paid or transferred (บาท), as a plain number with no currency symbol or commas. If you cannot read a merchant/payee name, use \"อื่น ๆ\". If you cannot find a clear total amount, set amount to 0." },
-          { role: "user", content: [
-            { type: "text", text: "อ่านยอดรวมและชื่อร้านค้าจากใบเสร็จนี้" },
-            { type: "image_url", image_url: { url: `data:${mime};base64,${base64}` } }
-          ] }
-        ]
+      const res = await fetch(RECEIPT_OCR_ENDPOINT, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          accept: "application/json",
+          ...(process.env.NVIDIA_API_KEY ? { authorization: `Bearer ${process.env.NVIDIA_API_KEY}` } : {})
+        },
+        body: JSON.stringify({ input: [{ type: "image_url", url: `data:${mime};base64,${base64}` }], merge_levels: ["sentence"] })
       });
-      const raw = completion.choices[0]?.message?.content ?? "{}";
-      // บางโมเดล (โดยเฉพาะเมื่อไม่ได้บังคับ response_format) ยังห่อคำตอบด้วย ```json ... ``` ทั้งที่สั่งห้ามแล้ว — ตัดออกกันพังก่อน parse
-      const cleaned = raw.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
-      const parsed = JSON.parse(cleaned || "{}");
-      const amount = Number(parsed.amount);
-      if (!Number.isFinite(amount) || amount <= 0 || amount > 10_000_000) return { error: "unreadable" }; // โมเดลตอบสำเร็จ แต่ไม่เจอยอดเงินที่สมเหตุสมผลในภาพจริง ๆ
-      const merchant = String(parsed.merchant ?? "อื่น ๆ").trim().slice(0, 120) || "อื่น ๆ";
+      if (!res.ok) { const err = new Error(`Receipt OCR NIM: ${res.status}`); err.status = res.status; throw err; }
+      const json = await res.json();
+      const detections = json?.data?.[0]?.text_detections ?? [];
+      const lines = detections
+        .map((d) => {
+          const points = d.bounding_box?.points ?? [];
+          const avgY = points.length ? points.reduce((sum, p) => sum + p.y, 0) / points.length : 0;
+          return { text: String(d.text_prediction?.text ?? "").trim(), y: avgY };
+        })
+        .filter((l) => l.text.length > 0)
+        .sort((a, b) => a.y - b.y);
+      if (!lines.length) return { error: "unreadable" };
+
+      const lower = (t) => t.toLowerCase();
+      const hasAny = (t, hints) => hints.some((h) => lower(t).includes(h));
+
+      // ยอดรวม: หาเลขที่อยู่ติดกับป้าย "รวม/รวมทั้งสิ้น/total" (ข้ามบรรทัด VAT/ส่วนลด/เงินทอน) ถ้าไม่เจอ fallback เป็นเลขทศนิยม 2 ตำแหน่งตัวสุดท้ายในใบเสร็จ (มักเป็นยอดสุทธิ)
+      let amount = null;
+      for (let i = 0; i < lines.length; i++) {
+        if (hasAny(lines[i].text, RECEIPT_SKIP_HINTS)) continue;
+        if (hasAny(lines[i].text, RECEIPT_TOTAL_LABEL_HINTS)) {
+          const cleaned = lines[i].text.replace(/,/g, "");
+          const inline = cleaned.match(/(\d+(?:\.\d{1,2})?)/);
+          const value = inline ? Number(inline[1]) : (lines[i + 1] ? Number(lines[i + 1].text.replace(/,/g, "").match(/(\d+(?:\.\d{1,2})?)/)?.[1]) : null);
+          if (Number.isFinite(value) && value > 0) amount = value;
+        }
+      }
+      if (!amount) {
+        const candidates = lines.filter((l) => !hasAny(l.text, RECEIPT_SKIP_HINTS) && /\d+\.\d{2}\b/.test(l.text));
+        const last = candidates[candidates.length - 1];
+        if (last) { const m = last.text.replace(/,/g, "").match(/(\d+(?:\.\d{1,2})?)/); amount = m ? Number(m[1]) : null; }
+      }
+      if (!Number.isFinite(amount) || amount <= 0 || amount > 10_000_000) return { error: "unreadable" };
+
+      // ชื่อร้าน: มักอยู่บรรทัดบนสุดของใบเสร็จ ข้ามบรรทัดที่ดูเป็นเลขที่ใบเสร็จ/วันที่/ที่อยู่ล้วน ๆ
+      const merchantLine = lines.find((l) => l.text.length >= 2 && l.text.length <= 60 && !/^\d[\d\s\-.\/:]*$/.test(l.text));
+      const merchant = (merchantLine?.text ?? "อื่น ๆ").slice(0, 120) || "อื่น ๆ";
+
       return { receipt: { merchant, amount } };
     } catch (error) {
-      const status = error?.status ?? error?.response?.status;
-      const isServerError = typeof status === "number" && status >= 500;
+      const status = error?.status;
+      const isServerError = status === 503 || (typeof status === "number" && status >= 500);
       console.warn(`Receipt AI read failed (attempt ${attempt + 1}/2, status=${status ?? "n/a"}):`, error.message);
-      if (attempt === 0 && isServerError) continue; // ลองใหม่อีกครั้งเฉพาะ error 5xx (ฝั่ง provider พัง) ไม่ retry error อื่น เช่น 400 (รูปแบบ request ผิดเอง ลองใหม่ก็พังเหมือนเดิม)
-      return { error: "system" }; // ทั้ง 5xx ที่ retry แล้วไม่หาย และ error อื่น ๆ (network, parse ผิดปกติ ฯลฯ) ถือเป็นปัญหาฝั่งระบบทั้งหมด ไม่ใช่ความผิดภาพ
+      if (attempt === 0 && isServerError) continue;
+      return { error: "system" };
     }
   }
 }
@@ -2053,3 +2081,4 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
   }
 });
 app.listen(Number(process.env.PORT ?? 3000), () => console.log(`Ta Phin listening on ${process.env.PORT ?? 3000}`));
+
