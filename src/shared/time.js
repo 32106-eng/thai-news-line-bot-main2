@@ -54,3 +54,32 @@ export function daysRemaining(date) {
   if (Number.isNaN(value.getTime())) return 0;
   return Math.max(0, Math.ceil((value.getTime() - Date.now()) / 86_400_000));
 }
+
+/** เที่ยงคืนของ "วันนี้" ตามเวลา Asia/Bangkok (UTC+7 คงที่ ไม่มี DST) — ใช้เทียบกับ Firestore Timestamp ตรง ๆ ได้ (ดู tokenUsage.js) */
+export function startOfTodayBangkok(reference = new Date()) {
+  const p = Object.fromEntries(
+    new Intl.DateTimeFormat("en-CA", { timeZone: BANGKOK_TZ, year: "numeric", month: "2-digit", day: "2-digit" })
+      .formatToParts(reference)
+      .map(({ type, value }) => [type, value])
+  );
+  return new Date(`${p.year}-${p.month}-${p.day}T00:00:00+07:00`);
+}
+
+/** เที่ยงคืนวันจันทร์ของสัปดาห์นี้ตามเวลา Asia/Bangkok (สัปดาห์เริ่มวันจันทร์) */
+export function startOfWeekBangkok(reference = new Date()) {
+  const p = Object.fromEntries(
+    new Intl.DateTimeFormat("en-CA", { timeZone: BANGKOK_TZ, year: "numeric", month: "2-digit", day: "2-digit" })
+      .formatToParts(reference)
+      .map(({ type, value }) => [type, value])
+  );
+  // หา day-of-week จากปี-เดือน-วันตามเวลาไทยตรง ๆ ผ่าน Date.UTC (day-of-week เป็นฟังก์ชันของปฏิทินล้วน ๆ ไม่ขึ้นกับ timezone ที่ใช้คำนวณ)
+  // ห้ามเอา getUTCDay() จาก Date ที่มี offset +07:00 มาใช้ตรง ๆ เพราะเที่ยงคืนไทยคือ 17:00 UTC ของ "วันก่อนหน้า" เสมอ จะได้ day-of-week เพี้ยนไปวันนึง
+  const asUtcMidnight = Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day));
+  const dayOfWeek = new Date(asUtcMidnight).getUTCDay(); // 0=อาทิตย์...6=เสาร์ ของวันที่ตามปฏิทินไทย
+  const diffToMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+  const monday = new Date(asUtcMidnight - diffToMonday * 86_400_000);
+  const my = monday.getUTCFullYear();
+  const mm = String(monday.getUTCMonth() + 1).padStart(2, "0");
+  const md = String(monday.getUTCDate()).padStart(2, "0");
+  return new Date(`${my}-${mm}-${md}T00:00:00+07:00`);
+}
