@@ -13,7 +13,10 @@
 //   ถ้าไม่ตั้ง SLIP_VISION_MODEL จะ fallback ไปที่ OPENAI_VISION_MODEL / OPENAI_MODEL เหมือนเดิม
 const slipVisionModel = process.env.SLIP_VISION_MODEL || process.env.OPENAI_VISION_MODEL || process.env.OPENAI_MODEL;
 
-export async function readSlip(ai, visionModel, mime, base64) {
+// options.onUsage(({ model, usage }) => ...): เรียกทันทีหลังได้ completion กลับมาสำเร็จ (ก่อนแกะ/parse JSON)
+// เพื่อบันทึกโทเค็นที่ใช้จริง แม้ภายหลังจะ parse ล้มเหลวก็ยังนับว่าใช้โทเค็นไปแล้ว (ดู tokenUsage.js) — ไม่ส่งมาก็ได้ (เช่น เรียกจากที่ที่ยังไม่ผูก tokenUsageService)
+export async function readSlip(ai, visionModel, mime, base64, options = {}) {
+  const { onUsage } = options;
   const model = slipVisionModel || visionModel;
   if (!ai || !model) return null;
   // ลองใหม่ได้ 1 ครั้งถ้าเจอ error 5xx (เช่น "EngineCore encountered an issue" จาก NVIDIA NIM) เพราะมักเป็นปัญหาชั่วคราวฝั่ง provider
@@ -55,6 +58,7 @@ export async function readSlip(ai, visionModel, mime, base64) {
           }
         ]
       });
+      if (completion.usage) { try { onUsage?.({ model, usage: completion.usage }); } catch (error) { console.warn("Token usage callback failed:", error.message); } }
       const raw = completion.choices[0]?.message?.content ?? "{}";
       // บางโมเดลยังห่อคำตอบด้วย ```json ... ``` หรือพูดนำก่อน/หลัง JSON ทั้งที่สั่งห้ามแล้ว — ตัด markdown fence ออกก่อน
       // แล้วดึงเฉพาะช่วง { ... } แรกที่เจอ กันกรณีมีประโยคอธิบายนำหน้า (เช่น "ข้อมูลที่อ่านได้จากสลิปนี้คือ {...}")
