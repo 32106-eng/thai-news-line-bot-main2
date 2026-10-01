@@ -18,7 +18,9 @@ export function buildSubscriptionCollections(firebaseApp) {
     auditLogs: db.collection("panuan_audit_logs"),               // doc id = auto, append-only
     admins: db.collection("panuan_admins"),                      // doc id = username
     groupLinks: db.collection("panuan_group_links"),             // doc id = groupId (LINE group ที่บอทถูกเชิญเข้า)
-    groupDebts: db.collection("panuan_group_debts")               // doc id = auto, หนี้ระหว่างสมาชิกในกลุ่ม
+    groupDebts: db.collection("panuan_group_debts"),              // doc id = auto, หนี้ระหว่างสมาชิกในกลุ่ม
+    tokenUsage: db.collection("panuan_token_usage"),              // doc id = auto, การใช้โทเค็น AI ต่อครั้ง (ดู tokenUsage.js)
+    adminChatAuth: db.collection("panuan_admin_chat_auth")        // doc id = LINE userId, สถานะ "รอรหัสผ่านแอดมิน" ชั่วคราว (ดู adminChatAuth.js)
   };
 }
 
