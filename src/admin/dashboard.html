@@ -98,6 +98,7 @@
     <button class="tab active" data-tab="premium">รายชื่อ Premium</button>
     <button class="tab" data-tab="reviews">รอตรวจสอบ</button>
     <button class="tab" data-tab="logs">Audit Log</button>
+    <button class="tab" data-tab="tokens">การใช้โทเค็น</button>
   </div>
 
   <div class="tabpanel" id="panel-premium">
@@ -129,6 +130,14 @@
     <section>
       <h2>Audit Log ล่าสุด</h2>
       <div id="logs"></div>
+    </section>
+  </div>
+
+  <div class="tabpanel" id="panel-tokens" hidden>
+    <section>
+      <h2>การใช้โทเค็น AI</h2>
+      <div class="grid" id="tokenSummaryGrid" style="margin-bottom:16px"></div>
+      <div id="tokenUsageList"></div>
     </section>
   </div>
 </main>
@@ -323,8 +332,28 @@ async function loadLogs() {
   $('#logs').innerHTML = d.logs.map(l => `<div class="log"><span><b>${l.eventType}</b> ${l.userId ? '· ' + l.userId : ''} ${l.transactionReference ? '· ' + l.transactionReference : ''}</span><span>${l.createdAt ?? ''}</span></div>`).join('') || '<div class="empty">ยังไม่มีบันทึก</div>';
 }
 
+function renderTokenUsage(d) {
+  const fmt = (n) => new Intl.NumberFormat('th-TH').format(n);
+  $('#tokenSummaryGrid').innerHTML = [
+    card(fmt(d.today), 'โทเค็นวันนี้ (รวมทุกคน)', true),
+    card(fmt(d.week), 'โทเค็นสัปดาห์นี้ (รวมทุกคน)')
+  ].join('');
+  const el = $('#tokenUsageList');
+  if (!d.users.length) { el.innerHTML = '<div class="empty">ยังไม่มีการใช้โทเค็น AI เลย</div>'; return; }
+  el.innerHTML = `<table class="plist"><thead><tr><th>ชื่อ LINE</th><th>วันนี้</th><th>สัปดาห์นี้</th></tr></thead><tbody>
+    ${d.users.map(u => `
+      <tr>
+        <td><div class="name">${esc(u.displayName) || '(ไม่พบชื่อ — อาจบล็อกบอทไปแล้ว)'}</div><div class="uid">${esc(u.userId)}</div></td>
+        <td>${fmt(u.today)}</td>
+        <td>${fmt(u.week)}</td>
+      </tr>`).join('')}
+  </tbody></table>`;
+}
+
+async function loadTokenUsage() { renderTokenUsage(await api('/api/token-usage')); }
+
 async function loadAll() {
-  try { await Promise.all([loadOverview(), loadPremiumUsers(), loadReviews(), loadLogs()]); }
+  try { await Promise.all([loadOverview(), loadPremiumUsers(), loadReviews(), loadLogs(), loadTokenUsage()]); }
   catch (e) { if (e.message !== 'unauthorized') console.error(e); }
 }
 
