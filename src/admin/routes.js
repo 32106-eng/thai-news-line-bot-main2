@@ -6,11 +6,11 @@ import { toDate } from "../subscription/db.js";
 import { SUB_STATUS } from "../subscription/subscriptions.js";
 import { SESSION_STATUS } from "../subscription/paymentSessions.js";
 import { TX_STATUS } from "../subscription/paymentTransactions.js";
-import { formatThaiDateTime } from "../shared/time.js";
+import { formatThaiDateTime, startOfTodayBangkok, startOfWeekBangkok } from "../shared/time.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-export function createAdminRouter({ collections, adminAuth, subscriptionService, paymentTransactionService }) {
+export function createAdminRouter({ collections, adminAuth, subscriptionService, paymentTransactionService, tokenUsageService }) {
   const router = express.Router();
   const dashboardHtmlPromise = fs.readFile(path.join(__dirname, "dashboard.html"), "utf8");
 
@@ -140,6 +140,25 @@ export function createAdminRouter({ collections, adminAuth, subscriptionService,
       startedAt: u.startedAt ? formatThaiDateTime(u.startedAt) : null
     })));
     res.json({ users: withNames });
+  });
+
+  // สรุปการใช้โทเค็น AI แยกรายคน วันนี้/สัปดาห์นี้ (เรียงตามสัปดาห์นี้มากไปน้อย) — คำสั่งแชท "แอดมิน" บน LINE ก็ดึงจากตัวเดียวกันนี้ (ดู tokenUsage.js)
+  router.get("/api/token-usage", requireAdmin, async (_req, res) => {
+    const [today, week] = await Promise.all([
+      tokenUsageService.summarizeSince(startOfTodayBangkok()),
+      tokenUsageService.summarizeSince(startOfWeekBangkok())
+    ]);
+    const todayByUser = new Map(today.rows.map((r) => [r.userId, r.tokens]));
+    const weekByUser = new Map(week.rows.map((r) => [r.userId, r.tokens]));
+    const userIds = [...new Set([...todayByUser.keys(), ...weekByUser.keys()])];
+    const rows = await Promise.all(userIds.map(async (userId) => ({
+      userId,
+      displayName: await getLineDisplayName(userId),
+      today: todayByUser.get(userId) ?? 0,
+      week: weekByUser.get(userId) ?? 0
+    })));
+    rows.sort((a, b) => b.week - a.week);
+    res.json({ today: today.total, week: week.total, users: rows });
   });
 
   // ค้นหา user ตาม LINE userId ตรง ๆ เพื่อดูสถานะ Premium ก่อนยกเลิก
