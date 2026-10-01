@@ -12,7 +12,7 @@ import { initializeApp, cert } from "firebase-admin/app";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 
 import { buildSubscriptionCollections, toDate } from "./subscription/db.js";
-import { createAuditLogger } from "./subscription/auditLog.js";
+import { createAuditLogger, AUDIT_EVENTS } from "./subscription/auditLog.js";
 import { createSubscriptionService, PLAN } from "./subscription/subscriptions.js";
 import { createPaymentSessionService, PLAN_CATALOG } from "./subscription/paymentSessions.js";
 import { createUploadSessionService } from "./subscription/uploadSessions.js";
@@ -25,7 +25,9 @@ import { createRichMenuService } from "./subscription/richMenu.js";
 import { createSubscriptionLineHandlers } from "./subscription/lineHandlers.js";
 import { createGroupLinkService, CONFIRM_WINDOW_MINUTES } from "./subscription/groupLinks.js";
 import { createGroupDebtService } from "./subscription/groupDebts.js";
-import { formatThaiDate } from "./shared/time.js";
+import { createTokenUsageService } from "./subscription/tokenUsage.js";
+import { createAdminChatAuthService } from "./subscription/adminChatAuth.js";
+import { formatThaiDate, startOfTodayBangkok, startOfWeekBangkok } from "./shared/time.js";
 import { createAdminAuth } from "./admin/auth.js";
 import { createAdminRouter } from "./admin/routes.js";
 
@@ -75,6 +77,10 @@ const paymentTransactionService = createPaymentTransactionService(subCollections
 });
 const qrService = createQrService();
 const richMenuService = createRichMenuService();
+const tokenUsageService = createTokenUsageService(subCollections);
+const adminChatAuthService = createAdminChatAuthService(subCollections);
+// รหัสผ่านฝั่งแชท LINE สำหรับคำสั่ง "แอดมิน" (คนละชุดกับ /admin เว็บ — ดู adminChatAuth.js) ตั้งเองผ่าน .env ได้ ถ้าไม่ตั้งจะ fallback เป็นค่านี้
+const ADMIN_CHAT_PASSWORD = process.env.ADMIN_CHAT_PASSWORD || "2122012";
 function buildQrImageUrl(sessionId) {
   const base = process.env.PUBLIC_BASE_URL?.replace(/\/$/, "");
   return base ? `${base}/qr/${sessionId}.png` : null;
@@ -91,10 +97,11 @@ const subLineHandlers = createSubscriptionLineHandlers({
   visionModel,
   buildQrImageUrl,
   getLineDisplayName,
-  makeSlipThumbnail
+  makeSlipThumbnail,
+  tokenUsageService
 });
 const adminAuth = createAdminAuth(subCollections);
-app.use("/admin", createAdminRouter({ collections: subCollections, adminAuth, subscriptionService, paymentTransactionService }));
+app.use("/admin", createAdminRouter({ collections: subCollections, adminAuth, subscriptionService, paymentTransactionService, tokenUsageService }));
 
 // ---------------------------------------------------------------------------
 // กลุ่มจดบัญชี (group ledger): บอทเข้ากลุ่มได้เฉพาะที่มีคนยืนยันว่าเป็นเจ้าของ Premium เท่านั้น
@@ -240,7 +247,7 @@ function parse(text) {
 }
 // รวม "จำแนกรายรับ/รายจ่าย" (เมื่อกำกวม) และ "จำแนกหมวดหมู่" (เมื่อยังเป็น "อื่น ๆ") ให้เป็น AI call เดียว
 // เดิมยิง 2 ครั้งติดกัน (sequential) ทำให้แชท 1:1 ตอบช้าลงเท่าตัวในเคสที่ทั้งกำกวมและหมวดไม่ชัด
-async function enrichWithAi(tx, source, typeWasAmbiguous) {
+async function enrichWithAi(tx, source, typeWasAmbiguous, userId) {
   const needType = typeWasAmbiguous;
   const needCategory = tx.type === "expense" && tx.category === "อื่น ๆ";
   if (!ai || !process.env.OPENAI_MODEL || (!needType && !needCategory)) return tx;
@@ -263,6 +270,7 @@ async function enrichWithAi(tx, source, typeWasAmbiguous) {
         { role: "user", content: source }
       ]
     });
+    if (completion.usage) tokenUsageService.record({ userId, feature: "enrich", model: process.env.OPENAI_MODEL, usage: completion.usage }); // fire-and-forget เหมือน auditLog — ห้ามรอ/พังของจริง
     const parsed = JSON.parse(completion.choices[0]?.message?.content ?? "{}");
     let next = tx;
     if (needType && (parsed.type === "income" || parsed.type === "expense") && parsed.type !== next.type) {
@@ -582,7 +590,7 @@ async function saveConfirmedSlipTx({ userId, type, merchant, amount, category, a
   const resolvedCategory = type === "income" ? "รายรับ" : (category || categoryFor(merchant));
   let tx = { id: crypto.randomUUID(), type, category: resolvedCategory, description: merchant, amount, createdAt: new Date().toISOString() };
   // ถ้าผู้ใช้เลือกหมวดเองแล้ว ไม่ต้องให้ AI มาเดาซ้ำทับ (เฉพาะตอนยังเป็น "อื่น ๆ" หรือไม่ได้เลือกมาเท่านั้นถึงให้ AI ช่วย)
-  if (type === "expense" && tx.category === "อื่น ๆ") tx = await enrichWithAi(tx, merchant);
+  if (type === "expense" && tx.category === "อื่น ๆ") tx = await enrichWithAi(tx, merchant, undefined, userId);
   if (isGroupChat) tx = { ...tx, authorId, authorName: await getGroupMemberName(userId, authorId) };
   user.transactions.push(tx);
   await saveUser(userId, user);
@@ -995,6 +1003,25 @@ async function getLineProfile(userId) {
     return { displayName: profile.displayName ?? null, pictureUrl: profile.pictureUrl ?? null };
   } catch (error) { console.warn("LINE profile fetch failed:", error.message); return null; }
 }
+// สรุปการใช้โทเค็น AI รายคน วันนี้/สัปดาห์นี้ เป็นข้อความ — ใช้ตอบคำสั่งแชท "แอดมิน" (หน้าเว็บแอดมินมีตารางแบบเต็มอยู่แล้วที่ /admin)
+const TOKEN_SUMMARY_TOP_N = 15; // จำกัดจำนวนคนที่ดึงชื่อ LINE มาโชว์ กันข้อความยาวเกินไปและกัน rate limit ของ LINE profile API
+async function buildTokenUsageSummaryText() {
+  const [today, week] = await Promise.all([
+    tokenUsageService.summarizeSince(startOfTodayBangkok()),
+    tokenUsageService.summarizeSince(startOfWeekBangkok())
+  ]);
+  if (week.total <= 0) return "ยังไม่มีการใช้โทเค็น AI ในสัปดาห์นี้เลย";
+  const todayByUser = new Map(today.rows.map((r) => [r.userId, r.tokens]));
+  const top = week.rows.slice(0, TOKEN_SUMMARY_TOP_N);
+  const lines = await Promise.all(top.map(async (row, i) => {
+    const name = (await getLineDisplayName(row.userId).catch(() => null)) ?? `${row.userId.slice(0, 10)}...`;
+    const todayTokens = todayByUser.get(row.userId) ?? 0;
+    return `${i + 1}. ${name}\n   วันนี้: ${money(todayTokens)} | สัปดาห์นี้: ${money(row.tokens)}`;
+  }));
+  const moreCount = week.rows.length - top.length;
+  const moreLine = moreCount > 0 ? `\n\n...และอีก ${moreCount} คน` : "";
+  return `📊 สรุปการใช้โทเค็น AI\n\nรวมวันนี้: ${money(today.total)} โทเค็น\nรวมสัปดาห์นี้: ${money(week.total)} โทเค็น\n\nแยกรายคน (เรียงตามสัปดาห์นี้):\n${lines.join("\n")}${moreLine}`;
+}
 // ดึงชื่อสมาชิกกลุ่ม (ใช้แสดง "ใครจดอะไรบ้าง" ในกองกลาง) — ใช้ได้เฉพาะ userId ที่เคยส่งข้อความในกลุ่มนี้มาก่อน
 // (ข้อจำกัดของ LINE: ดึงรายชื่อสมาชิกกลุ่มทั้งหมดล่วงหน้าไม่ได้ ต้องรู้ userId ก่อนถึงจะสอบถามโปรไฟล์ได้)
 async function getGroupMemberName(groupId, userId) {
@@ -1031,7 +1058,7 @@ function groupTransactionsByMonth(transactions) {
   return [...byKey.entries()].sort((a, b) => (a[0] < b[0] ? 1 : -1));
 }
 function monthLabel(key) { const [year, month] = key.split("-"); return `${month}/${year}`; }
-async function askFinanceAi(user, question, isPremium = false) {
+async function askFinanceAi(user, question, isPremium = false, userId = null) {
   if (!ai || !process.env.OPENAI_MODEL) return null;
   try {
     const month = user.transactions.filter((tx) => sameMonth(tx.createdAt));
@@ -1055,6 +1082,7 @@ async function askFinanceAi(user, question, isPremium = false) {
         { role: "user", content: `${context}\n\nคำถามจากผู้ใช้: ${question}` }
       ]
     });
+    if (completion.usage) tokenUsageService.record({ userId, feature: "ask", model: process.env.OPENAI_MODEL, usage: completion.usage }); // fire-and-forget เหมือน auditLog — ห้ามรอ/พังของจริง
     return completion.choices[0]?.message?.content?.trim() || null;
   } catch (error) { console.warn("AI answer failed:", error.message); return null; }
 }
@@ -1548,537 +1576,4 @@ app.post("/api/premium/checkout", express.json(), async (req, res) => {
   const status = await subscriptionService.getStatusView(uid).catch(() => ({ plan: PLAN.FREE, active: false }));
   if (status.active) return res.json({ alreadyPremium: true, expiresAt: status.expiresAt });
   const { session } = await paymentSessionService.createOrReuse(uid, requestedPlan);
-  const qr = qrService.generateForSession(session);
-  if (!qr.available) return res.status(503).json({ error: "ยังไม่พร้อมรับชำระเงิน กรุณาติดต่อผู้ดูแลระบบ", note: qr.note });
-  res.json({
-    sessionId: session.id,
-    referenceId: session.referenceId,
-    plan: session.plan ?? requestedPlan,
-    months: session.months ?? (requestedPlan === "YEARLY" ? 12 : 1),
-    amount: session.amount,
-    expiresAt: session.expiresAt,
-    qrImageUrl: `/qr/${session.id}.png`
-  });
-});
-// รับสลิป (base64) จากหน้าเว็บ แล้ววิ่งผ่าน OCR + verify path เดียวกับฝั่ง LINE (paymentTransactionService.submitAndVerify)
-// จำกัดขนาด body ไว้ที่ 8mb พอสำหรับรูปสลิปถ่ายจากมือถือ (ไม่ใช้ multer เพราะ client ส่งเป็น JSON base64 ตรงไปตรงมา)
-app.post("/api/premium/slip", express.json({ limit: "8mb" }), async (req, res) => {
-  if (!allowed(req)) return res.sendStatus(401);
-  const uid = req.query.u;
-  const { sessionId, mime, base64 } = req.body ?? {};
-  if (!sessionId || !mime || !base64) return res.status(400).json({ error: "ข้อมูลสลิปไม่ครบ" });
-  if (!/^image\/(png|jpe?g|webp)$/i.test(mime)) return res.status(400).json({ error: "รองรับเฉพาะไฟล์รูปภาพ (jpg/png/webp)" });
-
-  const validation = await paymentSessionService.validateForUpload(sessionId, uid);
-  if (!validation.ok) {
-    const reasonMsg = {
-      EXPIRED: "รายการชำระเงินหมดอายุแล้ว กรุณากดสมัครใหม่อีกครั้ง",
-      USER_MISMATCH: "ไม่พบรายการชำระเงินนี้สำหรับบัญชีของคุณ",
-      ALREADY_CONSUMED: "รายการนี้ถูกใช้ไปแล้ว กรุณากดสมัครใหม่หากต้องการสมัครอีกครั้ง",
-      NOT_FOUND: "ไม่พบรายการชำระเงิน กรุณากดสมัครใหม่อีกครั้ง"
-    }[validation.reason] ?? "ไม่พบรายการชำระเงิน กรุณากดสมัครใหม่อีกครั้ง";
-    return res.status(409).json({ error: reasonMsg, reason: validation.reason });
-  }
-
-  let ocrData = null;
-  try {
-    // รูปจากมือถือที่อัปโหลดผ่านเว็บมักมีความละเอียดสูงมาก (ต่างจากฝั่ง LINE ที่ downloadLineImage() ย่อให้แล้วเสมอ)
-    // ส่ง base64 ดิบตรง ๆ ให้ VLM ทำให้ payload ใหญ่เกินไปหรือถูกย่อคุณภาพต่ำฝั่ง provider เอง ส่งผลให้อ่านชื่อ/เลขอ้างอิงผิดบ่อย
-    // ย่อขนาดให้เหมือนเส้นทาง LINE ก่อนเสมอ (1600px, quality 82) เพื่อให้ผลอ่านสม่ำเสมอกันทั้งสองช่องทาง
-    const rawBuffer = Buffer.from(base64, "base64");
-    const resized = await sharp(rawBuffer).rotate().resize({ width: 1600, height: 1600, fit: "inside", withoutEnlargement: true }).jpeg({ quality: 82 }).toBuffer();
-    const resizedBase64 = resized.toString("base64");
-    ocrData = await readSlip(ai, visionModel, "image/jpeg", resizedBase64);
-    // แนบรูปสลิปย่อขนาดเล็กติดไปกับ ocrData เหมือนฝั่ง LINE (lineHandlers.js handleSlipImage) — เดิม endpoint นี้ไม่เคยแนบเลย
-    // ทำให้สลิปที่อัปโหลดผ่านเว็บ (หน้า Pro) ไม่มีรูปให้แอดมินเทียบตอนตรวจสอบ ต่างจากสลิปที่ส่งผ่านแชท LINE
-    if (ocrData) ocrData.slipImageBase64 = await makeSlipThumbnail(rawBuffer);
-  } catch (error) {
-    console.error("Web slip OCR failed:", error.message);
-    return res.status(502).json({ error: "ระบบประมวลผลภาพใช้เวลานานกว่าปกติ กรุณาลองใหม่อีกครั้ง" });
-  }
-  if (!ocrData) return res.status(422).json({ error: "อ่านข้อมูลจากสลิปนี้ไม่ได้ ลองถ่ายให้เห็นยอดเงินและเลขอ้างอิงชัด ๆ อีกครั้ง" });
-
-  const result = await paymentTransactionService.submitAndVerify({ userId: uid, paymentSession: validation.session, ocrData });
-  await paymentSessionService.consume(validation.session.id);
-  if (result.outcome === TX_STATUS.VERIFIED) await richMenuService.switchTo(uid, "PREMIUM").catch(() => {});
-
-  const messages = {
-    [TX_STATUS.VERIFIED]: "ชำระเงินสำเร็จ 🎉 ตอนนี้คุณเป็นสมาชิก Premium แล้ว",
-    [TX_STATUS.PENDING_REVIEW]: "ได้รับสลิปแล้ว ระบบกำลังตรวจสอบเพิ่มเติม เจ้าหน้าที่จะยืนยันให้เร็วที่สุด กรุณารอการแจ้งเตือนอีกครั้ง 🙏",
-    [TX_STATUS.REJECTED]: "ไม่สามารถยืนยันการชำระเงินได้ กรุณาตรวจสอบสลิปและลองใหม่อีกครั้ง",
-    [TX_STATUS.DUPLICATE]: "สลิปนี้ถูกใช้งานไปแล้ว"
-  };
-  res.json({ outcome: result.outcome, message: messages[result.outcome] ?? messages[TX_STATUS.REJECTED] });
-});
-app.get("/api/dashboard", async (req, res) => {
-  if (!allowed(req)) return res.sendStatus(401);
-  const uid = req.query.u;
-  const user = await getUser(uid), current = user.transactions.filter((tx) => sameMonth(tx.createdAt)), t = totals(current);
-  const categories = Object.entries(current.filter((tx) => tx.type === "expense").reduce((o, tx) => ({ ...o, [tx.category]: (o[tx.category] ?? 0) + tx.amount }), {})).map(([category, amount]) => ({ category, amount })).sort((a, b) => b.amount - a.amount);
-  const now = new Date(), history = Array.from({ length: 6 }, (_, index) => { const d = new Date(now.getFullYear(), now.getMonth() - (5 - index), 1), p = parts(d), total = totals(user.transactions.filter((tx) => sameMonth(tx.createdAt, p.year, p.month))); return { label: new Intl.DateTimeFormat("th-TH", { month: "short", timeZone: "Asia/Bangkok" }).format(d), ...total }; });
-  // โปรไฟล์สำหรับหัวการ์ด "สรุป": แชทกลุ่มไม่ดึงชื่อ/รูปจริงมาโชว์ (กันข้อมูลส่วนตัวรั่วถ้ามีคนแอบดูหน้าจอ) ใช้ label กองกลางแทน
-  // แชท 1:1 ดึงชื่อ+รูปโปรไฟล์ LINE จริงมาแสดงแทนชื่อบอทเดิม
-  const groupLink = await groupLinkService.getRaw(uid).catch(() => null);
-  const statusUid = groupLink?.ownerId ?? uid;
-  const [profile, planStatus] = await Promise.all([
-    groupLink ? Promise.resolve(null) : getLineProfile(uid),
-    subscriptionService.getStatusView(statusUid).catch(() => ({ plan: PLAN.FREE, active: false }))
-  ]);
-  res.json({
-    label: `ข้อมูลเดือน ${new Intl.DateTimeFormat("th-TH", { month: "long", year: "numeric", timeZone: "Asia/Bangkok" }).format(now)}`,
-    income: t.income, expense: t.expense, balance: t.income - t.expense, categories, history,
-    recent: [...user.transactions].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 30).map((tx) => ({ ...tx, date: new Intl.DateTimeFormat("th-TH", { dateStyle: "short", timeZone: "Asia/Bangkok" }).format(new Date(tx.createdAt)) })),
-    profile: {
-      displayName: groupLink ? "กองกลางของกลุ่ม" : (profile?.displayName ?? null),
-      pictureUrl: groupLink ? null : (profile?.pictureUrl ?? null),
-      isGroup: Boolean(groupLink),
-      plan: planStatus.plan ?? PLAN.FREE,
-      active: Boolean(planStatus.active)
-    }
-  });
-});
-// เรนเดอร์ QR ของ payment session เป็นภาพ PNG จริง เพื่อให้ LINE Image Message ใช้ originalContentUrl/
-// previewImageUrl ชี้มาที่นี่ได้ (LINE ต้องการ URL รูปภาพที่เข้าถึงได้จริง จะส่ง payload string ตรง ๆ ไม่ได้)
-app.get("/qr/:sessionId.png", async (req, res) => {
-  try {
-    const session = await paymentSessionService.getById(req.params.sessionId);
-    if (!session) return res.sendStatus(404);
-    const qr = qrService.generateForSession(session);
-    if (!qr.available) return res.sendStatus(404);
-    res.set({ "content-type": "image/png", "cache-control": "no-store" });
-    await QRCode.toFileStream(res, qr.payload, { type: "png", width: 500, margin: 2 });
-  } catch (error) {
-    console.error("QR image render failed:", error.message);
-    res.sendStatus(500);
-  }
-});
-app.post("/webhook", express.raw({ type: "application/json" }), async (req, res) => {
-  if (!signatureValid(req.body, req.get("x-line-signature"))) return res.sendStatus(401);
-  res.sendStatus(200); const payload = JSON.parse(req.body.toString("utf8"));
-  for (const event of payload.events ?? []) {
-   try { // กันทั้งก้อน: ถ้า step ไหนใน event นี้ throw ไม่คาด (เช่น Firestore ล่มชั่วคราว) จะได้ไม่ทำให้ process ทั้งตัวตายไปด้วย (unhandled rejection)
-         // ทำให้ event ถัดไป/ข้อความถัดไปยังตอบได้ปกติ และเห็น error จริงใน log แทนที่จะเงียบสนิทไม่มีอะไรขึ้นเลย
-    // --- ผู้ใช้แอดบอทเป็นเพื่อนใหม่ (1-1 chat) — คนละ event กับ "join" (นั่นคือถูกเชิญเข้ากลุ่ม/ห้อง ดูด้านล่าง) ---
-    if (event.type === "follow") {
-      const uid = event.source?.userId;
-      if (!uid) continue;
-      try { await replyMessages(event.replyToken, [followWelcomeFlexMessage()]); }
-      catch (error) { console.error("Follow welcome message failed:", error.message); }
-      continue;
-    }
-    // --- บอทถูกเชิญเข้ากลุ่ม/ห้อง: เริ่มรอยืนยันเจ้าของ (spec: กลุ่มจดบัญชี) ---
-    if (event.type === "join") {
-      const groupId = event.source?.groupId ?? event.source?.roomId;
-      if (!groupId) continue;
-      try {
-        await groupLinkService.startPending(groupId);
-        await replyMessages(event.replyToken, [groupWelcomeFlexMessage()]);
-      } catch (error) { console.error("Group join handling failed:", error.message); }
-      continue;
-    }
-    // --- บอทถูกเตะ/ออกจากกลุ่มเอง: เคลียร์สถานะ link ทิ้ง ---
-    if (event.type === "leave") {
-      const groupId = event.source?.groupId ?? event.source?.roomId;
-      if (!groupId) continue;
-      try { await groupLinkService.removeLink(groupId); } catch (error) { console.error("Group leave cleanup failed:", error.message); }
-      continue;
-    }
-    // --- ปุ่ม "รายรับ/รายจ่าย" หลังอ่านสลิป (ดู receiptConfirmFlexMessage) — ยังไม่เคยบันทึก tx จริงจนกว่าจะถึงตรงนี้ ---
-    if (event.type === "postback") {
-      const data = event.postback?.data ?? "";
-      const params = new URLSearchParams(data);
-      // --- ปุ่ม "จดเลย" บนการ์ด quickLogFlexMessage (ปุ่มจากคำสั่ง "จดรายการ" บน Rich Menu) ---
-      // postback ไม่โผล่ข้อความในแชท ตอบกลับด้วยข้อความแนะนำวิธีพิมพ์ ให้ผู้ใช้พิมพ์เอง
-      // (ไม่ใส่ quick reply แบบ action type "message" เพราะกดแล้วข้อความจะถูกส่งเข้าแชททันที เหมือนปุ่ม message เดิม
-      // ขัดกับเจตนา "ครีน ไม่มีข้อความไปโผล่ก่อน" — ปล่อยให้ผู้ใช้พิมพ์เองในช่องแชทแทน)
-      if (params.get("quicklog") === "1") {
-        const pbSourceType = event.source?.type;
-        const pbIsGroupChat = pbSourceType === "group" || pbSourceType === "room";
-        const prefix = pbIsGroupChat ? "/บอท " : "";
-        const example1 = `${prefix}ข้าวมันไก่ 50`;
-        const example2 = `${prefix}เงินเดือน 20000`;
-        const message = { type: "text", text: `พิมพ์บอกยายได้เลยค่ะ เช่น\n- ${example1}\n- ${example2}\n\nยายจะจดและจัดประเภทให้อัตโนมัติค่ะ` };
-        try { await replyMessages(event.replyToken, [message]); } catch (error) { console.error("Could not reply", error.message); }
-        continue;
-      }
-      // --- ปุ่มเลือกแผนสมัคร Premium (รายเดือน/รายปี) บนการ์ด planPickerFlexMessage ---
-      if (params.has("pn_plan")) {
-        const planKey = params.get("pn_plan") === "YEARLY" ? "YEARLY" : "MONTHLY";
-        const pbSourceType = event.source?.type;
-        const pbUserId = pbSourceType === "group" || pbSourceType === "room" ? null : event.source?.userId;
-        const messages = [];
-        if (!pbUserId) messages.push({ type: "text", text: "สมัคร Premium ทำได้เฉพาะแชทส่วนตัวกับยายจันทร์เท่านั้นนะ" });
-        else {
-          let result;
-          try { result = await subLineHandlers.handlePlanSelected(pbUserId, planKey); }
-          catch (error) { console.error("Plan selected postback failed", error.message); result = { text: "เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง" }; }
-          if (result.qrImageUrl) messages.push(qrImageMessage(result.qrImageUrl));
-          messages.push({ type: "text", text: result.text.slice(0, 4900) });
-        }
-        try { await replyMessages(event.replyToken, messages); } catch (error) { console.error("Could not reply", error.message); }
-        continue;
-      }
-      // --- ปุ่ม "ลบ" บนการ์ดจดสำเร็จ (ดู txFlexMessage) — ลบรายการทันที ไม่ถามยืนยันซ้ำ ---
-      if (params.has("delete_tx")) {
-        const txId = params.get("delete_tx");
-        const delUserId = params.get("u");
-        let message;
-        if (!txId || !delUserId) message = noticeFlexMessage("ข้อมูลรายการหมดอายุแล้ว", "info");
-        else {
-          try {
-            const user = await getUser(delUserId);
-            const index = (user.transactions ?? []).findIndex((t) => t.id === txId);
-            if (index === -1) message = noticeFlexMessage("ไม่พบรายการนี้แล้ว อาจถูกลบไปก่อนหน้านี้", "info");
-            else {
-              const [removed] = user.transactions.splice(index, 1);
-              await saveUser(delUserId, user);
-              message = noticeFlexMessage(`ลบแล้ว: ${removed.description} ${money(removed.amount)} บาท`, "success");
-            }
-          } catch (error) { console.error("Delete tx postback failed", error.message); message = noticeFlexMessage("เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง", "error"); }
-        }
-        try { await replyMessages(event.replyToken, [message]); } catch (error) { console.error("Could not reply", error.message); }
-        continue;
-      }
-      if (params.get("slip_type") === "income" || params.get("slip_type") === "expense") {
-        const pbSourceType = event.source?.type;
-        const pbIsGroupChat = pbSourceType === "group" || pbSourceType === "room";
-        const pbUserId = pbIsGroupChat ? (event.source?.groupId ?? event.source?.roomId) : event.source?.userId;
-        if (!pbUserId) continue;
-        let message;
-        try {
-          const type = params.get("slip_type");
-          const step = params.get("slip_step") ?? "save"; // เดิมไม่มี step, บันทึกทันที — เผื่อ postback เก่าที่ยังไม่มี slip_step ค้างอยู่ในมือถือผู้ใช้ ให้ default เป็น "save" (พฤติกรรมเดิม)
-          const merchant = decodeURIComponent(params.get("m") ?? "อื่น ๆ").slice(0, 120) || "อื่น ๆ";
-          const amount = Number(params.get("a"));
-          const authorId = params.get("aid") ?? event.source?.userId ?? null;
-          if (!Number.isFinite(amount) || amount <= 0) message = "ข้อมูลสลิปหมดอายุแล้ว ลองส่งรูปใหม่อีกครั้ง";
-          else if (step === "category") {
-            // ปุ่ม "รายจ่าย" ถูกกด -> ยังไม่บันทึก แสดงการ์ดเลือกหมวดหมู่ต่อก่อน (ดู categoryPickerFlexMessage)
-            const pbUser = await getUser(pbUserId);
-            message = categoryPickerFlexMessage(merchant, amount, { authorId, categoryTheme: pbUser.confirmMessagePrefs?.categoryTheme, showAiPickButton: pbUser.confirmMessagePrefs?.showAiPickButton });
-          } else {
-            const category = decodeURIComponent(params.get("c") ?? ""); // ว่างได้ถ้ากด "ให้ยายเลือกให้" หรือเป็นรายรับ (ไม่มี c เลย)
-            const { user, tx } = await saveConfirmedSlipTx({ userId: pbUserId, type, merchant, amount, category, authorId, isGroupChat: pbIsGroupChat });
-            // confirmMessagePrefs ใช้ได้ทั้งกลุ่มและแชทส่วนตัว (ฟีเจอร์ Premium) — ผู้ใช้ที่ไม่เคยตั้งค่าจะได้ default เดิมอยู่แล้ว (ดู defaultConfirmMessagePrefs)
-            message = txFlexMessage(tx, { budget: budgetProgressFor(user, tx), dashboardUrl: dashboardEditUrl(pbUserId), userId: pbUserId, prefs: user.confirmMessagePrefs });
-          }
-        } catch (error) { console.error("Slip postback confirm failed", error.message); message = "เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง"; }
-        try { await (typeof message === "string" ? reply(event.replyToken, message) : replyMessages(event.replyToken, [message])); } catch (error) { console.error("Could not reply", error.message); }
-      }
-      continue;
-    }
-    if (event.type !== "message") continue;
-    const sourceType = event.source?.type; // "user" | "group" | "room"
-    const isGroupChat = sourceType === "group" || sourceType === "room";
-    // ในกลุ่ม/ห้อง: รายการทั้งหมดเข้ากองกลางเดียวกันที่คีย์ด้วย groupId/roomId
-    // ผู้จดแต่ละคนแยกด้วย authorId (LINE userId ของคนที่พิมพ์จริง — ไม่ใช่ userId ของกลุ่ม)
-    const userId = isGroupChat ? (event.source?.groupId ?? event.source?.roomId) : event.source?.userId;
-    const authorId = event.source?.userId ?? null; // มีเฉพาะตอนอยู่ในกลุ่ม/ห้อง (1:1 ไม่ต้องใช้ค่านี้)
-    if (!userId) continue;
-
-    // --- ในกลุ่ม/ห้อง: ข้อความตัวอักษรต้องขึ้นต้นด้วย "/บอท" เสมอ ไม่งั้นเงียบสนิท ไม่อ่านไม่ตอบ (spec: กลุ่มจดบัญชี) ---
-    // รูปภาพไม่ผ่านเงื่อนไขนี้ (แนบ prefix กับรูปพร้อมกันไม่ได้) — คุมด้วย groupLinkService.consumeReceiptWait แทน (ดูด้านล่าง)
-    if (isGroupChat && event.message?.type === "text") {
-      const original = event.message.text; // mention.mentionees[].index อ้างอิงตำแหน่งตัวอักษรใน text ต้นฉบับนี้เท่านั้น (ห้าม trim ก่อนคำนวณ offset)
-      const trimmedOriginal = original.trim();
-      const stripped = stripBotPrefix(trimmedOriginal);
-      if (stripped === null) continue; // ไม่มี "/บอท" นำหน้า -> ไม่ทำอะไรเลย
-      // offset = ตำแหน่งเริ่มต้นของเนื้อความที่เหลือ (stripped) เมื่อเทียบกับ original ต้นฉบับ
-      // หา index ของ "stripped" ใน "original" ตรง ๆ (กันกรณีมี whitespace นำหน้า/ระหว่าง prefix กับเนื้อหาไม่เท่ากัน)
-      const offset = original.indexOf(stripped, original.indexOf(BOT_PREFIX));
-      event.message.text = stripped; // ตัด prefix ออก แล้วปล่อยให้ logic เดิมด้านล่างทำงานเหมือน 1:1
-      if (event.message.mention?.mentionees?.length && offset >= 0) {
-        event.message.mention = {
-          mentionees: event.message.mention.mentionees
-            .map((m) => ({ ...m, index: m.index - offset }))
-            .filter((m) => m.index >= 0)
-        };
-      }
-    }
-
-    if (event.message?.type === "image" && isGroupChat) {
-      // ในกลุ่ม รูปภาพจะถูกอ่านก็ต่อเมื่อ "เพิ่งพิมพ์ /บอท สลิป มาก่อน" เท่านั้น (consumeReceiptWait เช็คทั้งคนส่งและเวลา)
-      // ไม่มีการสมัคร/จ่าย Premium ในกลุ่มเลย จึงไม่ต้องพึ่ง uploadSessionService/paymentSession แบบ 1:1
-      let message;
-      try {
-        const waiting = await groupLinkService.consumeReceiptWait(userId, authorId);
-        if (!waiting) { continue; } // ไม่มีใครสั่ง "/บอท สลิป" ไว้ก่อน (หรือหมดเวลาแล้ว) -> เพิกเฉยรูปนี้ทั้งหมด
-        if (!ai || !visionModel) message = noticeFlexMessage("ยังไม่ได้ตั้งค่าโมเดล AI แบบอ่านรูปภาพ (ตั้งค่า OPENAI_VISION_MODEL หรือ OPENAI_MODEL ที่รองรับรูปภาพใน .env) ตอนนี้พิมพ์รายการแทนได้ก่อน เช่น /บอท กาแฟ 60", "info");
-        else {
-          // ไม่มี "..." กำลังพิมพ์ในกลุ่ม/ห้อง เพราะ LINE ไม่รองรับ loading animation นอกแชท 1:1 (ทำได้แค่แชทเดี่ยวเท่านั้น)
-          // เลยตอบข้อความสั้น ๆ ผ่าน reply token ก่อนแทน (ใช้ได้แค่ครั้งเดียว) แล้วค่อย push ผลลัพธ์จริงตามหลัง
-          try { await reply(event.replyToken, "รอยายอ่านรูปแป๊บนึงนะจ๊ะ 👀"); } catch (error) { console.error("Could not reply", error.message); }
-          try {
-            const { mime, base64 } = await downloadLineImage(event.message.id);
-            const result = await readReceipt(mime, base64);
-            if (result.error === "system") message = noticeFlexMessage("ตอนนี้ระบบอ่านภาพขัดข้องชั่วคราว ไม่เกี่ยวกับความชัดของรูปเลย ลองส่งรูปเดิมอีกครั้งใน 1-2 นาที หรือพิมพ์รายการเองแทนได้เลย เช่น /บอท กาแฟ 60", "error");
-            else if (result.error === "unreadable") message = noticeFlexMessage("อ่านยอดเงินจากใบเสร็จนี้ไม่ได้ ลองถ่ายให้เห็นยอดรวมชัด ๆ อีกครั้ง หรือพิมพ์รายการเองแทนได้ เช่น /บอท กาแฟ 60", "error");
-            // ธีมสีของกลุ่มผูกกับ confirmMessagePrefs ของตัวกลุ่มเอง (userId ที่นี่คือ groupId) เหมือนกับที่หน้า confirm-message ใช้ isGroup เช็ค
-            else message = receiptConfirmFlexMessage(result.receipt, { authorId, theme: (await getUser(userId)).confirmMessagePrefs?.theme }); // ยังไม่บันทึก รอผู้ใช้กดยืนยันรายรับ/รายจ่ายก่อน (ดู postback handler)
-          } catch (error) { console.error("Receipt read failed", error.message); message = noticeFlexMessage("ระบบประมวลผลภาพใช้เวลานานกว่าปกติ กรุณาลองใหม่อีกครั้ง", "error"); }
-          try { await push(userId, message); } catch (error) { console.error("Could not push", error.message); }
-          continue;
-        }
-      } catch (error) { console.error("Group image handling failed", error.message); message = noticeFlexMessage("ระบบประมวลผลภาพใช้เวลานานกว่าปกติ กรุณาลองใหม่อีกครั้ง", "error"); }
-      try { await (typeof message === "string" ? reply(event.replyToken, message) : replyMessages(event.replyToken, [message])); } catch (error) { console.error("Could not reply", error.message); }
-      continue;
-    }
-    if (event.message?.type === "image") {
-      // 1:1 เดิม: รูปภาพอาจเป็น "สลิปการชำระเงิน Premium" (ถ้ามี upload_session ค้างรออยู่) หรือ "ใบเสร็จ" (ฟีเจอร์ Premium)
-      // การตัดสินใจว่าเป็นแบบไหน และการตรวจสิทธิ์ Premium เกิดที่ backend เสมอ ไม่เชื่อ Rich Menu ที่ผู้ใช้กดมา (spec §16)
-      // ทั้งสองเส้นทางเรียก AI อ่านรูป (readSlip/readReceipt) ซึ่งมักใช้เวลาหลายวินาที จึงโชว์ "..." ให้เห็นทันทีที่รู้ว่าเป็นรูปภาพ
-      // ไม่ต้องรอผลว่าจะเป็นสลิปหรือใบเสร็จก่อน เพราะยิงแบบ fire-and-forget (ไม่ await) ไม่เสียเวลาจริง
-      startLoadingAnimation(event.source?.userId);
-      let message;
-      try {
-        const routing = await subLineHandlers.handleReceiptOrSlipImage(userId, () => downloadLineImage(event.message.id));
-        if (routing.type === "slip") {
-          message = routing.message;
-        } else if (routing.type === "premium_denied") {
-          message = routing.message;
-        } else {
-          // routing.type === "receipt" && routing.isPremium === true -> ฟีเจอร์เดิม: อ่านใบเสร็จบันทึกบัญชี
-          if (!ai || !visionModel) message = noticeFlexMessage("ยังไม่ได้ตั้งค่าโมเดล AI แบบอ่านรูปภาพ (ตั้งค่า OPENAI_VISION_MODEL หรือ OPENAI_MODEL ที่รองรับรูปภาพใน .env) ตอนนี้พิมพ์รายการแทนได้ก่อน เช่น กาแฟ 60", "info");
-          else {
-            try {
-              const { mime, base64 } = await downloadLineImage(event.message.id);
-              const result = await readReceipt(mime, base64);
-              if (result.error === "system") message = noticeFlexMessage("ตอนนี้ระบบอ่านภาพขัดข้องชั่วคราว ไม่เกี่ยวกับความชัดของรูปเลย ลองส่งรูปเดิมอีกครั้งใน 1-2 นาที หรือพิมพ์รายการเองแทนได้เลย เช่น กาแฟ 60", "error");
-              else if (result.error === "unreadable") message = noticeFlexMessage("อ่านยอดเงินจากใบเสร็จนี้ไม่ได้ ลองถ่ายให้เห็นยอดรวมชัด ๆ อีกครั้ง หรือพิมพ์รายการเองแทนได้ เช่น กาแฟ 60", "error");
-              else message = receiptConfirmFlexMessage(result.receipt, { theme: (await getUser(userId)).confirmMessagePrefs?.theme }); // ยังไม่บันทึก รอผู้ใช้กดยืนยันรายรับ/รายจ่ายก่อน (ดู postback handler)
-            } catch (error) { console.error("Receipt read failed", error.message); message = noticeFlexMessage("ระบบประมวลผลภาพใช้เวลานานกว่าปกติ กรุณาลองใหม่อีกครั้ง", "error"); }
-          }
-        }
-      } catch (error) { console.error("Image handling failed", error.message); message = noticeFlexMessage("ระบบประมวลผลภาพใช้เวลานานกว่าปกติ กรุณาลองใหม่อีกครั้ง", "error"); }
-      try { await (typeof message === "string" ? reply(event.replyToken, message) : replyMessages(event.replyToken, [message])); } catch (error) { console.error("Could not reply", error.message); }
-      continue;
-    }
-    if (event.message?.type !== "text") continue;
-    const text = event.message.text.trim();
-
-    // --- คำสั่งเฉพาะกลุ่ม: ยืนยันความเป็นเจ้าของ (spec: กลุ่มจดบัญชี) ---
-    if (isGroupChat && text === "ยืนยันเจ้าของ") {
-      let message;
-      try {
-        const result = await groupLinkService.confirmOwner(userId, authorId);
-        if (result.ok) {
-          message = noticeFlexMessage("ยืนยันสำเร็จ กลุ่มนี้ปลดล็อกฟีเจอร์ Premium แล้ว (ใช้ได้เฉพาะในกลุ่มนี้เท่านั้น)\n\nทุกคำสั่งต้องขึ้นต้นด้วย \"/บอท\" เสมอ เช่น \"/บอท กาแฟ 60\"", "success");
-        } else if (result.reason === "NOT_PREMIUM") {
-          message = noticeFlexMessage("บัญชีของคุณยังไม่ใช่ Premium ยายจันทร์ขอตัวออกจากกลุ่มนี้นะคะ 🙏\nถ้าอยากใช้งานฟีเจอร์นี้ ต้องสมัคร Premium แบบส่วนตัวกับยายจันทร์ก่อน (แชท 1:1 พิมพ์ \"สมัครพรีเมียม\")", "error");
-          try { await replyMessages(event.replyToken, [message]); } catch (error) { console.error("Could not reply", error.message); }
-          try { await leaveGroup(userId); await groupLinkService.markLeft(userId); } catch (error) { console.error("Leaving group after rejection failed:", error.message); }
-          continue;
-        } else if (result.reason === "EXPIRED") {
-          message = noticeFlexMessage("หมดเวลายืนยันแล้ว ยายจันทร์ขอตัวออกจากกลุ่มนี้นะคะ 🙏 เชิญเข้ามาใหม่ได้เลยถ้าต้องการลองอีกครั้ง", "error");
-          try { await replyMessages(event.replyToken, [message]); } catch (error) { console.error("Could not reply", error.message); }
-          try { await leaveGroup(userId); await groupLinkService.markLeft(userId); } catch (error) { console.error("Leaving group after expiry failed:", error.message); }
-          continue;
-        } else {
-          message = noticeFlexMessage("กลุ่มนี้ยืนยันเจ้าของไปแล้ว หรือไม่มีคำขอที่รอยืนยันอยู่", "info");
-        }
-      } catch (error) { console.error("Confirm owner failed", error.message); message = noticeFlexMessage("เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง", "error"); }
-      try { await replyMessages(event.replyToken, [message]); } catch (error) { console.error("Could not reply", error.message); }
-      continue;
-    }
-
-    // --- คำสั่งเฉพาะกลุ่ม: ตอบคำถาม "ยังอยากให้อยู่ต่อไหม" หลัง Premium ของเจ้าของกลุ่มหมดอายุ (ดู cron ด้านบนที่เรียก askReconfirm) ---
-    // "/บอท ยืนยันต่อ" -> ต้องเป็น Premium จริง ณ ตอนนี้ ถึงจะกลับมาใช้ได้ (ไม่มี deadline ในการตอบ)
-    // "/บอท ยืนยันต่อ ไม่" -> ปฏิเสธ บอทออกจากกลุ่มทันที
-    if (isGroupChat && (text === "ยืนยันต่อ" || text === "ยืนยันต่อ ไม่")) {
-      let message;
-      try {
-        if (text === "ยืนยันต่อ ไม่") {
-          const result = await groupLinkService.declineReconfirm(userId, authorId);
-          if (result.ok) {
-            message = noticeFlexMessage("รับทราบค่ะ ยายจันทร์ขอตัวออกจากกลุ่มนี้นะคะ 🙏 ขอบคุณที่ใช้งานกันมานะคะ", "info");
-            try { await replyMessages(event.replyToken, [message]); } catch (error) { console.error("Could not reply", error.message); }
-            try { await leaveGroup(userId); await groupLinkService.markLeft(userId); } catch (error) { console.error("Leaving group after decline failed:", error.message); }
-            continue;
-          } else {
-            message = noticeFlexMessage("ตอนนี้ไม่มีคำถามที่รอตอบอยู่ค่ะ", "info");
-          }
-        } else {
-          const result = await groupLinkService.reconfirmOwner(userId, authorId);
-          if (result.ok) {
-            message = noticeFlexMessage("ยืนยันสำเร็จ ยายจันทร์อยู่ต่อและปลดล็อกฟีเจอร์ Premium ให้กลุ่มนี้แล้วค่ะ 🎉", "success");
-          } else if (result.reason === "NOT_PREMIUM") {
-            message = noticeFlexMessage("บัญชีของคุณยังไม่ใช่ Premium นะคะ ต้องสมัคร/ต่ออายุ Premium แบบ 1:1 กับยายจันทร์ก่อน (พิมพ์ \"สมัครพรีเมียม\") แล้วค่อยกลับมาพิมพ์ \"/บอท ยืนยันต่อ\" ในกลุ่มนี้อีกครั้ง", "error");
-          } else {
-            message = noticeFlexMessage("ตอนนี้ไม่มีคำถามที่รอตอบอยู่ค่ะ", "info");
-          }
-        }
-      } catch (error) { console.error("Reconfirm failed", error.message); message = noticeFlexMessage("เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง", "error"); }
-      try { await replyMessages(event.replyToken, [message]); } catch (error) { console.error("Could not reply", error.message); }
-      continue;
-    }
-
-    // --- คำสั่งเฉพาะกลุ่ม: ระบบหนี้ระหว่างสมาชิก (spec: กลุ่มจดบัญชี) ---
-    // รูปแบบ: "@ชื่อ ติดหนี้ 100 ค่าข้าว" หรือ "@ชื่อ ติดหนี้ 100 ค่าข้าว 5/9" (5/9 = วันครบกำหนดคืน, วัน/เดือน, ปีปัจจุบันเสมอ)
-    // ต้องมี mention ของสมาชิกในกลุ่ม (ไม่ใช่ตัวบอทเอง) — LINE ส่ง mention.mentionees[].userId มาให้ใน webhook เมื่อมีการแท็ก
-    // ฟีเจอร์นี้ใช้ได้ทั้งกลุ่ม Premium และไม่ Premium (เป็นแค่บันทึกความจำช่วยจำ ไม่ใช่ฟีเจอร์ Premium)
-    if (isGroupChat && /ติดหนี้/.test(text)) {
-      let message;
-      try {
-        const mentionees = (event.message.mention?.mentionees ?? []).filter((m) => m.type === "user" && m.userId);
-        if (!mentionees.length) {
-          message = noticeFlexMessage("ต้องแท็กคนที่ติดหนี้ด้วยนะคะ เช่น \"/บอท @ชื่อ ติดหนี้ 100 ค่าข้าว\"", "error");
-        } else {
-          const debtorId = mentionees[0].userId;
-          if (debtorId === authorId) {
-            message = noticeFlexMessage("แท็กตัวเองไม่ได้นะคะ ต้องเป็นคนอื่นที่ติดหนี้กับคุณ", "error");
-          } else {
-            // ตัดส่วนที่เป็น mention text ออกก่อน (เช่น "@ชื่อ ") แล้วค่อยหา "ติดหนี้ <จำนวนเงิน> <หมายเหตุ> [d/m]"
-            const withoutMentions = mentionees.reduce((acc, m) => acc.slice(0, m.index) + " ".repeat(m.length) + acc.slice(m.index + m.length), text);
-            const match = withoutMentions.match(/ติดหนี้\s*([0-9][0-9,]*(?:\.\d{1,2})?)\s*([^\n]*)/);
-            const amount = match ? Number(match[1].replaceAll(",", "")) : NaN;
-            if (!match || !Number.isFinite(amount) || amount <= 0 || amount > 10_000_000) {
-              message = noticeFlexMessage("รูปแบบไม่ถูกต้องนะคะ ลองพิมพ์แบบนี้: \"/บอท @ชื่อ ติดหนี้ 100 ค่าข้าว\" (ใส่วันครบกำหนดคืนต่อท้ายได้ เช่น \"...ค่าข้าว 5/9\")", "error");
-            } else {
-              let rest = (match[2] ?? "").trim();
-              let dueDate = null;
-              // จับวันที่ท้ายข้อความแบบ d/m (ปีปัจจุบัน) ถ้ามี — เช่น "5/9" หรือ "05/09"
-              const dateMatch = rest.match(/(\d{1,2})\/(\d{1,2})\s*$/);
-              if (dateMatch) {
-                const day = Number(dateMatch[1]), month = Number(dateMatch[2]);
-                const year = new Date().getFullYear();
-                const candidate = new Date(year, month - 1, day, 12);
-                if (day >= 1 && day <= 31 && month >= 1 && month <= 12 && candidate.getMonth() === month - 1) {
-                  dueDate = candidate;
-                  rest = rest.slice(0, dateMatch.index).trim();
-                }
-              }
-              const debt = await groupDebtService.addDebt({ groupId: userId, creditorId: authorId, debtorId, amount, note: rest, dueDate });
-              const [debtorName, creditorName] = await Promise.all([
-                getGroupMemberName(userId, debtorId),
-                getGroupMemberName(userId, authorId)
-              ]);
-              message = debtFlexMessage(debt, { debtorName: debtorName ?? "สมาชิกกลุ่ม", creditorName: creditorName ?? "คุณ" });
-            }
-          }
-        }
-      } catch (error) { console.error("Add debt failed", error.message); message = noticeFlexMessage("เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง", "error"); }
-      try { await replyMessages(event.replyToken, [message]); } catch (error) { console.error("Could not reply", error.message); }
-      continue;
-    }
-
-    // "/บอท เคลียร์หนี้ @ชื่อ 100" — เคลียร์หนี้ 1 รายการที่ยังเปิดอยู่ (OPEN) ระหว่างคนพิมพ์คำสั่ง (creditor) กับคนที่ถูกแท็ก (debtor)
-    // เฉพาะคนที่เป็นคนกำหนดหนี้ (creditorId เดิม) เท่านั้นที่เคลียร์ได้ — ถ้ามีหลายรายการตรงกัน เคลียร์รายการเก่าสุดก่อน (FIFO)
-    if (isGroupChat && text.startsWith("เคลียร์หนี้")) {
-      let message;
-      try {
-        const mentionees = (event.message.mention?.mentionees ?? []).filter((m) => m.type === "user" && m.userId);
-        if (!mentionees.length) {
-          message = noticeFlexMessage("ต้องแท็กคนที่จะเคลียร์หนี้ด้วยนะคะ เช่น \"/บอท เคลียร์หนี้ @ชื่อ\"", "error");
-        } else {
-          const debtorId = mentionees[0].userId;
-          const openDebts = (await groupDebtService.listOpenByGroup(userId))
-            .filter((d) => d.debtorId === debtorId && d.creditorId === authorId)
-            .sort((a, b) => (toDate(a.createdAt)?.getTime() ?? 0) - (toDate(b.createdAt)?.getTime() ?? 0));
-          if (!openDebts.length) {
-            message = noticeFlexMessage("ไม่พบหนี้ที่ยังค้างอยู่ ซึ่งคุณเป็นคนกำหนดไว้กับสมาชิกคนนี้", "info");
-          } else {
-            const target = openDebts[0];
-            const result = await groupDebtService.clearDebt({ debtId: target.id, groupId: userId, requestedByUserId: authorId });
-            if (result.ok) message = noticeFlexMessage(`เคลียร์หนี้ ${money(target.amount)} บาทแล้วค่ะ`, "success");
-            else if (result.reason === "NOT_CREDITOR") message = noticeFlexMessage("เคลียร์ได้เฉพาะคนที่เป็นคนกำหนดหนี้รายการนั้นเท่านั้นนะคะ", "error");
-            else message = noticeFlexMessage("ไม่พบรายการหนี้นี้แล้ว หรือเคลียร์ไปแล้ว", "info");
-          }
-        }
-      } catch (error) { console.error("Clear debt failed", error.message); message = noticeFlexMessage("เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง", "error"); }
-      try { await replyMessages(event.replyToken, [message]); } catch (error) { console.error("Could not reply", error.message); }
-      continue;
-    }
-
-    // --- Premium subscription commands: เช็คก่อน finance parser เสมอ เพื่อไม่ให้ "สมัครพรีเมียม" ถูกตีความเป็นรายการบัญชี ---
-    // ห้ามสมัคร/ต่ออายุ Premium จากในกลุ่มเด็ดขาด (spec: ต้องไปสมัครแบบ 1:1 เท่านั้น) — งดคำสั่งนี้ในกลุ่ม
-    if (!isGroupChat && (text === "สมัครพรีเมียม" || text === "แปลงร่างเป็น Pro")) {
-      let result;
-      try { result = await subLineHandlers.handleSubscribeCommand(userId); }
-      catch (error) { console.error("Subscribe command failed", error.message); result = { alreadyPremium: false, error: true }; }
-      const messages = [];
-      if (result.error) messages.push({ type: "text", text: "เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง" });
-      else if (result.alreadyPremium) messages.push({ type: "text", text: result.text.slice(0, 4900) });
-      // ยังไม่ active -> โชว์การ์ดเลือกแผน (รายเดือน/รายปี) ก่อน ยังไม่สร้าง session ตรงนี้ (สร้างตอนกดเลือกแผนจากปุ่ม ดู pn_plan postback ด้านล่าง)
-      else messages.push(planPickerFlexMessage(PLAN_CATALOG));
-      try { await replyMessages(event.replyToken, messages); } catch (error) { console.error("Could not reply", error.message); }
-      continue;
-    }
-    if (isGroupChat && (text === "สมัครพรีเมียม" || text === "แปลงร่างเป็น Pro")) {
-      try { await replyMessages(event.replyToken, [noticeFlexMessage("สมัคร Premium ทำได้เฉพาะแชทส่วนตัวกับยายจันทร์เท่านั้นนะ ไปคุย 1:1 แล้วพิมพ์ \"สมัครพรีเมียม\" ได้เลย\n\nพอสมัครเสร็จแล้ว เชิญยายจันทร์เข้ากลุ่มนี้ (หรือกลุ่มอื่น) แล้วพิมพ์ \"/บอท ยืนยันเจ้าของ\" เพื่อปลดล็อก Premium ให้ทั้งกลุ่มได้เลย", "info")]); } catch (error) { console.error("Could not reply", error.message); }
-      continue;
-    }
-    if (!isGroupChat && text === "ส่งสลิป") {
-      let message;
-      try { message = await subLineHandlers.handleSendSlipCommand(userId); }
-      catch (error) { console.error("Send-slip command failed", error.message); message = "เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง"; }
-      try { await replyMessages(event.replyToken, [noticeFlexMessage(message, "info")]); } catch (error) { console.error("Could not reply", error.message); }
-      continue;
-    }
-    // ในกลุ่ม "/บอท สลิป" ใช้แค่เพื่อ "รอรับรูปใบเสร็จ" มาจดรายจ่ายกองกลาง (ต้องเป็นกลุ่ม Premium อยู่แล้วเท่านั้น)
-    // คนละเรื่องกับ "ส่งสลิป" แบบ 1:1 ที่ผูกกับ payment_session ตอนสมัคร Premium — ในกลุ่มไม่มี payment_session ให้ผูก
-    // จึงใช้ groupLinkService.openReceiptWait/consumeReceiptWait แทน uploadSessionService โดยสิ้นเชิง
-    if (isGroupChat && text === "สลิป") {
-      let message, tone = "info";
-      try {
-        const isPremiumGroup = await groupLinkService.isPremiumGroup(userId);
-        if (!isPremiumGroup) { message = "กลุ่มนี้ยังไม่ได้ปลดล็อก Premium นะ (ต้องมีสมาชิก Premium เป็นเจ้าของกลุ่ม)\nไปสมัคร Premium แบบ 1:1 กับยายจันทร์ก่อน แล้วเชิญเข้ากลุ่มพร้อมพิมพ์ \"/บอท ยืนยันเจ้าของ\""; tone = "error"; }
-        else { await groupLinkService.openReceiptWait(userId, authorId); message = "กรุณาส่งรูปใบเสร็จตามมาได้เลย 🧾"; }
-      } catch (error) { console.error("Group slip command failed", error.message); message = "เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง"; tone = "error"; }
-      try { await replyMessages(event.replyToken, [noticeFlexMessage(message, tone)]); } catch (error) { console.error("Could not reply", error.message); }
-      continue;
-    }
-
-    const user = await getUser(userId);
-    if (applyRecurring(user)) await saveUser(userId, user);
-    let message;
-    const helpText = isGroupChat
-      ? "📒 ยายจันทร์พร้อมจดบัญชีกองกลางให้กลุ่มนี้\n\nทุกคำสั่งต้องขึ้นต้นด้วย \"/บอท\" เสมอ เช่น:\n/บอท กาแฟ 60\n/บอท เงินเดือน 15000\n/บอท สลิป (แล้วส่งรูปใบเสร็จตาม — ต้องมีสมาชิก Premium เป็นเจ้าของกลุ่มนี้ก่อน)\n/บอท สรุปวันนี้ | /บอท สรุปเดือนนี้ | /บอท ลบล่าสุด | /บอท เว็บ\n\nสมัคร Premium ต้องไปแชท 1:1 กับยายจันทร์เท่านั้น"
-      : "📒 ยายจันทร์พร้อมจดบัญชีของคุณ (ข้อมูลของแต่ละคนแยกกันเป็นส่วนตัว)\n\nพิมพ์: กาแฟ 60\nรายรับ: เงินเดือน 15000\nถ่ายรูปใบเสร็จส่งมาได้เลย (ฟีเจอร์ Premium) ยายจันทร์จะอ่านยอดกับร้านค้าให้อัตโนมัติ\nคำสั่ง: สรุปวันนี้ | สรุปเดือนนี้ | ลบล่าสุด | เว็บ | สมัครพรีเมียม\nทุกวันอาทิตย์ยายจันทร์จะสรุปสัปดาห์ให้อัตโนมัติด้วย\n\nหรือถามยายจันทร์ได้เลย เช่น \"เดือนนี้ใช้เงินไปกับอะไรมากสุด\" ยายจันทร์เน้นตอบเรื่องการเงินเป็นหลัก แต่คุยเรื่องอื่นได้ด้วยนะ";
-    // ปุ่ม "จดรายรับ/รายจ่าย" บน Rich Menu ส่งคำนี้มา — ตอบเป็นการ์ด Flex สวย ๆ พร้อมปุ่ม "จดเลย"
-    // ปุ่ม "จดเลย" ใช้ action type "postback" (ดู "quicklog" handler ในบล็อก postback ด้านบนของไฟล์นี้)
-    // กดแล้วไม่มีข้อความอะไรโผล่ในแชทฝั่งผู้ใช้ก่อน บอทตอบข้อความแนะนำกลับมาทันที ให้ผู้ใช้พิมพ์เอง
-    // (ดู quickLogFlexMessage ด้านบน) ทำให้ฝั่งแชทของผู้ใช้ดูสะอาด ไม่มีคำว่า "จดเลย" ไปค้างอยู่ในประวัติแชท
-    if (text === "จดรายการ") message = quickLogFlexMessage({ isGroupChat });
-    else if (["เริ่ม", "ช่วยเหลือ", "help"].includes(text.toLowerCase())) message = helpText;
-    else if (text === "สรุปวันนี้") message = summary(user.transactions.filter((tx) => sameDay(tx.createdAt)), "วันนี้");
-    else if (text === "สรุปเดือนนี้") { const month = user.transactions.filter((tx) => sameMonth(tx.createdAt)); message = `${summary(month, "เดือนนี้")}\n\n${advice(month)}`; }
-    else if (text === "ลบล่าสุด") { const tx = user.transactions.pop(); if (tx) { await saveUser(userId, user); message = noticeFlexMessage(`ลบแล้ว: ${tx.description} ${money(tx.amount)} บาท`, "success"); } else message = noticeFlexMessage("ยังไม่มีรายการให้ลบ", "info"); }
-    else if (text === "เว็บ" || text === "สรุป") message = dashboardFlexMessage(user, { isGroupChat, dashboardUrl: dashboardEditUrl(userId) });
-    // --- ปุ่ม Rich Menu: เปิดหน้าต่าง ๆ ของ dashboard ตรง ๆ ผ่าน deep-link (?page=) ---
-    // "วิเคราะห์" ตอบผลวิเคราะห์จริงในแชททันที (ดู spendingAnalysis ด้านบน) แนบท้ายด้วยการ์ดเปิดเว็บดูกราฟแบบเต็ม ๆ
-    else if (text === "วิเคราะห์") { const month = user.transactions.filter((tx) => sameMonth(tx.createdAt)); message = [noticeFlexMessage(spendingAnalysis(month), "info"), dashboardFlexMessage(user, { isGroupChat, dashboardUrl: dashboardEditUrl(userId, "analysis") })]; }
-    else if (text === "หมวด/งบ") message = dashboardFlexMessage(user, { isGroupChat, dashboardUrl: dashboardEditUrl(userId, "budgets") });
-    else if (text === "รายการ") message = dashboardFlexMessage(user, { isGroupChat, dashboardUrl: dashboardEditUrl(userId, "transactions") });
-    else if (text === "ตั้งค่า") message = dashboardFlexMessage(user, { isGroupChat, dashboardUrl: dashboardEditUrl(userId, "settings") });
-    // --- ปุ่ม "ประกาศ" บน Rich Menu: ยังไม่มีฟีเจอร์ข่าวสาร/ประกาศแยกต่างหาก ชี้ไปหน้าช่วยเหลือไปพลางก่อน ---
-    else if (text === "ประกาศ") message = helpText;
-    else {
-      let tx = parse(text);
-      if (tx) {
-        const ambiguous = tx._typeAmbiguous; delete tx._typeAmbiguous;
-        tx = await enrichWithAi(tx, text, ambiguous);
-        if (isGroupChat) tx = { ...tx, authorId, authorName: await getGroupMemberName(userId, authorId) };
-        user.transactions.push(tx); await saveUser(userId, user);
-        // confirmMessagePrefs ใช้ได้ทั้งกลุ่มและแชทส่วนตัว (ฟีเจอร์ Premium) — ผู้ใช้ที่ไม่เคยตั้งค่าจะได้ default เดิมอยู่แล้ว (ดู defaultConfirmMessagePrefs)
-        message = txFlexMessage(tx, { budget: budgetProgressFor(user, tx), dashboardUrl: dashboardEditUrl(userId), userId, prefs: user.confirmMessagePrefs });
-      }
-      else {
-        // isPremium เช็คได้เฉพาะบัญชีส่วนตัว ส่วนแชทกลุ่มเช็คผ่าน isPremiumGroup (เจ้าของกลุ่มต้องเป็น Premium) — เช่นเดียวกับจุดเช็คสิทธิ์ Premium อื่น ๆ ในไฟล์นี้
-        const askerIsPremium = (await subscriptionService.isPremium(userId).catch(() => false)) || (isGroupChat && await groupLinkService.isPremiumGroup(userId).catch(() => false));
-        const aiAnswer = await askFinanceAi(user, text, askerIsPremium);
-        message = aiAnswer ?? (isGroupChat ? "พิมพ์ได้เลย เช่น /บอท กาแฟ 60 หรือ /บอท เงินเดือน 15000\nพิมพ์ /บอท ช่วยเหลือ เพื่อดูคำสั่ง" : "พิมพ์ได้เลย เช่น กาแฟ 60 หรือ เงินเดือน 15000\nพิมพ์ ช่วยเหลือ เพื่อดูคำสั่ง");
-      }
-    }
-    try {
-      if (typeof message === "string") await reply(event.replyToken, message);
-      else if (Array.isArray(message)) await replyMessages(event.replyToken, message); // เช่น ปุ่ม "วิเคราะห์" ที่ตอบ 2 การ์ดต่อกัน (ผลวิเคราะห์ + ปุ่มเปิดเว็บ)
-      else await replyMessages(event.replyToken, [message]);
-    } catch (error) { console.error("Could not reply", error.message); }
-   } catch (error) {
-     // ตัวดักสุดท้ายของทั้ง event — ต้อง log ให้เห็นชัดเจนเสมอ เพื่อจะได้รู้ว่าทำไมบอทไม่ตอบ
-     console.error("Webhook event handling crashed:", error);
-   }
-  }
-});
-app.listen(Number(process.env.PORT ?? 3000), () => console.log(`Ta Phin listening on ${process.env.PORT ?? 3000}`));
-
+  const qr =
