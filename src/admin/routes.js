@@ -8,6 +8,9 @@ import { SESSION_STATUS } from "../subscription/paymentSessions.js";
 import { TX_STATUS } from "../subscription/paymentTransactions.js";
 import { formatThaiDateTime, startOfTodayBangkok, startOfWeekBangkok } from "../shared/time.js";
 
+// LINE userId จริงคือ "U" + hex 32 ตัว (ไม่ใช่ LINE ID แบบ @ชื่อ ที่คนตั้งเอง)
+const LINE_USER_ID_PATTERN = /^U[0-9a-f]{32}$/i;
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export function createAdminRouter({ collections, adminAuth, subscriptionService, paymentTransactionService, tokenUsageService }) {
@@ -172,6 +175,36 @@ export function createAdminRouter({ collections, adminAuth, subscriptionService,
       expiresAt: sub.expiresAt ? formatThaiDateTime(sub.expiresAt) : null
     });
   });
+
+  // แอดมินให้ Premium แก่ user ตาม LINE userId + จำนวนวัน (ไม่ต้องจ่ายเงิน) — แจ้ง user ทางแชท LINE ด้วย (ล้มเหลวได้ ไม่กระทบการให้สิทธิ์)
+  router.post("/api/users/:userId/grant-premium", requireAdmin, express.json(), async (req, res) => {
+    const userId = String(req.params.userId ?? "").trim();
+    if (!LINE_USER_ID_PATTERN.test(userId)) {
+      return res.status(400).json({ error: "LINE userId ไม่ถูกต้อง (ต้องขึ้นต้นด้วย U ตามด้วยตัวอักษร/ตัวเลข 32 ตัว)" });
+    }
+    const result = await subscriptionService.grantByAdmin({ userId, days: req.body?.days, adminUsername: req.admin.username });
+    if (!result.ok) return res.status(400).json({ error: result.reason ?? "ไม่สามารถให้ Premium ได้" });
+    const notified = req.body?.notify === false ? false : await notifyPremiumGranted(userId, result.newExpiry);
+    res.json({
+      ok: true,
+      userId,
+      displayName: await getLineDisplayName(userId),
+      expiresAt: formatThaiDateTime(result.newExpiry),
+      wasRenewal: result.wasRenewal,
+      notified
+    });
+  });
+
+  async function notifyPremiumGranted(userId, expiresAt) {
+    try {
+      const r = await fetch("https://api.line.me/v2/bot/message/push", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}` },
+        body: JSON.stringify({ to: userId, messages: [{ type: "text", text: `🎁 คุณได้รับสิทธิ์ Premium จากผู้ดูแลระบบ\nใช้งานได้ถึง ${formatThaiDateTime(expiresAt)}` }] })
+      });
+      return r.ok;
+    } catch { return false; }
+  }
 
   // แอดมินยกเลิก Premium ของ user คนใดก็ได้ทันที (spec: admin can cancel other users' premium)
   router.post("/api/users/:userId/cancel-premium", requireAdmin, express.json(), async (req, res) => {
