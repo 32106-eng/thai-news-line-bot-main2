@@ -108,6 +108,25 @@
       <div id="premiumList"></div>
     </section>
     <section>
+      <h2>ให้ Premium แก่ user</h2>
+      <div class="lookup">
+        <div class="row" style="flex-wrap:wrap">
+          <input id="grantUserId" placeholder="LINE userId (U...) 33 ตัวอักษร" style="min-width:240px" />
+          <input id="grantDays" type="number" min="1" max="3650" step="1" placeholder="จำนวนวัน" style="max-width:120px;flex:none" />
+          <button id="grantBtn" class="approve">ให้ Premium</button>
+        </div>
+        <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">
+          <button type="button" class="reject grant-preset" data-days="7">7 วัน</button>
+          <button type="button" class="reject grant-preset" data-days="30">30 วัน</button>
+          <button type="button" class="reject grant-preset" data-days="90">90 วัน</button>
+          <button type="button" class="reject grant-preset" data-days="365">365 วัน</button>
+        </div>
+        <label style="display:block;margin-top:10px;font-size:12.5px;color:var(--grey)"><input id="grantNotify" type="checkbox" checked /> ส่งข้อความแจ้ง user ทาง LINE</label>
+        <p id="grantResult"></p>
+        <p>ถ้า user มี Premium อยู่แล้ว ระบบจะบวกวันต่อจากวันหมดอายุเดิม · userId ดูได้จากแท็บ Audit Log / การใช้โทเค็น</p>
+      </div>
+    </section>
+    <section>
       <h2>ค้นหา user โดยตรง</h2>
       <div class="lookup">
         <div class="row">
@@ -324,6 +343,24 @@ $('#checkUserBtn').onclick = async () => {
       : `ไม่ใช่ Premium (สถานะ: ${d.plan})`;
     const link = $('#cancelFromLookup');
     if (link) link.onclick = async (e) => { e.preventDefault(); await cancelPremium(userId); out.textContent = 'ยกเลิก Premium สำเร็จ'; };
+  } catch (e) { out.textContent = e.message; }
+};
+
+// ให้ Premium ตาม userId + จำนวนวัน — เซิร์ฟเวอร์คำนวณวันหมดอายุเอง client ส่งแค่จำนวนวัน
+document.querySelectorAll('.grant-preset').forEach(b => b.onclick = () => { $('#grantDays').value = b.dataset.days; });
+$('#grantBtn').onclick = async () => {
+  const userId = $('#grantUserId').value.trim();
+  const days = Number($('#grantDays').value);
+  const out = $('#grantResult');
+  if (!/^U[0-9a-fA-F]{32}$/.test(userId)) { out.textContent = 'LINE userId ไม่ถูกต้อง (ต้องขึ้นต้น U ตามด้วย 32 ตัวอักษร)'; return; }
+  if (!Number.isInteger(days) || days < 1 || days > 3650) { out.textContent = 'จำนวนวันต้องเป็นเลขจำนวนเต็ม 1-3650'; return; }
+  if (!confirm(`ให้ Premium ${days} วัน แก่\n${userId} ?`)) return;
+  out.textContent = 'กำลังบันทึก...';
+  try {
+    const d = await api(`/api/users/${encodeURIComponent(userId)}/grant-premium`, { method: 'POST', body: JSON.stringify({ days, notify: $('#grantNotify').checked }) });
+    out.innerHTML = `<b style="color:var(--ok)">สำเร็จ</b> · ${esc(d.displayName) || esc(d.userId)} ${d.wasRenewal ? '(ต่ออายุ)' : '(เปิดใหม่)'} · หมดอายุ ${esc(d.expiresAt)} · ${d.notified ? 'แจ้ง user แล้ว' : 'ไม่ได้แจ้ง user'}`;
+    $('#grantUserId').value = ''; $('#grantDays').value = '';
+    await Promise.all([loadOverview(), loadPremiumUsers(), loadLogs()]);
   } catch (e) { out.textContent = e.message; }
 };
 
