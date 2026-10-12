@@ -3,6 +3,7 @@ import { addMonths, now, isExpired } from "../shared/time.js";
 import { AUDIT_EVENTS } from "./auditLog.js";
 
 export const PLAN = Object.freeze({ FREE: "FREE", PREMIUM: "PREMIUM" });
+export const MAX_GRANT_DAYS = 3650; // เพดาน 10 ปี กันพิมพ์เลขเกินโดยไม่ตั้งใจ
 export const SUB_STATUS = Object.freeze({ ACTIVE: "ACTIVE", EXPIRED: "EXPIRED", NONE: "NONE" });
 
 export function createSubscriptionService({ subscriptions, FieldValue, db }, auditLog) {
@@ -77,6 +78,44 @@ export function createSubscriptionService({ subscriptions, FieldValue, db }, aud
   }
 
   /**
+   * แอดมินให้ Premium แก่ user คนใดก็ได้ตามจำนวนวันที่กำหนด (ไม่ผ่านการชำระเงิน)
+   * กฎเดียวกับ activateOrRenew: ถ้ายัง ACTIVE อยู่ -> วันหมดอายุเดิม + days, ไม่งั้น -> ตอนนี้ + days
+   * เวลานับจาก server เท่านั้น ห้ามรับวันหมดอายุจาก client — รับแค่ "จำนวนวัน" แล้วคำนวณเอง
+   * เรียกได้เฉพาะผ่าน requireAdmin middleware เท่านั้น (ดู admin/routes.js)
+   */
+  async function grantByAdmin({ userId, days, adminUsername }) {
+    const dayCount = Number(days);
+    if (!Number.isInteger(dayCount) || dayCount < 1 || dayCount > MAX_GRANT_DAYS) {
+      return { ok: false, reason: `จำนวนวันต้องเป็นเลขจำนวนเต็ม 1-${MAX_GRANT_DAYS}` };
+    }
+    const ref = subscriptions.doc(String(userId));
+    const result = await db.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      const current = snap.exists ? snap.data() : null;
+      const currentExpiry = current ? toDate(current.expiresAt) : null;
+      const stillActive = current?.status === SUB_STATUS.ACTIVE && currentExpiry && !isExpired(currentExpiry);
+      const base = stillActive ? currentExpiry : now();
+      const newExpiry = new Date(base.getTime() + dayCount * 86_400_000);
+      tx.set(ref, {
+        plan: PLAN.PREMIUM,
+        status: SUB_STATUS.ACTIVE,
+        startedAt: stillActive ? current.startedAt : FieldValue.serverTimestamp(),
+        expiresAt: newExpiry,
+        paymentTransactionId: null, // ให้ฟรีโดยแอดมิน ไม่มีธุรกรรมการชำระเงินอ้างอิง
+        grantedByAdmin: adminUsername ?? null,
+        updatedAt: FieldValue.serverTimestamp()
+      }, { merge: true });
+      return { newExpiry, wasRenewal: Boolean(stillActive) };
+    });
+    await auditLog({
+      userId,
+      eventType: AUDIT_EVENTS.PREMIUM_GRANTED_BY_ADMIN,
+      metadata: { adminUsername, days: dayCount, expiresAt: result.newExpiry.toISOString(), wasRenewal: result.wasRenewal }
+    });
+    return { ok: true, ...result };
+  }
+
+  /**
    * แอดมินยกเลิก Premium ของ user คนใดก็ได้ทันที
    * ตั้ง status เป็น EXPIRED และเคลียร์ expiresAt ให้เป็นอดีต เพื่อไม่ให้ isPremium() ผ่านอีก
    * เรียกได้เฉพาะผ่าน requireAdmin middleware เท่านั้น (ดู admin/routes.js)
@@ -124,7 +163,7 @@ export function createSubscriptionService({ subscriptions, FieldValue, db }, aud
     return expiredCount;
   }
 
-  return { getRaw, isPremium, getStatusView, activateOrRenew, adminCancel, markExpiredIfNeeded, sweepExpired };
+  return { getRaw, isPremium, getStatusView, activateOrRenew, grantByAdmin, adminCancel, markExpiredIfNeeded, sweepExpired };
 }
 
 
