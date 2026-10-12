@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFakeFirestore } from "./helpers/fakeFirestore.js";
-import { createSubscriptionService, SUB_STATUS } from "../src/subscription/subscriptions.js";
+import { createSubscriptionService, SUB_STATUS, MAX_GRANT_DAYS } from "../src/subscription/subscriptions.js";
 
 function setup() {
   const { db, FieldValue, collection } = createFakeFirestore();
@@ -120,4 +120,44 @@ test("adminCancel: no-op error when user is already not ACTIVE", async () => {
   await subscriptions.doc("user1").set({ status: SUB_STATUS.EXPIRED, expiresAt: new Date(Date.now() - 1000) });
   const result = await service.adminCancel({ userId: "user1", adminUsername: "admin1" });
   assert.equal(result.ok, false);
+});
+
+
+test("grantByAdmin: new user gets exactly N days from now, ACTIVE, and isPremium becomes true", async () => {
+  const { service } = setup();
+  const before = Date.now();
+  const r = await service.grantByAdmin({ userId: "u1", days: 7, adminUsername: "admin" });
+  assert.equal(r.ok, true);
+  assert.equal(r.wasRenewal, false);
+  const days = (r.newExpiry.getTime() - before) / 86_400_000;
+  assert.ok(days > 6.99 && days < 7.01, `expected 7 days, got ${days}`);
+  assert.equal(await service.isPremium("u1"), true);
+});
+
+test("grantByAdmin: still-active user gets days added on top of current expiry and keeps startedAt", async () => {
+  const { service, subscriptions } = setup();
+  const start = new Date(Date.now() - 5 * 86_400_000);
+  const expiry = new Date(Date.now() + 10 * 86_400_000);
+  await subscriptions.doc("u1").set({ status: SUB_STATUS.ACTIVE, expiresAt: expiry, startedAt: start });
+  const r = await service.grantByAdmin({ userId: "u1", days: 30, adminUsername: "admin" });
+  assert.equal(r.wasRenewal, true);
+  assert.equal(r.newExpiry.getTime(), expiry.getTime() + 30 * 86_400_000);
+  assert.equal((await service.getRaw("u1")).startedAt.getTime(), start.getTime());
+});
+
+test("grantByAdmin: expired user restarts from now, not from the stale expiry", async () => {
+  const { service, subscriptions } = setup();
+  await subscriptions.doc("u1").set({ status: SUB_STATUS.EXPIRED, expiresAt: new Date(Date.now() - 40 * 86_400_000) });
+  const r = await service.grantByAdmin({ userId: "u1", days: 3, adminUsername: "admin" });
+  const days = (r.newExpiry.getTime() - Date.now()) / 86_400_000;
+  assert.ok(days > 2.99 && days < 3.01);
+});
+
+test("grantByAdmin: rejects invalid day counts and writes nothing", async () => {
+  const { service, subscriptions } = setup();
+  for (const bad of [0, -5, 1.5, "abc", null, undefined, MAX_GRANT_DAYS + 1]) {
+    const r = await service.grantByAdmin({ userId: "u1", days: bad, adminUsername: "admin" });
+    assert.equal(r.ok, false, `days=${bad} should be rejected`);
+  }
+  assert.equal((await subscriptions.doc("u1").get()).exists, false);
 });
